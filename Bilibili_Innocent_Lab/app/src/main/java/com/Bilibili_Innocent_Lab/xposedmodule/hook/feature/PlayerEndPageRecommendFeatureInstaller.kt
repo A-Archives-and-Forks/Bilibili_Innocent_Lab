@@ -3,7 +3,7 @@ package com.Bilibili_Innocent_Lab.xposedmodule.hook.feature
 import java.lang.reflect.Method
 import java.util.concurrent.atomic.AtomicBoolean
 
-/** 同步/异步回复副本为主；getter 独立后备。任一路解析/注册失败都不会撤掉另一条防线。 */
+/** 清理结束页回复及合并后的播放器列表；getter 独立后备。任一路解析/注册失败都不会撤掉另一条防线。 */
 internal class PlayerEndPageRecommendFeatureInstaller(
     private val enabled: Boolean,
     private val resolve: (ClassLoader?) -> PlayerEndPageRecommendLocator.Access? = PlayerEndPageRecommendLocator::resolve
@@ -54,6 +54,17 @@ internal class PlayerEndPageRecommendFeatureInstaller(
                     val original = argOrNull(1) ?: return@before
                     val proxy = MossResponseHandlerProxy.wrapTransform(access.handler!!, original, ::transform) ?: return@before
                     args[1] = proxy
+                }
+            }
+        }
+        register("merged-list", access.mergedList) {
+            after {
+                if (hasThrowable) return@after
+                val original = result as? List<*> ?: return@after
+                observed()
+                if (original.isNotEmpty()) {
+                    result = emptyList<Any>()
+                    if ((result as? List<*>)?.isEmpty() == true) applied(original.size)
                 }
             }
         }

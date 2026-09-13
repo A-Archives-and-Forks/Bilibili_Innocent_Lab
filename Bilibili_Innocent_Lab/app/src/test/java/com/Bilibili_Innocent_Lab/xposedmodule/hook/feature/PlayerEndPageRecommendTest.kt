@@ -12,6 +12,9 @@ class PlayerEndPageRecommendTest {
         fun executeViewEndPage(request: Request): Reply = Reply(emptyList())
         fun viewEndPage(request: Request, handler: Handler) = Unit
     }
+    class Service {
+        fun merge(cards: List<String>): List<String> = cards
+    }
     class Reply(val cards: List<String>, val other: String = "keep") {
         fun getRelatesList(): List<String> = if (mask?.invoke() == true) emptyList() else cards
         fun getRelatesCount(): Int = if (mask?.invoke() == true) 0 else cards.size
@@ -36,7 +39,7 @@ class PlayerEndPageRecommendTest {
     class WrongReply { fun getRelatesList()="wrong";fun getRelatesCount()=1L }
     private val loader=javaClass.classLoader!!
     private val id=PlayerEndPageRecommendFeatureInstaller.ID
-    private fun access()=PlayerEndPageRecommendLocator.resolve(Reply::class.java,Moss::class.java,Request::class.java,Handler::class.java)
+    private fun access()=PlayerEndPageRecommendLocator.resolve(Reply::class.java,Moss::class.java,Request::class.java,Handler::class.java,Service::class.java)
     private fun environment(registrar: PlayerPortTestRegistrar, events:MutableList<FeatureRuntimeStage> = mutableListOf()) =
         HookEnvironment("tv.danmaku.bili",loader,HookPointRegistry(loader),registrar,{_,_->},{_,_->},{_,_->},
             runtimeEvidence={feature,stage,_->assertEquals(id,feature);events+=stage})
@@ -77,7 +80,7 @@ class PlayerEndPageRecommendTest {
     }
     @Test fun `actual sync callback replaces only successful populated responses`() {
         val registrar=PlayerPortTestRegistrar();val events=mutableListOf<FeatureRuntimeStage>()
-        assertEquals(FeatureInstallResult.Installed(4),PlayerEndPageRecommendFeatureInstaller(true){access()}.install(environment(registrar,events)))
+        assertEquals(FeatureInstallResult.Installed(5),PlayerEndPageRecommendFeatureInstaller(true){access()}.install(environment(registrar,events)))
         events.clear();val original=Reply(listOf("card"))
         val copy=registrar.invoke("$id.sync",Moss(),arrayOf(Request())) { original } as Reply
         assertTrue(copy.cards.isEmpty());assertEquals(1,original.cards.size)
@@ -88,6 +91,15 @@ class PlayerEndPageRecommendTest {
         Reply.broken=true;events.clear()
         assertSame(original,registrar.invoke("$id.sync") {original});assertFalse(FeatureRuntimeStage.APPLIED in events)
         assertTrue(FeatureRuntimeStage.ERROR in events)
+    }
+    @Test fun `merged service output is cleared after detail and endpoint lists are combined`() {
+        val registrar=PlayerPortTestRegistrar();val events=mutableListOf<FeatureRuntimeStage>()
+        PlayerEndPageRecommendFeatureInstaller(true){access()}.install(environment(registrar,events))
+        events.clear()
+        val original=listOf("detail-card")
+        val filtered=registrar.invoke("$id.merged-list",Service(),arrayOf(original)) { original } as List<*>
+        assertTrue(filtered.isEmpty())
+        assertEquals(listOf(FeatureRuntimeStage.OBSERVED,FeatureRuntimeStage.APPLIED),events)
     }
     @Test fun `async proxy transforms onNext and preserves host completion and exceptions`() {
         val registrar=PlayerPortTestRegistrar();PlayerEndPageRecommendFeatureInstaller(true){access()}.install(environment(registrar))
@@ -126,10 +138,10 @@ class PlayerEndPageRecommendTest {
         assertEquals(FeatureInstallResult.Installed(2,false),PlayerEndPageRecommendFeatureInstaller(true){access}.install(environment(registrar)))
         assertEquals(setOf("$id.list","$id.count"),registrar.hooks.keys)
     }
-    @Test fun `one failed registration remains in the four-path denominator`() {
+    @Test fun `one failed registration remains in the five-path denominator`() {
         val registrar=PlayerPortTestRegistrar("$id.async")
-        assertEquals(FeatureInstallResult.Installed(3,false),PlayerEndPageRecommendFeatureInstaller(true){access()}.install(environment(registrar)))
-        assertEquals(3,registrar.hooks.size)
+        assertEquals(FeatureInstallResult.Installed(4,false),PlayerEndPageRecommendFeatureInstaller(true){access()}.install(environment(registrar)))
+        assertEquals(4,registrar.hooks.size)
     }
     @Test fun `disabled other process absent and incorrect structures install no unsafe hook`() {
         val registrar=PlayerPortTestRegistrar();val environment=environment(registrar)
