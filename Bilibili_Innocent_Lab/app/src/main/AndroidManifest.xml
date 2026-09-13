@@ -104,7 +104,11 @@
         -->
         <receiver
             android:name=".receiver.RoamingOpenReceiver"
-            android:exported="true" />
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.Bilibili_Innocent_Lab.xposedmodule.QUERY_HOOK_ADMISSION" />
+            </intent-filter>
+        </receiver>
 
         <!-- 显式宿主通知：校验 PendingIntent 创建者 UID，API 34+ 再校验共享发送者 UID。 -->
         <receiver

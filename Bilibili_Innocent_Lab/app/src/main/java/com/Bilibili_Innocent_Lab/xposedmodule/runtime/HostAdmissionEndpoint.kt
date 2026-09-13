@@ -15,9 +15,18 @@ import java.util.UUID
 internal object HostAdmissionEndpoint {
     private val leases = AdmissionLeaseBook(SystemClock::elapsedRealtime)
 
-    fun handle(context: Context, method: String, extras: Bundle?): Bundle {
-        val uid = Binder.getCallingUid()
-        val pid = Binder.getCallingPid()
+    fun handle(context: Context, method: String, extras: Bundle?): Bundle =
+        handleWithIdentity(context, method, extras, Binder.getCallingUid(), Binder.getCallingPid())
+
+    /**
+     * 包可见性隔离时由显式有序广播承载同一握手。PendingIntent 创建者 UID 已在接收器内
+     * 通过模块侧 PackageManager 验真；广播没有可用的调用 pid，nonce + challenge 已提供
+     * 每次握手的绑定，因此只使用一个正数占位 pid 参与有界 lease 记录。
+     */
+    fun handleBroadcast(context: Context, method: String, extras: Bundle?, callerUid: Int): Bundle =
+        handleWithIdentity(context, method, extras, callerUid, BROADCAST_CALLER_PID)
+
+    private fun handleWithIdentity(context: Context, method: String, extras: Bundle?, uid: Int, pid: Int): Bundle {
         // 身份先于任何应用提供的 Bundle 解码；不信任载荷里的包名/UID。
         val trusted = runCatching {
             context.packageManager.getApplicationInfo(HostRuntimeDiagnosticsQueryContract.TARGET_PACKAGE, 0).uid == uid
@@ -83,4 +92,6 @@ internal object HostAdmissionEndpoint {
         putString("status", status)
         putString("nonce", nonce)
     }
+
+    private const val BROADCAST_CALLER_PID = 1
 }

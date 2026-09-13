@@ -2621,10 +2621,14 @@ class HookEntry : XposedModule() {
             val authorizedHooksInstalled = java.util.concurrent.atomic.AtomicBoolean(false)
             val applicationOnCreateCompleted = java.util.concurrent.atomic.AtomicBoolean(false)
             val scanResultReported = java.util.concurrent.atomic.AtomicBoolean(false)
+            val authorizationRetryScheduled = java.util.concurrent.atomic.AtomicBoolean(false)
+            val authorizationRetryConsumed = java.util.concurrent.atomic.AtomicBoolean(false)
+            val authorizationRetryPending = java.util.concurrent.atomic.AtomicBoolean(false)
             val authorizedInstallerRef =
                 java.util.concurrent.atomic.AtomicReference<((Context) -> Unit)?>(null)
             val activeHookConfig =
                 java.util.concurrent.atomic.AtomicReference<HookConfigSource?>(null)
+            lateinit var scheduleAuthorizationRetry: (Context, android.app.Application?) -> Unit
 
             fun installAuthorizedHooks(authorizationContext: Context) {
 
@@ -4668,7 +4672,7 @@ class HookEntry : XposedModule() {
                 }
             }
 
-            fun authorizeAndInstall(context: Context?) {
+            fun authorizeAndInstall(context: Context?, applicationHint: android.app.Application? = null) {
                 if (context == null || !authorizationAttempted.compareAndSet(false, true)) return
                 val appContext = context.applicationContext ?: context
                 if (processName == TARGET_PACKAGE) {
@@ -4690,22 +4694,75 @@ class HookEntry : XposedModule() {
                 val outcome = queryRemoteHookConfig()
                 val normal = (outcome as? RemoteHookConfigQueryOutcome.Ready)?.snapshot
                 val reason = (outcome as? RemoteHookConfigQueryOutcome.Rejected)?.reasonCode
+                if (processName == TARGET_PACKAGE) {
+                    frameworkLog("[BIL] 启动授权尝试(process=$processName)")
+                }
                 val admission = com.Bilibili_Innocent_Lab.xposedmodule.runtime.HostAdmissionClient.admit(appContext, normal, reason)
                 val grant = admission.grant
                 if (grant == null) {
                     if (processName == TARGET_PACKAGE) HostRuntimeDiagnosticsBridge.recordConfigRejected(admission.reason)
-                    authorizedInstallerRef.set(null)
+                    if (processName == TARGET_PACKAGE) {
+                        // attach 阶段可能仍处在后台启动窗口，MIUI 会暂时丢弃发往模块 App 的
+                        // 跨包回退广播；保留安装闭包，等首个宿主 Activity 可见后再尝试一次。
+                        authorizationRetryPending.set(true)
+                        frameworkLog("[BIL] 前台授权重试排队(reason=${admission.reason})")
+                        scheduleAuthorizationRetry(appContext, applicationHint)
+                    } else {
+                        authorizedInstallerRef.set(null)
+                    }
                     frameworkLog("[BIL] 启动授权未完成，当前进程不安装功能(reason=${admission.reason})")
                     return
                 }
                 val config = grant.snapshot
                 if (processName == TARGET_PACKAGE) {
+                    val identity = grant.identity
                     HostRuntimeDiagnosticsBridge.recordConfigAccepted(config.generation, config.authorized,
-                        grant.source, grant.identity.incarnation, grant.identity.consentRevision,
-                        grant.identity.policyEpoch, grant.identity.snapshotRevision, grant.identity.fingerprint)
+                        grant.source, identity?.incarnation, identity?.consentRevision ?: 0L,
+                        identity?.policyEpoch ?: 0L, identity?.snapshotRevision ?: 0L,
+                        identity?.fingerprint ?: "")
                 }
                 frameworkLog("[BIL] 已获得新鲜启动许可(source=${grant.source}, generation=${config.generation})")
                 performAuthorizationAndInstall(appContext, config)
+            }
+
+            scheduleAuthorizationRetry = retry@{ context, applicationHint ->
+                if (processName != TARGET_PACKAGE ||
+                    !authorizationRetryScheduled.compareAndSet(false, true)
+                ) return@retry
+                frameworkLog("[BIL] 注册前台授权重试监听")
+                val application = applicationHint ?: (context.applicationContext ?: context) as? android.app.Application
+                if (application == null) {
+                    authorizationRetryScheduled.set(false)
+                    frameworkLog("[BIL] 前台授权重试监听缺少 Application")
+                    return@retry
+                }
+                runCatching {
+                    application.registerActivityLifecycleCallbacks(
+                        object : android.app.Application.ActivityLifecycleCallbacks {
+                            private fun retry(activity: android.app.Activity) {
+                                if (!authorizationRetryConsumed.compareAndSet(false, true)) return
+                                application.unregisterActivityLifecycleCallbacks(this)
+                                if (authorizedHooksInstalled.get()) return
+                                authorizationRetryPending.set(false)
+                                authorizationAttempted.set(false)
+                                frameworkLog("[BIL] 宿主 Activity 已恢复，执行前台授权重试")
+                                authorizeAndInstall(activity.applicationContext, application)
+                            }
+
+                            override fun onActivityResumed(activity: android.app.Activity) = retry(activity)
+                            override fun onActivityCreated(activity: android.app.Activity, state: android.os.Bundle?) = Unit
+                            override fun onActivityStarted(activity: android.app.Activity) = Unit
+                            override fun onActivityPaused(activity: android.app.Activity) = Unit
+                            override fun onActivityStopped(activity: android.app.Activity) = Unit
+                            override fun onActivitySaveInstanceState(activity: android.app.Activity, state: android.os.Bundle) = Unit
+                            override fun onActivityDestroyed(activity: android.app.Activity) = Unit
+                        }
+                    )
+                    frameworkLog("[BIL] 前台授权重试监听已注册")
+                }.onFailure {
+                    authorizationRetryScheduled.set(false)
+                    frameworkLog("[BIL] 前台授权重试监听注册失败", it)
+                }
             }
 
             // 未授权前只保留两个宿主生命周期 bootstrap。attach.before 同步读取 API 102
@@ -4734,9 +4791,15 @@ class HookEntry : XposedModule() {
                         if (processName == TARGET_PACKAGE) {
                             (args.firstOrNull() as? android.app.Application)?.let {
                                 HostRuntimeDiagnosticsBridge.observeVersionLaunch(it)
+                                if (authorizationRetryPending.get()) {
+                                    scheduleAuthorizationRetry(it, it)
+                                }
                             }
                         }
-                        authorizeAndInstall(args.firstOrNull() as? Context)
+                        authorizeAndInstall(
+                            args.firstOrNull() as? Context,
+                            args.firstOrNull() as? android.app.Application
+                        )
                     }
                     after {
                         applicationOnCreateCompleted.set(true)
