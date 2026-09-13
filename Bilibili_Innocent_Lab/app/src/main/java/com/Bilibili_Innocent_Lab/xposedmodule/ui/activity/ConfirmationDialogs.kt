@@ -457,21 +457,15 @@ private fun MainActivity.restartBilibili() {
             return@Thread
         }
         try {
-            // 1. 杀死 B 站（root）；execShell 消费输出流，防止 buffer 满导致 waitFor 死锁
-            val stopExitCode = execShell(
+            // 在同一个 root shell 中保存并恢复旋转策略。部分 ROM 会在 Activity
+            // 重建期间临时改写这两个 system setting；只在读到合法值且启动后确实
+            // 发生变化时写回，原来关闭/开启的自动旋转状态都保持不变。
+            val restartExitCode = execShell(
                 suPath ?: "su",
                 "-c",
-                "am force-stop ${HookEntry.TARGET_PACKAGE}"
+                buildRestartShellCommand()
             )
-            check(stopExitCode == 0) { "force-stop exited with $stopExitCode" }
-            // 2. 延迟后重新拉起（am start 指定主 Activity；不用 monkey，避免误开自动旋转）
-            Thread.sleep(800)
-            val startExitCode = execShell(
-                suPath ?: "su",
-                "-c",
-                "am start -n ${HookEntry.TARGET_PACKAGE}/.MainActivityV2"
-            )
-            check(startExitCode == 0) { "am start exited with $startExitCode" }
+            check(restartExitCode == 0) { "restart shell exited with $restartExitCode" }
             Handler(Looper.getMainLooper()).post {
                 appContext.toast(appContext.getString(R.string.restart_bilibili_done))
             }
@@ -483,6 +477,32 @@ private fun MainActivity.restartBilibili() {
         }
     }.start()
 }
+
+/** 构造无用户输入的 root 重启命令；包名与 Activity 均为编译期常量。 */
+private fun buildRestartShellCommand(): String =
+    """
+    auto_rotate=${'$'}(settings get system accelerometer_rotation 2>/dev/null);
+    user_rotate=${'$'}(settings get system user_rotation 2>/dev/null);
+    restore_rotation() {
+        current_auto=${'$'}(settings get system accelerometer_rotation 2>/dev/null);
+        case "${'$'}auto_rotate" in
+            0|1) if [ "${'$'}current_auto" != "${'$'}auto_rotate" ]; then settings put system accelerometer_rotation "${'$'}auto_rotate"; fi ;;
+        esac;
+        current_user=${'$'}(settings get system user_rotation 2>/dev/null);
+        case "${'$'}user_rotate" in
+            0|1|2|3) if [ "${'$'}current_user" != "${'$'}user_rotate" ]; then settings put system user_rotation "${'$'}user_rotate"; fi ;;
+        esac;
+    };
+    am force-stop ${HookEntry.TARGET_PACKAGE};
+    stop_status=${'$'}?;
+    if [ "${'$'}stop_status" -ne 0 ]; then restore_rotation; exit "${'$'}stop_status"; fi;
+    sleep 0.8;
+    am start -n ${HookEntry.TARGET_PACKAGE}/.MainActivityV2 >/dev/null 2>&1;
+    start_status=${'$'}?;
+    sleep 1;
+    restore_rotation;
+    exit "${'$'}start_status"
+    """.trimIndent().replace("\n", " ")
 
 /** 重启前确保当前 enabled 快照或关闭 tombstone 已完成一次有界 NPatch 写入。 */
 private fun MainActivity.flushNoRootSupportBeforeOpeningDetails() {
