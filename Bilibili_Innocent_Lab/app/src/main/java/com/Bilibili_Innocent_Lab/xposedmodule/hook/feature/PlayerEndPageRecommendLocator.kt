@@ -4,7 +4,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.runtime.KavaMemberLookup
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
 
-/** 仅 UGC 结束页回复及其合并后的播放器列表；安装时核对结构，不触碰详情页 ViewReply 或 PGC widget。 */
+/** 仅 UGC 结束页回复及其合并/渲染后的播放器列表；安装时核对结构，不触碰详情页 ViewReply 或 PGC widget。 */
 internal object PlayerEndPageRecommendLocator {
     const val MOSS = "com.bapis.bilibili.app.viewunite.v1.ViewMoss"
     const val REPLY = "com.bapis.bilibili.app.viewunite.v1.ViewEndPageReply"
@@ -35,18 +35,32 @@ internal object PlayerEndPageRecommendLocator {
         }.singleOrNull()
         val plan = ProtobufBuilderPlan.resolve(reply)
         val clear = plan?.method("clearRelates")
-        val mergedList = service?.let { owner ->
-            KavaMemberLookup.declaredMethods(owner, makeAccessible = true) {
-                it.parameterTypes.contentEquals(arrayOf(List::class.java)) && it.returnType == List::class.java &&
-                    !Modifier.isStatic(it.modifiers) && !Modifier.isAbstract(it.modifiers) &&
-                    !it.isBridge && !it.isSynthetic
-            }.singleOrNull()
-        }
+        val mergedList = service?.let(::postMergeList)
         return Access(reply,
             if (moss != null && request != null) exact(moss, "executeViewEndPage", reply, request) else null,
             if (moss != null && request != null && handler?.isInterface == true)
                 exact(moss, "viewEndPage", Void.TYPE, request, handler) else null,
             handler, list, count, default, plan, clear, mergedList)
+    }
+
+    /**
+     * 9.x 先把详情页卡片合并到结束页列表，8.90.x 则直接在三参数渲染函数中
+     * 生成 RunningUIComponent。两者都是结束页专属 service 的 List 输出；优先
+     * 选择单参数合并入口，旧版没有该入口时再接受明确的 List/容器/String 形状。
+     */
+    private fun postMergeList(owner: Class<*>): Method? {
+        val candidates = KavaMemberLookup.declaredMethods(owner, makeAccessible = true) {
+            val params = it.parameterTypes
+            val directMerge = params.contentEquals(arrayOf(List::class.java))
+            val rendered = params.size == 3 && params[0] == List::class.java &&
+                params[2] == String::class.java && !params[1].isPrimitive &&
+                params[1] != String::class.java && params[1] != List::class.java
+            (directMerge || rendered) && it.returnType == List::class.java &&
+                !Modifier.isStatic(it.modifiers) && !Modifier.isAbstract(it.modifiers) &&
+                !it.isBridge && !it.isSynthetic
+        }
+        return candidates.firstOrNull { it.parameterTypes.contentEquals(arrayOf(List::class.java)) }
+            ?: candidates.singleOrNull()
     }
 
     private fun exact(owner: Class<*>, name: String, returns: Class<*>, vararg params: Class<*>): Method? =

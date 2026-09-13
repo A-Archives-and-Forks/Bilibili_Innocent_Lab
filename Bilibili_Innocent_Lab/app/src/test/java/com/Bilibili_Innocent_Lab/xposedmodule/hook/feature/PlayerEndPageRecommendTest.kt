@@ -15,6 +15,9 @@ class PlayerEndPageRecommendTest {
     class Service {
         fun merge(cards: List<String>): List<String> = cards
     }
+    class RenderService {
+        fun render(cards: List<String>, container: Any, tag: String): List<String> = cards
+    }
     class Reply(val cards: List<String>, val other: String = "keep") {
         fun getRelatesList(): List<String> = if (mask?.invoke() == true) emptyList() else cards
         fun getRelatesCount(): Int = if (mask?.invoke() == true) 0 else cards.size
@@ -98,6 +101,17 @@ class PlayerEndPageRecommendTest {
         events.clear()
         val original=listOf("detail-card")
         val filtered=registrar.invoke("$id.merged-list",Service(),arrayOf(original)) { original } as List<*>
+        assertTrue(filtered.isEmpty())
+        assertEquals(listOf(FeatureRuntimeStage.OBSERVED,FeatureRuntimeStage.APPLIED),events)
+    }
+    @Test fun `old rendered service output is treated as the merged list coverage unit`() {
+        val access=PlayerEndPageRecommendLocator.resolve(Reply::class.java,null,null,null,RenderService::class.java)
+        assertEquals("render",access.mergedList!!.name)
+        val registrar=PlayerPortTestRegistrar();val events=mutableListOf<FeatureRuntimeStage>()
+        PlayerEndPageRecommendFeatureInstaller(true){access}.install(environment(registrar,events))
+        events.clear()
+        val original=listOf("rendered-card")
+        val filtered=registrar.invoke("$id.merged-list",RenderService(),arrayOf(original)) { original } as List<*>
         assertTrue(filtered.isEmpty())
         assertEquals(listOf(FeatureRuntimeStage.OBSERVED,FeatureRuntimeStage.APPLIED),events)
     }
