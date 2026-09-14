@@ -6,6 +6,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.hook.modern.HookExceptionPolicy
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.modern.ModernMemberHookCreator
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -59,6 +60,7 @@ class HomeRecommendPurifyFeatureInstallerTest {
         removeAds: Boolean = false,
         removeCmV2: Boolean = false,
         removeBanner: Boolean = false,
+        sectionPickEnabled: Boolean = false,
         points: VersionAdapter.HomeRecommendFeedPoints? =
             VersionAdapter.locateHomeRecommendFeed(requireNotNull(javaClass.classLoader))
     ) = HomeRecommendPurifyFeatureInstaller(
@@ -75,7 +77,8 @@ class HomeRecommendPurifyFeatureInstallerTest {
         removeLarge = false,
         minDurationSeconds = minSeconds,
         maxDurationSeconds = maxSeconds,
-        points = points
+        points = points,
+        sectionPickEnabled = sectionPickEnabled
     )
 
     @Test
@@ -269,4 +272,306 @@ class HomeRecommendPurifyFeatureInstallerTest {
             statuses
         )
     }
+
+    @Test
+    fun `shared args getter is invoked once for tag and author dimensions`() {
+        val item = ProbeItem()
+        val argsGetter = ProbeItem::class.java.getDeclaredMethod("getArgs").apply { isAccessible = true }
+        val accessors = accessors(
+            holderGetter = ProbeItem::class.java.getDeclaredMethod("getHolderType"),
+            tidArgsGetter = argsGetter,
+            authorArgsGetter = argsGetter
+        )
+
+        val signals = invokeSignals(
+            installer(0, 0, points = null, sectionPickEnabled = true),
+            item,
+            accessors
+        )
+
+        assertEquals(1, item.argsCalls)
+        assertEquals(101L, signals.tid)
+        assertEquals("标签一", signals.tname)
+        assertEquals(11L, signals.rid)
+        assertEquals("UP 主", signals.upName)
+        assertEquals("202", signals.upId)
+    }
+
+    @Test
+    fun `different args getters are not incorrectly shared`() {
+        val item = ProbeItem()
+        val accessors = accessors(
+            holderGetter = ProbeItem::class.java.getDeclaredMethod("getHolderType"),
+            tidArgsGetter = ProbeItem::class.java.getDeclaredMethod("getArgs"),
+            authorArgsGetter = ProbeItem::class.java.getDeclaredMethod("getAuthorArgs")
+        )
+
+        val signals = invokeSignals(
+            installer(0, 0, points = null, sectionPickEnabled = true),
+            item,
+            accessors
+        )
+
+        assertEquals(1, item.argsCalls)
+        assertEquals(1, item.authorArgsCalls)
+        assertEquals(101L, signals.tid)
+        assertEquals("作者参数", signals.upName)
+        assertEquals("303", signals.upId)
+    }
+
+    @Test
+    fun `args read failure remains fail open`() {
+        val item = ProbeItem()
+        val throwingGetter = ProbeItem::class.java
+            .getDeclaredMethod("getThrowingArgs")
+            .apply { isAccessible = true }
+        val accessors = accessors(
+            holderGetter = ProbeItem::class.java.getDeclaredMethod("getHolderType"),
+            tidArgsGetter = throwingGetter,
+            authorArgsGetter = throwingGetter
+        )
+
+        val signals = invokeSignals(
+            installer(0, 0, points = null, sectionPickEnabled = true),
+            item,
+            accessors
+        )
+
+        assertEquals(null, signals.tid)
+        assertEquals(null, signals.upName)
+        assertEquals(null, signals.upId)
+    }
+
+    @Test
+    fun `actual response hook preserves fail open and independent rule semantics`() {
+        val blocked = HomeFeedCard(HomeFeedArgs(tid = 7L, upName = "目标 UP"), title = "普通")
+        val noArgs = HomeFeedCard(null, title = "普通")
+        val throwingArgs = HomeFeedCard(
+            HomeFeedArgs(tid = 7L, upName = "目标 UP"),
+            title = "普通",
+            throwOnArgs = true
+        )
+        val titleOnly = HomeFeedCard(null, title = "包含关键词")
+        val source = listOf(blocked, noArgs, throwingArgs, titleOnly)
+        val recorded = PlayerPortTestRegistrar()
+        val points = homeFeedPoints()
+        val env = homeFeedEnvironment(recorded)
+        val result = HomeRecommendPurifyFeatureInstaller(
+            removeAds = false,
+            removeCmV2 = false,
+            removeBanner = false,
+            removePictures = false,
+            removeGamePromotions = false,
+            titleFilterEnabled = true,
+            rawTitleKeywords = "关键词",
+            removeLive = false,
+            removeCourses = false,
+            removeVertical = false,
+            removeLarge = false,
+            minDurationSeconds = 0,
+            maxDurationSeconds = 0,
+            points = points,
+            rawBlockedTids = "7",
+            rawBlockedAuthors = "目标 UP"
+        ).install(env)
+
+        assertTrue(result is FeatureInstallResult.Installed)
+        val filtered = recorded.invoke("home.recommend.purify.0", HomeFeedResponse(source)) { source }
+        assertEquals(listOf(noArgs, throwingArgs), filtered)
+        assertEquals(1, blocked.argsCalls)
+        assertEquals(1, noArgs.argsCalls)
+        assertEquals(1, throwingArgs.argsCalls)
+        assertEquals(1, titleOnly.argsCalls)
+        assertEquals(4, source.size)
+    }
+
+    @Test
+    fun `actual response hook keeps original list when unreadable dimensions do not match`() {
+        val source = listOf(
+            HomeFeedCard(null, title = "普通"),
+            HomeFeedCard(HomeFeedArgs(tid = 99L, upName = "其他"), title = "普通", throwOnArgs = true)
+        )
+        val recorded = PlayerPortTestRegistrar()
+        HomeRecommendPurifyFeatureInstaller(
+            removeAds = false,
+            removeCmV2 = false,
+            removeBanner = false,
+            removePictures = false,
+            removeGamePromotions = false,
+            titleFilterEnabled = false,
+            rawTitleKeywords = "",
+            removeLive = false,
+            removeCourses = false,
+            removeVertical = false,
+            removeLarge = false,
+            minDurationSeconds = 0,
+            maxDurationSeconds = 0,
+            points = homeFeedPoints(),
+            rawBlockedTids = "7",
+            rawBlockedAuthors = "目标 UP"
+        ).install(homeFeedEnvironment(recorded))
+
+        val filtered = recorded.invoke("home.recommend.purify.0", HomeFeedResponse(source)) { source }
+        assertSame(source, filtered)
+        assertEquals(1, source[0].argsCalls)
+        assertEquals(1, source[1].argsCalls)
+    }
+
+    private fun homeFeedEnvironment(recorded: PlayerPortTestRegistrar) =
+        environment(mutableListOf()).copy(registrar = object : HookRegistrar by recorded {
+            override fun adapted(
+                id: String,
+                point: VersionAdapter.HookPoint,
+                exceptionPolicy: HookExceptionPolicy,
+                block: ModernMemberHookCreator.() -> Unit
+            ) {
+                recorded.exact(
+                    id,
+                    Class.forName(point.className),
+                    point.methodName,
+                    *point.paramClassNames.orEmpty().map { Class.forName(it) }.toTypedArray(),
+                    block = block
+                )
+            }
+        })
+
+    private fun homeFeedPoints() = VersionAdapter.HomeRecommendFeedPoints(
+        responseItemGetters = listOf(
+            VersionAdapter.HookPoint(HomeFeedResponse::class.java.name, "getItems", emptyList())
+        ),
+        holderTypeGetter = VersionAdapter.HookPoint(HomeFeedCard::class.java.name, "getHolderType", emptyList()),
+        bizTypeGetter = null,
+        adInfoGetter = null,
+        cardGotoGetter = null,
+        goToGetter = null,
+        uriGetter = null,
+        paramGetter = null,
+        titleGetter = VersionAdapter.HookPoint(HomeFeedCard::class.java.name, "getTitle", emptyList()),
+        subtitleGetter = null,
+        descGetter = null,
+        playerArgsGetter = null,
+        playerArgsDurationField = null,
+        argsGetter = VersionAdapter.HookPoint(HomeFeedCard::class.java.name, "getArgs", emptyList()),
+        argsTidGetter = VersionAdapter.HookPoint(HomeFeedArgs::class.java.name, "getTid", emptyList()),
+        argsTnameGetter = VersionAdapter.HookPoint(HomeFeedArgs::class.java.name, "getTname", emptyList()),
+        argsRidGetter = VersionAdapter.HookPoint(HomeFeedArgs::class.java.name, "getRid", emptyList()),
+        argsUpNameGetter = VersionAdapter.HookPoint(HomeFeedArgs::class.java.name, "getUpName", emptyList()),
+        argsUpIdGetter = VersionAdapter.HookPoint(HomeFeedArgs::class.java.name, "getUpId", emptyList())
+    )
+
+    private fun accessors(
+        holderGetter: java.lang.reflect.Method,
+        tidArgsGetter: java.lang.reflect.Method,
+        authorArgsGetter: java.lang.reflect.Method
+    ): Any {
+        val owner = HomeRecommendPurifyFeatureInstaller::class.java
+        val tidClass = Class.forName("${owner.name}\$TidAccessor")
+        val authorClass = Class.forName("${owner.name}\$AuthorAccessor")
+        val accessorsClass = Class.forName("${owner.name}\$Accessors")
+        val argsClass = ProbeArgs::class.java
+        fun argsMethod(name: String) = argsClass.getDeclaredMethod(name).apply { isAccessible = true }
+        val tid = tidClass.declaredConstructors.single { it.parameterCount == 4 }.apply { isAccessible = true }
+            .newInstance(
+                tidArgsGetter.apply { isAccessible = true },
+                argsMethod("getTid"),
+                argsMethod("getTname"),
+                argsMethod("getRid")
+            )
+        val author = authorClass.declaredConstructors.single { it.parameterCount == 3 }.apply { isAccessible = true }
+            .newInstance(
+                authorArgsGetter.apply { isAccessible = true },
+                argsMethod("getUpName"),
+                argsMethod("getUpId")
+            )
+        val constructor = accessorsClass.declaredConstructors.single { it.parameterCount == 14 }
+            .apply { isAccessible = true }
+        val values = arrayOfNulls<Any>(14)
+        values[0] = holderGetter.apply { isAccessible = true }
+        values[12] = tid
+        values[13] = author
+        return constructor.newInstance(*values)
+    }
+
+    private fun invokeSignals(
+        installer: HomeRecommendPurifyFeatureInstaller,
+        item: Any,
+        accessors: Any
+    ): HomeRecommendPurifyFeatureInstaller.Signals {
+        val accessorsClass = accessors.javaClass
+        val method = HomeRecommendPurifyFeatureInstaller::class.java
+            .getDeclaredMethod("signals", Any::class.java, accessorsClass)
+            .apply { isAccessible = true }
+        return method.invoke(installer, item, accessors) as HomeRecommendPurifyFeatureInstaller.Signals
+    }
+
+    private class ProbeItem {
+        var argsCalls = 0
+        var authorArgsCalls = 0
+        private val args = ProbeArgs(101L, "标签一", 11L, "UP 主", 202L)
+        private val authorArgs = ProbeArgs(303L, "作者标签", 33L, "作者参数", 303L)
+
+        fun getHolderType(): String = "small_cover_v2"
+
+        fun getArgs(): ProbeArgs {
+            argsCalls += 1
+            return args
+        }
+
+        fun getAuthorArgs(): ProbeArgs {
+            authorArgsCalls += 1
+            return authorArgs
+        }
+
+        fun getThrowingArgs(): ProbeArgs = error("probe failure")
+    }
+
+    private class ProbeArgs(
+        private val tid: Long,
+        private val tname: String,
+        private val rid: Long,
+        private val upName: String,
+        private val upId: Long
+    ) {
+        fun getTid(): Long = tid
+        fun getTname(): String = tname
+        fun getRid(): Long = rid
+        fun getUpName(): String = upName
+        fun getUpId(): Long = upId
+    }
+}
+
+private class HomeFeedResponse(private val items: List<HomeFeedCard>) {
+    fun getItems(): List<HomeFeedCard> = items
+}
+
+private class HomeFeedCard(
+    private val args: HomeFeedArgs?,
+    private val title: String,
+    private val throwOnArgs: Boolean = false
+) {
+    var argsCalls: Int = 0
+
+    fun getHolderType(): String = "small_cover_v2"
+
+    fun getTitle(): String = title
+
+    fun getArgs(): HomeFeedArgs? {
+        argsCalls += 1
+        if (throwOnArgs) error("feed args failure")
+        return args
+    }
+}
+
+private class HomeFeedArgs(
+    private val tid: Long = 0L,
+    private val upName: String = "",
+    private val tname: String = "",
+    private val rid: Long = 0L,
+    private val upId: Long = 0L
+) {
+    fun getTid(): Long = tid
+    fun getTname(): String = tname
+    fun getRid(): Long = rid
+    fun getUpName(): String = upName
+    fun getUpId(): Long = upId
 }

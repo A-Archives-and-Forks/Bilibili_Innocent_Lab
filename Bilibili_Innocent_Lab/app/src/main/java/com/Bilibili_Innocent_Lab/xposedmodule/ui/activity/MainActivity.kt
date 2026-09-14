@@ -106,6 +106,8 @@ import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.ExactRuleSetCodec
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.RuleSetCodec
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.TidBlocklistCodec
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerQualityConfig
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerCodecPreference
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerDecodeMode
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerSpeedConfig
 import com.Bilibili_Innocent_Lab.xposedmodule.runtime.AndroidUserSpace
 import com.Bilibili_Innocent_Lab.xposedmodule.runtime.AndroidUserSpaceSnapshot
@@ -299,6 +301,7 @@ class MainActivity : SkinnedActivity() {
     /** 每个面各自节流一次查询；四个面的面板可以互不阻塞地打开。仅在主线程读写。 */
     private val componentSnapshotQueryInFlight = mutableSetOf<String>()
     private var blockAppUpdate = false
+    private var blockComponentLibraryDownload = false
     private var hideDynamicCityTab = false
     private var hideDynamicSchoolTab = false
     private var preferDynamicVideoTab = false
@@ -327,6 +330,8 @@ class MainActivity : SkinnedActivity() {
     internal var videoRelateReasonFilterEnabled = false
     internal var videoRelateReasonFilterKeywords = ""
     internal var playerDefaultQualityQn = 0
+    internal var playerCodecPreference = PlayerCodecPreference.FOLLOW_HOST.value
+    internal var playerDecodeMode = PlayerDecodeMode.FOLLOW_HOST.value
     private var playerDisableLongPress = false
     internal var playerLongPressSpeedPercent = 0
     internal var playerDefaultSpeedPercent = 0
@@ -394,6 +399,8 @@ class MainActivity : SkinnedActivity() {
     /** 手动亮色开关下方 tip 引用（动态动画切换文本） */
     private var lightModeTipView: NativeTextView? = null
     internal var playerQualitySummaryView: NativeTextView? = null
+    internal var playerCodecPreferenceSummaryView: NativeTextView? = null
+    internal var playerDecodeModeSummaryView: NativeTextView? = null
     private var playerLongPressSpeedSummary: NativeTextView? = null
     private var playerDefaultSpeedSummary: NativeTextView? = null
     private var homeTabRulesSummaryView: NativeTextView? = null
@@ -1813,6 +1820,30 @@ class MainActivity : SkinnedActivity() {
         120 -> "4K"
         127 -> "8K"
         else -> getString(R.string.player_default_quality_follow_host)
+    }
+
+    internal fun playerCodecPreferenceLabel(value: Int): String = when (PlayerCodecPreference.fromValue(value)) {
+        PlayerCodecPreference.FOLLOW_HOST -> getString(R.string.player_codec_preference_follow)
+        PlayerCodecPreference.H264 -> getString(R.string.player_codec_preference_h264)
+        PlayerCodecPreference.H265 -> getString(R.string.player_codec_preference_h265)
+        PlayerCodecPreference.AV1 -> getString(R.string.player_codec_preference_av1)
+    }
+
+    internal fun playerDecodeModeLabel(value: Int): String = when (PlayerDecodeMode.fromValue(value)) {
+        PlayerDecodeMode.FOLLOW_HOST -> getString(R.string.player_decode_mode_follow)
+        PlayerDecodeMode.FORCE_HARDWARE -> getString(R.string.player_decode_mode_hardware)
+        PlayerDecodeMode.FORCE_SOFTWARE -> getString(R.string.player_decode_mode_software)
+    }
+
+    internal fun updatePlayerCodecSummaries() {
+        playerCodecPreferenceSummaryView?.text = getString(
+            R.string.player_codec_preference_current,
+            playerCodecPreferenceLabel(playerCodecPreference)
+        )
+        playerDecodeModeSummaryView?.text = getString(
+            R.string.player_decode_mode_current,
+            playerDecodeModeLabel(playerDecodeMode)
+        )
     }
 
     private fun playerSpeedLabel(percent: Int): String = if (percent == PlayerSpeedConfig.FOLLOW_HOST) {
@@ -3856,6 +3887,8 @@ class MainActivity : SkinnedActivity() {
         logLevelThumb = null
         logLevelDesc = null
         playerQualitySummaryView = null
+        playerCodecPreferenceSummaryView = null
+        playerDecodeModeSummaryView = null
         playerLongPressSpeedSummary = null
         playerDefaultSpeedSummary = null
         homeTabRulesSummaryView = null
@@ -4016,6 +4049,7 @@ class MainActivity : SkinnedActivity() {
         keepMineVipSpace = uiSettings.bool(FeaturePreferences.KEEP_MINE_VIP_SPACE)
         mineComponentHiddenRules = uiSettings.string(FeaturePreferences.MINE_COMPONENT_HIDDEN_RULES)
         blockAppUpdate = uiSettings.bool(FeaturePreferences.BLOCK_APP_UPDATE)
+        blockComponentLibraryDownload = uiSettings.bool(FeaturePreferences.BLOCK_COMPONENT_LIBRARY_DOWNLOAD)
         hideDynamicCityTab = uiSettings.bool(FeaturePreferences.HIDE_DYNAMIC_CITY_TAB)
         hideDynamicSchoolTab = uiSettings.bool(FeaturePreferences.HIDE_DYNAMIC_SCHOOL_TAB)
         preferDynamicVideoTab = uiSettings.bool(FeaturePreferences.PREFER_DYNAMIC_VIDEO_TAB)
@@ -4047,6 +4081,12 @@ class MainActivity : SkinnedActivity() {
         playerDefaultQualityQn = PlayerQualityConfig.normalize(
             uiSettings.int(FeaturePreferences.PLAYER_DEFAULT_QUALITY_QN)
         )
+        playerCodecPreference = PlayerCodecPreference.fromValue(
+            uiSettings.int(FeaturePreferences.PLAYER_CODEC_PREFERENCE)
+        ).value
+        playerDecodeMode = PlayerDecodeMode.fromValue(
+            uiSettings.int(FeaturePreferences.PLAYER_DECODE_MODE)
+        ).value
         playerDisableLongPress = uiSettings.bool(FeaturePreferences.PLAYER_DISABLE_LONG_PRESS)
         playerLongPressSpeedPercent = PlayerSpeedConfig.normalize(
             uiSettings.int(FeaturePreferences.PLAYER_LONG_PRESS_SPEED_PERCENT)
@@ -6382,6 +6422,35 @@ class MainActivity : SkinnedActivity() {
             alpha = 0.6f
             setLineSpacing(6f, 1f)
             text = stringResource(R.string.block_app_update_tip)
+            textColor = colorResource(R.color.colorTextDark)
+            textSize = 12f
+        }
+        MaterialSwitch(
+            lparams = LayoutParams(widthMatchParent = true) {
+                topMargin = 12.dp
+                bottomMargin = 5.dp
+            }
+        ) {
+            text = stringResource(R.string.block_component_library_download)
+            isAllCaps = false
+            textColor = colorResource(R.color.colorTextGray)
+            textSize = 15f
+            isChecked = blockComponentLibraryDownload
+            setOnCheckedChangeListener { _, checked ->
+                blockComponentLibraryDownload = checked
+                runCatching {
+                    prefs().edit {
+                        putBoolean(FeaturePreferences.BLOCK_COMPONENT_LIBRARY_DOWNLOAD, checked)
+                    }
+                }.onFailure { throwable ->
+                    Log.e("BilibiliInnocentLab", "write component library prefs failed", throwable)
+                }
+            }
+        }
+        TextView(lparams = LayoutParams(widthMatchParent = true)) {
+            alpha = 0.6f
+            setLineSpacing(6f, 1f)
+            text = stringResource(R.string.block_component_library_download_tip)
             textColor = colorResource(R.color.colorTextDark)
             textSize = 12f
         }
@@ -9386,6 +9455,64 @@ class MainActivity : SkinnedActivity() {
             text = stringResource(R.string.player_default_quality_tip)
             textColor = colorResource(R.color.colorTextDark)
             textSize = 12f
+        }
+        listOf(
+            Triple(
+                R.string.player_codec_preference,
+                R.string.player_codec_preference_tip,
+                { anchor: View -> showPlayerCodecPreferenceDialog(anchor) }
+            ),
+            Triple(
+                R.string.player_decode_mode,
+                R.string.player_decode_mode_tip,
+                { anchor: View -> showPlayerDecodeModeDialog(anchor) }
+            )
+        ).forEachIndexed { index, (titleRes, tipRes, open) ->
+            LinearLayout(
+                lparams = LayoutParams(widthMatchParent = true) {
+                    topMargin = if (index == 0) 12.dp else 8.dp
+                },
+                init = {
+                    orientation = LinearLayout.VERTICAL
+                    background = selfRippleBackground(10f)
+                    updatePadding(horizontal = 0.dp, vertical = 9.dp)
+                    isClickable = true
+                    isFocusable = true
+                    setOnClickListener { open(this) }
+                }
+            ) {
+                TextView(lparams = LayoutParams(widthMatchParent = true)) {
+                    text = stringResource(titleRes)
+                    textColor = colorResource(R.color.colorTextGray)
+                    textSize = 15f
+                }
+                TextView(lparams = LayoutParams(widthMatchParent = true) { topMargin = 5.dp }) {
+                    alpha = 0.6f
+                    textColor = colorResource(R.color.colorTextDark)
+                    textSize = 12f
+                    setLineSpacing(6f, 1f)
+                    if (index == 0) {
+                        playerCodecPreferenceSummaryView = this
+                        text = getString(
+                            R.string.player_codec_preference_current,
+                            playerCodecPreferenceLabel(playerCodecPreference)
+                        )
+                    } else {
+                        playerDecodeModeSummaryView = this
+                        text = getString(
+                            R.string.player_decode_mode_current,
+                            playerDecodeModeLabel(playerDecodeMode)
+                        )
+                    }
+                }
+            }
+            TextView(lparams = LayoutParams(widthMatchParent = true)) {
+                alpha = 0.6f
+                setLineSpacing(6f, 1f)
+                text = stringResource(tipRes)
+                textColor = colorResource(R.color.colorTextDark)
+                textSize = 12f
+            }
         }
         MaterialSwitch(
             lparams = LayoutParams(widthMatchParent = true) {

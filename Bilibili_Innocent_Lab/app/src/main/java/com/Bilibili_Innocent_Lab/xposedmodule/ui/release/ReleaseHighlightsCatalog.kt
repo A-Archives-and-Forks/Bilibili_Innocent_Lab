@@ -86,6 +86,12 @@ internal object ReleaseHighlightsCatalog {
             HighlightDestination("video.related.blocked_tags")),
         ReleaseHighlight("player-popup-promotion", HighlightKind.NEW, R.string.hide_player_popup_promotion_tip,
             HighlightDestination("player.popup_promotion.hidden")),
+        ReleaseHighlight("player-codec-preference", HighlightKind.NEW, R.string.highlights_player_codec_preference,
+            HighlightDestination("player.codec.preference")),
+        ReleaseHighlight("player-decode-mode", HighlightKind.NEW, R.string.highlights_player_decode_mode,
+            HighlightDestination("player.decode.mode")),
+        ReleaseHighlight("component-library-download", HighlightKind.NEW, R.string.highlights_component_library,
+            HighlightDestination("client.component_library.download.blocked")),
         ReleaseHighlight("independent-adaptation", HighlightKind.FIXED, R.string.highlights_stability,
             standaloneTitleRes = R.string.highlights_stability_title)
     )))

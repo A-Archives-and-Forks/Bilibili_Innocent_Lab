@@ -67,6 +67,16 @@ internal class HomeRecommendPurifyFeatureInstaller(
     /** UP 维度是否需要解析读取链；面板劫持开着时即使名单为空也要。 */
     private val authorDimensionEnabled = blockedAuthors.isNotEmpty() || sectionPickEnabled
 
+    /** 只有这些开关才需要把卡片公开字段交给语义分类器；Banner 单独走精确 token 判定。 */
+    private val semanticClassificationEnabled =
+        removeCmV2 || removeAds || removePictures || removeGamePromotions ||
+            removeLive || removeCourses || removeVertical || removeLarge
+
+    /** `shouldRemove` 的其余判定也全部关闭时，直接跳过整段分类/规则工作。 */
+    private val itemRemovalEnabled = semanticClassificationEnabled ||
+        titleKeywords.isNotEmpty() || durationRange.isEnabled ||
+        tagDimensionEnabled || authorDimensionEnabled
+
     override val id: String = ID
     override val capabilityIds: List<String> get() = buildList {
         if (removeBanner) add("home_banner_feed")
@@ -292,8 +302,13 @@ internal class HomeRecommendPurifyFeatureInstaller(
     }
 
     private fun shouldRemove(signals: Signals): Boolean {
+        if (!itemRemovalEnabled) return false
         val hostSignals = signals.toHostSignals()
-        val kinds = HostContentSemanticClassifier.classify(hostSignals)
+        val kinds = if (semanticClassificationEnabled) {
+            HostContentSemanticClassifier.classify(hostSignals)
+        } else {
+            emptySet()
+        }
         return (removeCmV2 && HostContentSemanticClassifier.isCmV2(hostSignals)) ||
             (removeAds && HostContentKind.ADVERTISEMENT in kinds) ||
             (removePictures && HostContentKind.PICTURE in kinds) ||
@@ -325,6 +340,20 @@ internal class HomeRecommendPurifyFeatureInstaller(
         val needsRoute = removePictures || removeGamePromotions || removeLive ||
             removeCourses || removeVertical || removeLarge || removePgc || removeSpecialCards
         val needsClassification = removeAds || removeCmV2 || needsRoute
+        val tidAccessor = accessors.tid
+        val tidArgs = tidAccessor?.let { accessor ->
+            invokeCompatible(accessor.argsGetter, item)
+        }
+        val authorAccessor = accessors.author
+        val authorArgs = authorAccessor?.let { accessor ->
+            // 9.11.0 的 tid/up 链共享同一个 ArgsData getter；只有 Method 签名相同
+            // 才复用，避免把跨版本可能不同的两个容器误当成同一个对象。
+            if (tidAccessor != null && tidAccessor.argsGetter == accessor.argsGetter) {
+                tidArgs
+            } else {
+                invokeCompatible(accessor.argsGetter, item)
+            }
+        }
         return Signals(
             holderType = if (removeAds || removeBanner || removeLarge) {
                 invokeString(accessors.holderType, item)
@@ -372,34 +401,31 @@ internal class HomeRecommendPurifyFeatureInstaller(
             } else {
                 null
             },
-            // 名单为空且没开面板劫持时 accessors.tid 是 null，这里不产生任何反射调用。
-            // id 与名字共用同一次 getArgs()，热路径上不会多一次容器反射。
-            tid = accessors.tid?.let { chain ->
-                invokeCompatible(chain.argsGetter, item)?.let { args ->
-                    (invokeCompatible(chain.tidGetter, args) as? Number)?.toLong()
+            // 名单为空且没开面板劫持时 accessors.tid/author 是 null，这里不产生反射调用。
+            // 同一张卡的 tid/tname/rid 与 upName/upId 各自共用一次 getArgs()；若两条
+            // 适配链确实指向同一个 Method，再额外跨维度复用一次容器读取。
+            tid = tidAccessor?.let { accessor ->
+                tidArgs?.let { args ->
+                    (invokeCompatible(accessor.tidGetter, args) as? Number)?.toLong()
                 }
             },
-            tname = accessors.tid?.tnameGetter?.let { getter ->
-                invokeCompatible(accessors.tid.argsGetter, item)?.let { args ->
-                    invokeCompatible(getter, args) as? String
-                }
+            tname = tidAccessor?.tnameGetter?.let { getter ->
+                tidArgs?.let { args -> invokeCompatible(getter, args) as? String }
             },
             // 只喂探针。探针记满就静默，之后这里的反射也随之停掉。
-            rid = accessors.tid?.ridGetter?.takeIf { probedTags.size < MAX_PROBED_TAGS }
+            rid = tidAccessor?.ridGetter?.takeIf { probedTags.size < MAX_PROBED_TAGS }
                 ?.let { getter ->
-                    invokeCompatible(accessors.tid.argsGetter, item)?.let { args ->
+                    tidArgs?.let { args ->
                         (invokeCompatible(getter, args) as? Number)?.toLong()
                     }
                 },
-            // UP 维度关着时 accessors.author 是 null，这里不产生任何反射调用。
-            upName = accessors.author?.let { chain ->
-                invokeCompatible(chain.argsGetter, item)?.let { args ->
-                    invokeCompatible(chain.upNameGetter, args) as? String
-                }
+            // UP 维度关着时 authorAccessor 是 null，这里不产生任何反射调用。
+            upName = authorAccessor?.let { accessor ->
+                authorArgs?.let { args -> invokeCompatible(accessor.upNameGetter, args) as? String }
             },
             // mid 以十进制串参与比对，这样用户填名字或填 mid 都能命中。
-            upId = accessors.author?.upIdGetter?.let { getter ->
-                invokeCompatible(accessors.author.argsGetter, item)?.let { args ->
+            upId = authorAccessor?.upIdGetter?.let { getter ->
+                authorArgs?.let { args ->
                     (invokeCompatible(getter, args) as? Number)?.takeIf { it.toLong() > 0L }
                         ?.toLong()?.toString()
                 }

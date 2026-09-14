@@ -1005,9 +1005,9 @@ class VersionAdapterTest {
     fun `prefers latest verified update implementation`() {
         val point = VersionAdapter.locateBlockUpdate(requireNotNull(javaClass.classLoader))
 
-        // 9.11.0(9110400)：网络边界搬到 qq1.c（方法体常量与旧 mq1.c 逐字相同）。
-        // 同签名的 qq1.a 是缓存聚合器，夹具里也在，所以这条同时锁住"不许选缓存层"。
-        assertEquals("qq1.c", point?.className)
+        // 9.12.0(9120100)：网络边界搬到 gr1.c；同签名的 gr1.a 是包装层，
+        // 夹具里也在，所以这条同时锁住"不许选包装/缓存层"。
+        assertEquals("gr1.c", point?.className)
         assertEquals("a", point?.methodName)
         assertEquals(listOf("android.content.Context"), point?.paramClassNames)
     }
@@ -1017,15 +1017,15 @@ class VersionAdapterTest {
         val parent = requireNotNull(javaClass.classLoader)
         val previousLoader = object : ClassLoader(parent) {
             override fun loadClass(name: String, resolve: Boolean): Class<*> {
-                if (name == "qq1.c") throw ClassNotFoundException(name)
+                if (name == "gr1.c") throw ClassNotFoundException(name)
                 return super.loadClass(name, resolve)
             }
         }
 
         val point = VersionAdapter.locateBlockUpdate(previousLoader)
 
-        // 9110400 的 owner 不在（9110200 及更早），回退到上一代网络边界。
-        assertEquals("mq1.c", point?.className)
+        // 9120100 的 owner 不在，回退到 9.11.0 的网络边界。
+        assertEquals("qq1.c", point?.className)
         assertEquals("a", point?.methodName)
         assertEquals(listOf("android.content.Context"), point?.paramClassNames)
     }
@@ -1045,7 +1045,9 @@ class VersionAdapterTest {
         val parent = requireNotNull(javaClass.classLoader)
         val loader = object : ClassLoader(parent) {
             override fun loadClass(name: String, resolve: Boolean): Class<*> {
-                if (name == "qq1.c" || name == "mq1.c") throw ClassNotFoundException(name)
+                if (name == "gr1.c" || name == "qq1.c" || name == "mq1.c") {
+                    throw ClassNotFoundException(name)
+                }
                 return super.loadClass(name, resolve)
             }
         }
@@ -1062,7 +1064,7 @@ class VersionAdapterTest {
         val parent = requireNotNull(javaClass.classLoader)
         val legacyLoader = object : ClassLoader(parent) {
             override fun loadClass(name: String, resolve: Boolean): Class<*> {
-                if (name == "qq1.c" || name == "mq1.c" || name == "Ip1.c") {
+                if (name == "gr1.c" || name == "qq1.c" || name == "mq1.c" || name == "Ip1.c") {
                     throw ClassNotFoundException(name)
                 }
                 return super.loadClass(name, resolve)
@@ -1382,9 +1384,8 @@ class VersionAdapterTest {
         val points = VersionAdapter.locateDefaultVideoQuality(requireNotNull(javaClass.classLoader))
         val point = points?.defaultQualityMethod
 
-        // 9.11.0(9110400)：实现搬到 is1.h（方法体常量与旧 es1.i 逐字相同，
-        // 且该类只有一个 static a()I，owner 内唯一性天然成立）。
-        assertEquals("is1.h", point?.className)
+        // 9.12.0(9120100)：实现搬到 Xs1.j；它是候选表中最新且唯一的无参 Int 入口。
+        assertEquals("Xs1.j", point?.className)
         assertEquals("a", point?.methodName)
         assertEquals(emptyList<String>(), point?.paramClassNames)
         assertEquals(
@@ -1398,7 +1399,25 @@ class VersionAdapterTest {
         val parent = requireNotNull(javaClass.classLoader)
         val previousLoader = object : ClassLoader(parent) {
             override fun loadClass(name: String, resolve: Boolean): Class<*> {
-                if (name == "is1.h") throw ClassNotFoundException(name)
+                if (name == "Xs1.j") throw ClassNotFoundException(name)
+                return super.loadClass(name, resolve)
+            }
+        }
+
+        val point = VersionAdapter.locateDefaultVideoQuality(previousLoader)
+            ?.defaultQualityMethod
+
+        assertEquals("is1.h", point?.className)
+        assertEquals("a", point?.methodName)
+        assertEquals(emptyList<String>(), point?.paramClassNames)
+    }
+
+    @Test
+    fun `falls back to older verified quality owner`() {
+        val parent = requireNotNull(javaClass.classLoader)
+        val previousLoader = object : ClassLoader(parent) {
+            override fun loadClass(name: String, resolve: Boolean): Class<*> {
+                if (name == "Xs1.j" || name == "is1.h") throw ClassNotFoundException(name)
                 return super.loadClass(name, resolve)
             }
         }
@@ -1412,29 +1431,11 @@ class VersionAdapterTest {
     }
 
     @Test
-    fun `falls back to older verified quality owner`() {
-        val parent = requireNotNull(javaClass.classLoader)
-        val previousLoader = object : ClassLoader(parent) {
-            override fun loadClass(name: String, resolve: Boolean): Class<*> {
-                if (name == "is1.h" || name == "es1.i") throw ClassNotFoundException(name)
-                return super.loadClass(name, resolve)
-            }
-        }
-
-        val point = VersionAdapter.locateDefaultVideoQuality(previousLoader)
-            ?.defaultQualityMethod
-
-        assertEquals("Ar1.l", point?.className)
-        assertEquals("a", point?.methodName)
-        assertEquals(emptyList<String>(), point?.paramClassNames)
-    }
-
-    @Test
     fun `uses legacy default quality helper without selecting settings getter`() {
         val parent = requireNotNull(javaClass.classLoader)
         val legacyOnlyLoader = object : ClassLoader(parent) {
             override fun loadClass(name: String, resolve: Boolean): Class<*> {
-                if (name in setOf("is1.h", "es1.i", "Ar1.l", "Jq1.l", "gh6.h")) {
+                if (name in setOf("Xs1.j", "is1.h", "es1.i", "Ar1.l", "Jq1.l", "gh6.h")) {
                     throw ClassNotFoundException(name)
                 }
                 return super.loadClass(name, resolve)

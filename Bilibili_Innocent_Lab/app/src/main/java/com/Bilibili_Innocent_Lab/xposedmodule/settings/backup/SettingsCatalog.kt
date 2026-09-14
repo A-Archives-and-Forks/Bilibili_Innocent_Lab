@@ -21,7 +21,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.settings.appearance.ModalBackdropB
 internal object SettingsCatalog {
     const val PRODUCT_ID = "bilibili-innocent-lab.settings"
     const val SCOPE_ID = "core-user-settings"
-    const val CATALOG_VERSION = 23
+    const val CATALOG_VERSION = 24
     const val ID_PLAYER_DEFAULT_SPEED = "player.default_speed.percent"
     const val ID_PLAYER_LONG_PRESS_SPEED = "player.long_press_speed.percent"
     const val ID_FREE_COPY_COMMENT = "free_copy.comment.enabled"
@@ -444,6 +444,28 @@ internal object SettingsCatalog {
             default = 0,
             allowed = PlayerQualityConfig.supportedQns.toSet()
         ),
+        integer(
+            "player.codec.preference",
+            FeaturePreferences.PLAYER_CODEC_PREFERENCE,
+            R.string.player_codec_preference,
+            default = 0,
+            range = 0..3,
+            introducedCatalogVersion = 24
+        ),
+        integer(
+            "player.decode.mode",
+            FeaturePreferences.PLAYER_DECODE_MODE,
+            R.string.player_decode_mode,
+            default = 0,
+            range = 0..2,
+            introducedCatalogVersion = 24
+        ),
+        bool(
+            "client.component_library.download.blocked",
+            FeaturePreferences.BLOCK_COMPONENT_LIBRARY_DOWNLOAD,
+            R.string.block_component_library_download,
+            introducedCatalogVersion = 24
+        ),
         bool("prompt.teenagers_mode.blocked", FeaturePreferences.BLOCK_TEENAGERS_MODE_PROMPT, R.string.block_teenagers_mode_prompt),
         bool("player.capability.background", FeaturePreferences.PLAYER_UNLOCK_BACKGROUND,
             R.string.player_unlock_background, introducedCatalogVersion = 13),
@@ -619,7 +641,7 @@ internal object SettingsCatalog {
     val byStorageKey: Map<String, SettingSpec> = specs.associateBy(SettingSpec::storageKey)
 
     init {
-        check(specs.size == 139) { "Expected 139 catalog settings, found ${specs.size}" }
+        check(specs.size == 142) { "Expected 142 catalog settings, found ${specs.size}" }
         check(byId.size == specs.size) { "Duplicate logical setting id" }
         check(specs.map(SettingSpec::storageKey).distinct().size == specs.size) {
             "Duplicate settings storage key"

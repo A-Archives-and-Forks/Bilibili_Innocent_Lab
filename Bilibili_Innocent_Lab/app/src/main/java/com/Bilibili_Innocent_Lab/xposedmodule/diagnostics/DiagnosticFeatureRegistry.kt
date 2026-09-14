@@ -161,6 +161,7 @@ internal object DiagnosticFeatureRegistry {
             runtimeEvidenceExpected = true
         ),
         DiagnosticFeatureDescriptor("block_app_update", DiagnosticFeatureCategory.GENERAL),
+        DiagnosticFeatureDescriptor("block_component_library_download", DiagnosticFeatureCategory.GENERAL),
         DiagnosticFeatureDescriptor("full_number_display", DiagnosticFeatureCategory.GENERAL),
         DiagnosticFeatureDescriptor("teenagers_mode_prompt", DiagnosticFeatureCategory.GENERAL),
         DiagnosticFeatureDescriptor(

@@ -20,7 +20,7 @@ internal object DiagnosticCapabilityCatalog {
      * 客户端是按 "比我已知的版本更新" 做增量的，
      * VERSION 涨了却没有任何条目标在新版本上，增量就是空集（有测试钉住）。
      */
-    const val VERSION = 11
+    const val VERSION = 12
     val definitions = listOf(
         DiagnosticCapabilityDefinition("search_home_recommend_hidden", "search_home_recommend_hidden", R.string.hide_search_home_recommend, setOf("search.home_recommend.hidden"), introducedCatalogVersion = 4),
         DiagnosticCapabilityDefinition("player_interactive_legacy_follow", "player_interactive_overlay", R.string.diag_cap_player_interactive_legacy_follow, setOf("player.interactive_overlays.hidden"), "legacy/guide/clearAttention"),
@@ -67,6 +67,8 @@ internal object DiagnosticCapabilityCatalog {
         DiagnosticCapabilityDefinition("mine_vip_space_kept", "mine_vip_purify", R.string.keep_mine_vip_space, setOf("mine.vip.space_kept")),
         DiagnosticCapabilityDefinition("mine_component_filter", "mine_component_filter", R.string.custom_mine_component_hide, setOf("mine.components.hidden_rules", "mine.components.hidden_ids", "mine.components.hidden_selectors")),
         DiagnosticCapabilityDefinition("block_app_update", "block_app_update", R.string.block_app_update, setOf("client.update_prompt.blocked")),
+        DiagnosticCapabilityDefinition("block_component_library_download", "block_component_library_download", R.string.block_component_library_download, setOf("client.component_library.download.blocked"), introducedCatalogVersion = 12),
+        DiagnosticCapabilityDefinition("player_codec_force", "player_capabilities", R.string.player_codec_preference, setOf("player.codec.preference", "player.decode.mode"), introducedCatalogVersion = 12),
         DiagnosticCapabilityDefinition("dynamic_city_tab_hidden", "dynamic_tabs_purify", R.string.hide_dynamic_city_tab, setOf("dynamic.city_tab.hidden")),
         DiagnosticCapabilityDefinition("dynamic_school_tab_hidden", "dynamic_tabs_purify", R.string.hide_dynamic_school_tab, setOf("dynamic.school_tab.hidden")),
         DiagnosticCapabilityDefinition("dynamic_video_tab_preferred", "dynamic_tabs_purify", R.string.prefer_dynamic_video_tab, setOf("dynamic.video_tab.preferred")),
@@ -217,6 +219,8 @@ internal object DiagnosticCapabilityCatalog {
         "player_capability_background",
         "player_capability_small_window",
         "player_capability_cast",
+        "player_codec_force",
+        "block_component_library_download",
         "free_copy_comment_enabled",
         "free_copy_description_enabled"
     )

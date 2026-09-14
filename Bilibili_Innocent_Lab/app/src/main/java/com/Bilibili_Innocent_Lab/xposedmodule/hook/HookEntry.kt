@@ -38,6 +38,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.hook.modern.ModernMemberHookCreato
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.modern.ModernMethodHook
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.modern.ReflectAccess
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.BlockUpdateFeatureInstaller
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.BlockComponentLibraryFeatureInstaller
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.BottomBarFeatureInstaller
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.BvToAvFeatureInstaller
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.CommentPurifyFeatureInstaller
@@ -92,6 +93,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.SplashAdFeatureInstal
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.SplashAutoNightFeatureInstaller
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.SystemMediaNotificationFeatureInstaller
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerQualityFeatureInstaller
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerCodecForceFeatureInstaller
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerCapabilityFeatureInstaller
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerCapabilityOptions
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerSpeedFeatureInstaller
@@ -2889,6 +2891,17 @@ class HookEntry : XposedModule() {
 
             featureInstallCoordinator.installAll(
                 listOf(
+                    BlockComponentLibraryFeatureInstaller(
+                        enabled = prefs.getBoolean(
+                            FeaturePreferences.BLOCK_COMPONENT_LIBRARY_DOWNLOAD,
+                            false
+                        )
+                    )
+                )
+            )
+
+            featureInstallCoordinator.installAll(
+                listOf(
                     DynamicTabsFeatureInstaller(
                         hideCity = prefs.getBoolean(
                             FeaturePreferences.HIDE_DYNAMIC_CITY_TAB,
@@ -3347,6 +3360,21 @@ class HookEntry : XposedModule() {
                             0
                         ),
                         points = hostAdaptResult?.playerQuality
+                    )
+                )
+            )
+
+            featureInstallCoordinator.installAll(
+                listOf(
+                    PlayerCodecForceFeatureInstaller(
+                        codecPreferenceValue = prefs.getInt(
+                            FeaturePreferences.PLAYER_CODEC_PREFERENCE,
+                            0
+                        ),
+                        decodeModeValue = prefs.getInt(
+                            FeaturePreferences.PLAYER_DECODE_MODE,
+                            0
+                        )
                     )
                 )
             )
@@ -4656,10 +4684,17 @@ class HookEntry : XposedModule() {
                 if (processName == TARGET_PACKAGE) {
                     HostRuntimeDiagnosticsBridge.recordInstallChainStarted()
                 }
+                val installStartedAtMs = android.os.SystemClock.elapsedRealtime()
                 runCatching {
                     installer(appContext)
                 }.onSuccess {
                     authorizedHooksInstalled.set(true)
+                    if (processName == TARGET_PACKAGE) {
+                        frameworkLog(
+                            "[BIL] Hook 安装链完成耗时=" +
+                                "${android.os.SystemClock.elapsedRealtime() - installStartedAtMs}ms"
+                        )
+                    }
                     if (processName == TARGET_PACKAGE) {
                         HostRuntimeDiagnosticsBridge.recordInstallChainCompleted()
                     }
@@ -4668,7 +4703,11 @@ class HookEntry : XposedModule() {
                     if (processName == TARGET_PACKAGE) {
                         HostRuntimeDiagnosticsBridge.recordInstallChainFailed()
                     }
-                    frameworkLog("[BIL] 已授权 Hook 安装链异常", throwable)
+                    frameworkLog(
+                        "[BIL] 已授权 Hook 安装链异常(耗时=" +
+                            "${android.os.SystemClock.elapsedRealtime() - installStartedAtMs}ms)",
+                        throwable
+                    )
                 }
             }
 
@@ -4691,13 +4730,28 @@ class HookEntry : XposedModule() {
                         )
                     }
                 }
+                val bootstrapStartedAtMs = android.os.SystemClock.elapsedRealtime()
+                val remoteConfigStartedAtMs = android.os.SystemClock.elapsedRealtime()
                 val outcome = queryRemoteHookConfig()
+                val remoteConfigElapsedMs =
+                    android.os.SystemClock.elapsedRealtime() - remoteConfigStartedAtMs
                 val normal = (outcome as? RemoteHookConfigQueryOutcome.Ready)?.snapshot
                 val reason = (outcome as? RemoteHookConfigQueryOutcome.Rejected)?.reasonCode
                 if (processName == TARGET_PACKAGE) {
                     frameworkLog("[BIL] 启动授权尝试(process=$processName)")
                 }
+                val admissionStartedAtMs = android.os.SystemClock.elapsedRealtime()
                 val admission = com.Bilibili_Innocent_Lab.xposedmodule.runtime.HostAdmissionClient.admit(appContext, normal, reason)
+                val admissionElapsedMs =
+                    android.os.SystemClock.elapsedRealtime() - admissionStartedAtMs
+                if (processName == TARGET_PACKAGE) {
+                    frameworkLog(
+                        "[BIL] 启动授权阶段耗时(remote_config=${remoteConfigElapsedMs}ms," +
+                            " admission=${admissionElapsedMs}ms," +
+                            " total=${android.os.SystemClock.elapsedRealtime() - bootstrapStartedAtMs}ms," +
+                            " result=${if (admission.grant != null) "granted" else admission.reason})"
+                    )
+                }
                 val grant = admission.grant
                 if (grant == null) {
                     if (processName == TARGET_PACKAGE) HostRuntimeDiagnosticsBridge.recordConfigRejected(admission.reason)

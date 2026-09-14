@@ -12,6 +12,15 @@ internal object VersionAdapterContract {
     const val SCHEMA_VERSION = 62
 
     /**
+     * 59 → 60（2026-09-14，9.12.0(9120100) 适配）：
+     * `BLOCK_UPDATE_OWNER_CANDIDATES` 增加 `gr1.c`，
+     * `PLAYER_DEFAULT_QUALITY_CLASS_CANDIDATES` 增加 `Xs1.j`；两处均只是宿主混淆
+     * owner 搬家，`AdaptResult` JSON 形状没有变化，所以只抬规则版本，不抬 schema。
+     * 快路径指纹包含 rule，旧缓存会重定位；旧候选仍保留以维持跨版本回退。
+     */
+    const val RULE_VERSION = 60
+
+    /**
      * 51 → 52（2026-09-11，9.11.0(9110400) 适配）：
      * 只往 `BLOCK_UPDATE_OWNER_CANDIDATES` 与 `PLAYER_DEFAULT_QUALITY_CLASS_CANDIDATES`
      * 前置了两个新 owner（`qq1.c` / `is1.h`），`AdaptResult` 的 JSON 形状没变，
@@ -27,5 +36,4 @@ internal object VersionAdapterContract {
      * schema 抬了仍要抬 rule：前者管"旧缓存作废"，后者管"快路径指纹变化 ⇒ 重定位"，
      * 两件事不互相替代。
      */
-    const val RULE_VERSION = 59
 }

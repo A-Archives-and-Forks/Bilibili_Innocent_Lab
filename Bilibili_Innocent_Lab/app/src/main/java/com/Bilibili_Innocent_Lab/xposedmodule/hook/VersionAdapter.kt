@@ -2259,6 +2259,12 @@ object VersionAdapter {
         // 9.11.0 → 9.1.0/9.1.1；再到 8.99.0 → 8.84.0。每个 owner 仍须通过
         // 精确 (Context) -> BiliUpgradeInfo 签名和叶子实现筛选，类名存在本身不算命中。
         //
+        // 9.12.0(9120100)：更新链搬到 gr1.*。`gr1.c` 的方法体包含
+        // `Do sync http request.`、`fawkes.update.info.supplier`、强制网络请求和
+        // UpdateApk 写缓存；同签名的 `gr1.a` 只是包装层，先请求缓存/回退再转发，
+        // 不能作为网络边界。因此只加入 `gr1.c`，不把同包包装器放进候选表。
+        "gr1.c",
+        //
         // 9.11.0(9110400)：mq1.* 整族消失，搬到 qq1.*。三个同签名候选里
         // **qq1.c 才是网络边界**——它的方法体常量与 9110200 的 mq1.c 逐字相同
         // （'Do sync http request.' / 'fawkes.update.info.supplier' /
@@ -2488,9 +2494,15 @@ object VersionAdapter {
     )
     private val PLAYER_DEFAULT_QUALITY_CLASS_CANDIDATES = listOf(
         // 新版 dex 可能保留旧混淆类，因此按新→旧探测；每个 owner 内仍要求唯一的
-        // 无参 Int 入口。8.84.0–8.99.0 与 9.1.0–9.11.0 均由
+        // 无参 Int 入口。8.84.0–9.12.0 均由
         // "quality settings:" / 画质偏好键的离线方法体语义交叉核验。
         // 9.11.0 的稳定 getDefaultQuality 仅转发 es1.i.a；getSettingsQuality 只读偏好。
+        //
+        // 9.12.0(9120100)：实现搬到 `Xs1.j#a()I`。方法体同时读取
+        // `pref_player_mediaSource_quality_wifi_key`、执行登录/能力限制并记录
+        // `quality settings:`，与旧版本的默认画质入口语义一致；同包其它方法不作为
+        // 候选，避免把预测/分辨率计算链误挂成默认值 Hook。
+        "Xs1.j",
         //
         // 9.11.0(9110400)：es1.i 消失，实现搬到 is1.h。判定依据是方法体常量与
         // 9110200 的 es1.i#a()I **逐字相同**（'quality settings:' +

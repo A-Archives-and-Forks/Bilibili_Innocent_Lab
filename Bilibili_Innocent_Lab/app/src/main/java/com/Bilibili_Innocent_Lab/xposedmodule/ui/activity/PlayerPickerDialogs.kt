@@ -16,6 +16,8 @@ import com.Bilibili_Innocent_Lab.xposedmodule.R
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.DanmakuPurifyPolicy
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.FeaturePreferences
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerQualityConfig
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerCodecPreference
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerDecodeMode
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerSpeedConfig
 import com.Bilibili_Innocent_Lab.xposedmodule.settings.prefs
 import com.highcapable.betterandroid.ui.extension.view.textColor
@@ -145,6 +147,80 @@ internal fun MainActivity.showPlayerQualityDialog(anchor: View? = null) {
     )
 
     presentModalDialog(dialog, container, anchor)
+}
+
+private fun MainActivity.showPlayerChoiceDialog(
+    title: String,
+    current: Int,
+    options: List<Pair<Int, String>>,
+    anchor: View?,
+    onSelected: (Int) -> Unit
+) {
+    val density = resources.displayMetrics.density
+    val dialog = Dialog(this)
+    val container = createModalContainer()
+    container.addView(NativeTextView(this).apply {
+        text = title
+        textColor = getColor(R.color.colorTextDark)
+        textSize = 17f
+        setLineSpacing(4 * density, 1f)
+    }, NativeLinearLayout.LayoutParams(-1, -2).apply { bottomMargin = (12 * density).toInt() })
+    val rows = NativeLinearLayout(this).apply { orientation = NativeLinearLayout.VERTICAL }
+    options.forEachIndexed { index, (value, label) ->
+        rows.addView(
+            createGitHubMenuRow(label, "", value == current) {
+                onSelected(value)
+                dismissWithAnimation(dialog, container) {}
+            },
+            NativeLinearLayout.LayoutParams(-1, -2).apply {
+                if (index > 0) topMargin = (4 * density).toInt()
+            }
+        )
+    }
+    container.addView(android.widget.ScrollView(this).apply {
+        addView(rows, NativeFrameLayout.LayoutParams(-1, -2))
+    }, NativeLinearLayout.LayoutParams(-1, (360 * density).toInt()))
+    container.addView(NativeTextView(this).apply {
+        text = getString(R.string.dialog_close)
+        textColor = getColor(R.color.colorTextGray)
+        textSize = 15f
+        gravity = Gravity.CENTER
+        setPadding((20 * density).toInt(), (11 * density).toInt(), (20 * density).toInt(), (11 * density).toInt())
+        background = selfRippleBackground(14f)
+        isClickable = true
+        isFocusable = true
+        setOnClickListener { dismissWithAnimation(dialog, container) {} }
+    }, NativeLinearLayout.LayoutParams(-1, -2).apply { topMargin = (18 * density).toInt() })
+    presentModalDialog(dialog, container, anchor)
+}
+
+internal fun MainActivity.showPlayerCodecPreferenceDialog(anchor: View? = null) {
+    val options = listOf(
+        PlayerCodecPreference.FOLLOW_HOST.value to getString(R.string.player_codec_preference_follow),
+        PlayerCodecPreference.H264.value to getString(R.string.player_codec_preference_h264),
+        PlayerCodecPreference.H265.value to getString(R.string.player_codec_preference_h265),
+        PlayerCodecPreference.AV1.value to getString(R.string.player_codec_preference_av1)
+    )
+    showPlayerChoiceDialog(getString(R.string.player_codec_preference), playerCodecPreference, options, anchor) { value ->
+        playerCodecPreference = PlayerCodecPreference.fromValue(value).value
+        runCatching { prefs().edit { putInt(FeaturePreferences.PLAYER_CODEC_PREFERENCE, playerCodecPreference) } }
+            .onFailure { Log.e("BilibiliInnocentLab", "write codec preference failed", it) }
+        updatePlayerCodecSummaries()
+    }
+}
+
+internal fun MainActivity.showPlayerDecodeModeDialog(anchor: View? = null) {
+    val options = listOf(
+        PlayerDecodeMode.FOLLOW_HOST.value to getString(R.string.player_decode_mode_follow),
+        PlayerDecodeMode.FORCE_HARDWARE.value to getString(R.string.player_decode_mode_hardware),
+        PlayerDecodeMode.FORCE_SOFTWARE.value to getString(R.string.player_decode_mode_software)
+    )
+    showPlayerChoiceDialog(getString(R.string.player_decode_mode), playerDecodeMode, options, anchor) { value ->
+        playerDecodeMode = PlayerDecodeMode.fromValue(value).value
+        runCatching { prefs().edit { putInt(FeaturePreferences.PLAYER_DECODE_MODE, playerDecodeMode) } }
+            .onFailure { Log.e("BilibiliInnocentLab", "write decode mode failed", it) }
+        updatePlayerCodecSummaries()
+    }
 }
 
 /** 使用百分比整数发布配置；非法输入留在弹窗内，跟随宿主是独立、明确的操作。 */

@@ -10,7 +10,7 @@ class SettingsCatalogTest {
     @Test fun `catalog v23 adds the default off player end page filter`() {
         val expected=requireNotNull(javaClass.classLoader?.getResourceAsStream("settings-backup/catalog-v23.txt"))
             .bufferedReader().useLines { it.filter(String::isNotBlank).toList() }
-        assertEquals(expected,SettingsCatalog.specs.map { it.id }.sorted())
+        assertEquals(expected,SettingsCatalog.specs.filter { it.introducedCatalogVersion <= 23 }.map { it.id }.sorted())
         val added=SettingsCatalog.specs.filter { it.introducedCatalogVersion==23 }.single()
         assertEquals("player.end_page_recommend.hidden",added.id)
         assertEquals(SettingValue.Bool(false),added.defaultValue)
@@ -130,11 +130,11 @@ class SettingsCatalogTest {
     }
 
     @Test
-    fun `catalog is a unique allowlist with 139 settings`() {
-        assertEquals(139, SettingsCatalog.specs.size)
-        assertEquals(139, SettingsCatalog.specs.map { it.id }.distinct().size)
-        assertEquals(139, SettingsCatalog.specs.map { it.storageKey }.distinct().size)
-        assertEquals(137, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.AUTOMATIC })
+    fun `catalog is a unique allowlist with 142 settings`() {
+        assertEquals(142, SettingsCatalog.specs.size)
+        assertEquals(142, SettingsCatalog.specs.map { it.id }.distinct().size)
+        assertEquals(142, SettingsCatalog.specs.map { it.storageKey }.distinct().size)
+        assertEquals(140, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.AUTOMATIC })
         assertEquals(2, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.MANUAL })
         assertTrue(SettingsCatalog.specs.all { it.accepts(it.defaultValue) })
         assertTrue(SettingsCatalog.specs.all { it.id.matches(Regex("[a-z0-9][a-z0-9._-]{0,127}")) })
@@ -365,7 +365,7 @@ class SettingsCatalogTest {
         val expected = requireNotNull(javaClass.classLoader?.getResourceAsStream("settings-backup/catalog-v13.txt"))
             .bufferedReader().useLines { it.filter(String::isNotBlank).toList() }
         assertEquals(expected, SettingsCatalog.specs.filter { it.introducedCatalogVersion <= 13 }.map { it.id }.sorted())
-        assertEquals(23, SettingsCatalog.CATALOG_VERSION)
+        assertEquals(24, SettingsCatalog.CATALOG_VERSION)
         val added = SettingsCatalog.specs.filter { it.introducedCatalogVersion == 13 }
         assertEquals(6, added.size)
         assertTrue(added.all { it.restorePolicy == RestorePolicy.AUTOMATIC && ImportEffect.RESTART_BILIBILI in it.effects })
@@ -378,9 +378,29 @@ class SettingsCatalogTest {
     }
 
     @Test
+    fun `catalog v24 adds codec decoder and component library settings`() {
+        val expected = requireNotNull(
+            javaClass.classLoader?.getResourceAsStream("settings-backup/catalog-v24.txt")
+        ).bufferedReader().useLines { it.filter(String::isNotBlank).toList() }
+        assertEquals(expected, SettingsCatalog.specs.filter { it.introducedCatalogVersion <= 24 }.map { it.id }.sorted())
+        val added = SettingsCatalog.specs.filter { it.introducedCatalogVersion == 24 }
+        assertEquals(
+            setOf(
+                "client.component_library.download.blocked",
+                "player.codec.preference",
+                "player.decode.mode"
+            ),
+            added.map { it.id }.toSet()
+        )
+        assertEquals(1, added.count { it.type == SettingValueType.BOOLEAN })
+        assertEquals(2, added.count { it.type == SettingValueType.INTEGER })
+        assertTrue(added.all { it.restorePolicy == RestorePolicy.AUTOMATIC })
+    }
+
+    @Test
     fun `catalog types and manual roaming boundary are explicit`() {
-        assertEquals(109, SettingsCatalog.specs.count { it.type == SettingValueType.BOOLEAN })
-        assertEquals(7, SettingsCatalog.specs.count { it.type == SettingValueType.INTEGER })
+        assertEquals(110, SettingsCatalog.specs.count { it.type == SettingValueType.BOOLEAN })
+        assertEquals(9, SettingsCatalog.specs.count { it.type == SettingValueType.INTEGER })
         assertEquals(23, SettingsCatalog.specs.count { it.type == SettingValueType.STRING })
 
         val roaming = requireNotNull(SettingsCatalog.byId["compat.roaming.enabled"])
