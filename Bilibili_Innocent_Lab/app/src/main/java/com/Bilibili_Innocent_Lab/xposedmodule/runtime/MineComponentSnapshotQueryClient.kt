@@ -19,7 +19,18 @@ internal object MineComponentSnapshotQueryClient {
     )
     private val validationExecutor = HostReceiptWire.executor("bil-scan-validate")
 
-    fun query(context: Context, surface: String = MineComponentSnapshotCodec.SURFACE_MINE, callback: (Result) -> Unit) {
+    /**
+     * @param wakeHost 取不到时是否允许把宿主主进程拉起来再试一次。
+     *   用户点开面板的路径保持默认 true；**没有用户动作的静默拉取必须显式传 false**
+     *   （当前是"自动确认新增屏蔽标签"在模块前台时的那次后台合并），
+     *   否则打开模块 App 就会顺手启动哔哩哔哩。
+     */
+    fun query(
+        context: Context,
+        surface: String = MineComponentSnapshotCodec.SURFACE_MINE,
+        wakeHost: Boolean = true,
+        callback: (Result) -> Unit
+    ) {
         val app = context.applicationContext ?: context
         val main = Handler(Looper.getMainLooper())
         fun deliver(result: Result) {
@@ -29,7 +40,7 @@ internal object MineComponentSnapshotQueryClient {
         // 扫描快照面的两个调用方（四个勾选面板、管理推荐屏蔽）都是用户点开面板才触发的，
         // 所以允许用最后那段保底把宿主主进程拉起来；遥测与激活卡检查走的是诊断通道，
         // 那条默认不唤起，见 ReceiptQueryTransport 的类注释。
-        ReceiptQueryTransport.query(app, surface, allowWake = true) { reply ->
+        ReceiptQueryTransport.query(app, surface, allowWake = wakeHost) { reply ->
             if (reply.failure != ReceiptQueryFailure.NONE) {
                 val unavailable = ReceiptQueryPolicy.isUnavailable(reply.failure)
                 deliver(Result(if (unavailable) Status.TARGET_UNAVAILABLE else Status.INVALID_RESPONSE, failure = reply.failure))

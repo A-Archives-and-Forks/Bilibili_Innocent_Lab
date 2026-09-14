@@ -92,6 +92,11 @@ internal object ReleaseHighlightsCatalog {
             HighlightDestination("player.decode.mode")),
         ReleaseHighlight("component-library-download", HighlightKind.NEW, R.string.highlights_component_library,
             HighlightDestination("client.component_library.download.blocked")),
+        // 开关本体住在「管理推荐屏蔽」弹窗里，所以导航目标绑在那一行入口上
+        // （MainActivity 里 settingsDestinations.bind 的那处），点进去再打开面板。
+        ReleaseHighlight("recommend-feedback-auto-confirm", HighlightKind.NEW,
+            R.string.highlights_recommendation_auto_confirm,
+            HighlightDestination("home.recommend.feedback_auto_confirm")),
         ReleaseHighlight("independent-adaptation", HighlightKind.FIXED, R.string.highlights_stability,
             standaloneTitleRes = R.string.highlights_stability_title)
     )))

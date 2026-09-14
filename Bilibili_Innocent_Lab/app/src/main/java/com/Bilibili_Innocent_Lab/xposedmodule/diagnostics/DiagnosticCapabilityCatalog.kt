@@ -185,7 +185,11 @@ internal object DiagnosticCapabilityCatalog {
         // 只影响模块界面自己的弹窗动画，不进宿主，没有可诊断的宿主能力。
         "module_ui.appearance.panel_window_blur" to "MODULE_UI",
         "diagnostics.logging.enabled" to "LOCAL_DIAGNOSTICS",
-        "diagnostics.logging.level" to "LOCAL_DIAGNOSTICS"
+        "diagnostics.logging.level" to "LOCAL_DIAGNOSTICS",
+        // 只决定模块 App 要不要把反馈面板记下的点选自动并入名单；宿主收下这个键但从不读，
+        // 真正生效的是并入之后的 home.recommend.blocked_tids / blocked_authors 两份名单，
+        // 它们各自已经有能力条目，所以这里没有独立的宿主能力可诊断。
+        "home.recommend.feedback_auto_confirm" to "MODULE_UI"
     )
     val byId = definitions.associateBy { it.id }
     val byLocatorKey = definitions.filter { it.locatorKey != null }.associateBy { it.locatorKey!! }

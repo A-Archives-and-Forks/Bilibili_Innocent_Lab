@@ -913,6 +913,7 @@
     <string name="highlights_player_codec_preference">新增保守的影片編碼偏好，只作用於新建播放工作階段。</string>
     <string name="highlights_player_decode_mode">新增可選的硬解/軟解方式控制，沿主機 ijk 參數鏈生效。</string>
     <string name="highlights_component_library">新增可選的基礎元件庫下載攔截；目前版本仍處於目標資源池觀察階段。</string>
+    <string name="highlights_recommendation_auto_confirm">在嗶哩嗶哩回饋面板裡點過的標籤和 UP 主可以自動進入封鎖名單，不必再去「管理推薦封鎖」逐條確認。</string>
     <string name="component_snapshot_cached_notice">正在顯示上次儲存的掃描結果，尚未確認嗶哩嗶哩目前狀態。</string>
     <string name="hide_player_popup_promotion">隱藏播放器彈窗推廣</string>
     <string name="hide_player_popup_promotion_tip">隱藏播放器內的小程式等通用懸浮推廣卡片，保留其他互動元件和一般彈幕。</string>
@@ -927,6 +928,8 @@
     <string name="recommendation_blocklist_save_failed">儲存失敗或名單已更新，請重新開啟後再試。</string>
     <string name="recommendation_blocklist_syncing">正在讀取嗶哩嗶哩回饋面板中的新選擇…</string>
     <string name="recommendation_blocklist_sync_unavailable">未能讀取嗶哩嗶哩中的新選擇，下面只列出已儲存項與上次讀取到的內容。</string>
+    <string name="recommendation_blocklist_auto_confirm">自動確認新增封鎖標籤</string>
+    <string name="recommendation_blocklist_auto_confirm_summary">在嗶哩嗶哩回饋面板裡點過的標籤和 UP 主直接進入名單，不用再在這裡逐條確認。每次開啟 Innocent_Lab 時合併一次。</string>
     <string name="communication_compatibility_mode">相容模式</string>
     <string name="communication_compatibility_tip">開啟後新增備用通訊方式，改善管理器同步和宿主回執連線。</string>
     <string name="communication_compatibility_warning">相容模式保留一般模式的全部連線能力，並允許在管理器中轉不可用時，由宿主直接讀取模組的完整功能設定。它會放寬「必須經管理器成功下發」的限制，擴大宿主程序可直接讀取的設定範圍，僅應在信任已安裝宿主的情況下使用。\n\n仍會驗證應用程式身分、使用者同意、版本和資料完整性。連線可能短暫喚醒相關程序、增加耗電，無法保證繞過所有系統限制，也不能代替管理器啟用模組。\n\n關閉後停止發放新的直達授權；已載入的功能需要重新啟動宿主後退出。是否開啟？</string>

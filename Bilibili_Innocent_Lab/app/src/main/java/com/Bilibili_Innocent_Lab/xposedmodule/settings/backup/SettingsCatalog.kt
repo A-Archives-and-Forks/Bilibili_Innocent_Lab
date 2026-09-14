@@ -21,7 +21,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.settings.appearance.ModalBackdropB
 internal object SettingsCatalog {
     const val PRODUCT_ID = "bilibili-innocent-lab.settings"
     const val SCOPE_ID = "core-user-settings"
-    const val CATALOG_VERSION = 24
+    const val CATALOG_VERSION = 25
     const val ID_PLAYER_DEFAULT_SPEED = "player.default_speed.percent"
     const val ID_PLAYER_LONG_PRESS_SPEED = "player.long_press_speed.percent"
     const val ID_FREE_COPY_COMMENT = "free_copy.comment.enabled"
@@ -138,6 +138,13 @@ internal object SettingsCatalog {
         // UP 名单同样存成 Text；判据与详情页那档共用 ExactRuleSetCodec。
         text("home.recommend.blocked_authors", FeaturePreferences.HOME_RECOMMEND_BLOCKED_AUTHORS,
             R.string.home_recommend_blocked_authors, introducedCatalogVersion = 20),
+        // 纯模块 App 行为（宿主收下这个键但从不读），登记在这里只为了能被设置备份带走。
+        // 重启宿主对它没有意义，所以只要求重建模块界面。
+        bool("home.recommend.feedback_auto_confirm",
+            FeaturePreferences.HOME_RECOMMEND_FEEDBACK_AUTO_CONFIRM,
+            R.string.recommendation_blocklist_auto_confirm,
+            introducedCatalogVersion = 25,
+            effects = setOf(ImportEffect.RECREATE_MODULE_UI)),
         bool("home.recommend.live.removed", FeaturePreferences.REMOVE_HOME_RECOMMEND_LIVE, R.string.remove_home_recommend_live),
         bool("home.recommend.pgc.removed", FeaturePreferences.REMOVE_HOME_RECOMMEND_PGC,
             R.string.remove_home_recommend_pgc, introducedCatalogVersion = 14),
@@ -641,7 +648,7 @@ internal object SettingsCatalog {
     val byStorageKey: Map<String, SettingSpec> = specs.associateBy(SettingSpec::storageKey)
 
     init {
-        check(specs.size == 142) { "Expected 142 catalog settings, found ${specs.size}" }
+        check(specs.size == 143) { "Expected 143 catalog settings, found ${specs.size}" }
         check(byId.size == specs.size) { "Duplicate logical setting id" }
         check(specs.map(SettingSpec::storageKey).distinct().size == specs.size) {
             "Duplicate settings storage key"

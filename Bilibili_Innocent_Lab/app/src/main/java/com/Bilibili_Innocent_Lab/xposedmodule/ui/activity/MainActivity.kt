@@ -3360,6 +3360,8 @@ class MainActivity : SkinnedActivity() {
             showTelemetryDisclosureDialog()
         }
         TelemetryCoordinator.maybeUpload(applicationContext)
+        // 开关关着时直接返回，不发任何 IPC；打开时也不唤起宿主，见函数注释。
+        autoConfirmRecommendationPicksIfEnabled { refreshRecommendationBlocklistSummaries() }
     }
 
     override fun onResume() {
@@ -9838,6 +9840,10 @@ class MainActivity : SkinnedActivity() {
             background = selfRippleBackground(10f)
             isClickable = true
             isFocusable = true
+            // 「自动确认新增屏蔽标签」的开关本体在这个弹窗里，设置树上没有它自己的行；
+            // 公告导航落到这一行入口，点进去再打开面板。少了这句，那条 highlight 的
+            // 跳转会走 revealHighlightDestination 的 target==null 分支，只弹一句"不可用"。
+            settingsDestinations.bind("home.recommend.feedback_auto_confirm", this)
             setOnClickListener {
                 showRecommendationBlocklistDialog(anchor = it) { refreshRecommendationBlocklistSummaries() }
             }

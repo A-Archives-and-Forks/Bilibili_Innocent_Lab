@@ -119,28 +119,87 @@ class RecommendationBlocklistDraftTest {
         assertTrue(RecommendationBlocklistDraft("", "", listOf(picks()), saved).rows.isEmpty())
     }
 
+    // ===== 自动确认新增屏蔽标签 =====
+
+    @Test fun autoConfirmIsOffUntilItIsTurnedOnAndThenSurvivesAReread() {
+        val prefs = MemoryPreferences("", "")
+        assertFalse(RecommendationBlocklistDraft.isAutoConfirmEnabled(prefs.instance))
+        assertFalse(RecommendationBlocklistDraft.autoConfirm(prefs.instance, listOf(picks())))
+        assertEquals("", prefs.tags())
+
+        assertTrue(RecommendationBlocklistDraft.setAutoConfirmEnabled(prefs.instance, true))
+        assertTrue(RecommendationBlocklistDraft.isAutoConfirmEnabled(prefs.instance))
+    }
+
+    /** 开关打开后等价于"打开面板直接点确定"：待确认项进名单，且不再是待确认。 */
+    @Test fun autoConfirmMergesPendingPicksAndMarksThemReviewed() {
+        val prefs = MemoryPreferences("163", "UP A")
+        RecommendationBlocklistDraft.setAutoConfirmEnabled(prefs.instance, true)
+        assertTrue(RecommendationBlocklistDraft.autoConfirm(prefs.instance, listOf(picks())))
+        assertEquals("163,8318", prefs.tags())
+        // 已保存项不会因为这次自动合并而丢。
+        assertEquals("up a", prefs.authors())
+        assertTrue(RecommendationBlocklistDraft.of(prefs.instance, listOf(picks()))
+            .rows.none(RecommendationBlockRow::pending))
+    }
+
+    /** 没有待确认项时不写盘——否则模块每次前台都会打一次 commit。 */
+    @Test fun autoConfirmDoesNothingWhenThereIsNothingNew() {
+        val prefs = MemoryPreferences("", "")
+        RecommendationBlocklistDraft.setAutoConfirmEnabled(prefs.instance, true)
+        assertTrue(RecommendationBlocklistDraft.autoConfirm(prefs.instance, listOf(picks())))
+        val reviewedAfterFirst = prefs.reviewed()
+        assertFalse(RecommendationBlocklistDraft.autoConfirm(prefs.instance, listOf(picks())))
+        assertEquals(reviewedAfterFirst, prefs.reviewed())
+        assertFalse(RecommendationBlocklistDraft.autoConfirm(prefs.instance, emptyList()))
+    }
+
+    /** 用户在面板里手动撤销过的条目，不能被自动确认重新拉回来。 */
+    @Test fun autoConfirmDoesNotResurrectAnEntryTheUserAlreadyRemoved() {
+        val prefs = MemoryPreferences("", "")
+        val draft = RecommendationBlocklistDraft("", "", listOf(picks()), "")
+        draft.rows.forEach { draft.setSelected(it.rule, false) }
+        assertTrue(draft.save(prefs.instance))
+        assertEquals("", prefs.tags())
+
+        RecommendationBlocklistDraft.setAutoConfirmEnabled(prefs.instance, true)
+        assertFalse(RecommendationBlocklistDraft.autoConfirm(prefs.instance, listOf(picks())))
+        assertEquals("", prefs.tags())
+        // 但用户**再点一次**（新的 selectionToken）就该重新出现。
+        assertTrue(RecommendationBlocklistDraft.autoConfirm(prefs.instance, listOf(picks("event-2"))))
+        assertEquals("8318", prefs.tags())
+    }
+
+    @Test fun autoConfirmReportsFailureWhenTheStoreRejectsTheCommit() {
+        val prefs = MemoryPreferences("", "", fail = true)
+        prefs.values[RecommendationBlocklistDraft.AUTO_CONFIRM_KEY] = true
+        assertFalse(RecommendationBlocklistDraft.autoConfirm(prefs.instance, listOf(picks())))
+    }
+
     private class MemoryPreferences(tags: String, authors: String, private val fail: Boolean = false) {
-        val values = mutableMapOf(
+        val values = mutableMapOf<String, Any>(
             FeaturePreferences.HOME_RECOMMEND_BLOCKED_TIDS to tags,
             FeaturePreferences.HOME_RECOMMEND_BLOCKED_AUTHORS to authors
         )
-        fun tags() = values[FeaturePreferences.HOME_RECOMMEND_BLOCKED_TIDS]
-        fun authors() = values[FeaturePreferences.HOME_RECOMMEND_BLOCKED_AUTHORS]
-        fun reviewed() = values[RecommendationBlocklistDraft.REVIEWED_EVENTS_KEY].orEmpty()
+        fun tags() = values[FeaturePreferences.HOME_RECOMMEND_BLOCKED_TIDS] as? String
+        fun authors() = values[FeaturePreferences.HOME_RECOMMEND_BLOCKED_AUTHORS] as? String
+        fun reviewed() = (values[RecommendationBlocklistDraft.REVIEWED_EVENTS_KEY] as? String).orEmpty()
         val instance = Proxy.newProxyInstance(SharedPreferences::class.java.classLoader,
             arrayOf(SharedPreferences::class.java)) { _, method, args ->
             when (method.name) {
-                "getString" -> values[args!![0]] ?: args[1]
+                "getString" -> values[args!![0]] as? String ?: args[1]
+                "getBoolean" -> values[args!![0]] as? Boolean ?: args[1]
                 "edit" -> editor()
                 else -> error(method.name)
             }
         } as SharedPreferences
         private fun editor(): SharedPreferences.Editor {
-            val pending = mutableMapOf<String, String>()
+            val pending = mutableMapOf<String, Any>()
             return Proxy.newProxyInstance(SharedPreferences.Editor::class.java.classLoader,
                 arrayOf(SharedPreferences.Editor::class.java)) { proxy, method, args ->
                 when (method.name) {
                     "putString" -> { pending[args!![0] as String] = args[1] as String; proxy }
+                    "putBoolean" -> { pending[args!![0] as String] = args[1] as Boolean; proxy }
                     "commit" -> { values.putAll(pending); !fail }
                     else -> error(method.name)
                 }

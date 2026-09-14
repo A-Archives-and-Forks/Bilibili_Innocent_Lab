@@ -130,11 +130,11 @@ class SettingsCatalogTest {
     }
 
     @Test
-    fun `catalog is a unique allowlist with 142 settings`() {
-        assertEquals(142, SettingsCatalog.specs.size)
-        assertEquals(142, SettingsCatalog.specs.map { it.id }.distinct().size)
-        assertEquals(142, SettingsCatalog.specs.map { it.storageKey }.distinct().size)
-        assertEquals(140, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.AUTOMATIC })
+    fun `catalog is a unique allowlist with 143 settings`() {
+        assertEquals(143, SettingsCatalog.specs.size)
+        assertEquals(143, SettingsCatalog.specs.map { it.id }.distinct().size)
+        assertEquals(143, SettingsCatalog.specs.map { it.storageKey }.distinct().size)
+        assertEquals(141, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.AUTOMATIC })
         assertEquals(2, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.MANUAL })
         assertTrue(SettingsCatalog.specs.all { it.accepts(it.defaultValue) })
         assertTrue(SettingsCatalog.specs.all { it.id.matches(Regex("[a-z0-9][a-z0-9._-]{0,127}")) })
@@ -365,7 +365,7 @@ class SettingsCatalogTest {
         val expected = requireNotNull(javaClass.classLoader?.getResourceAsStream("settings-backup/catalog-v13.txt"))
             .bufferedReader().useLines { it.filter(String::isNotBlank).toList() }
         assertEquals(expected, SettingsCatalog.specs.filter { it.introducedCatalogVersion <= 13 }.map { it.id }.sorted())
-        assertEquals(24, SettingsCatalog.CATALOG_VERSION)
+        assertEquals(25, SettingsCatalog.CATALOG_VERSION)
         val added = SettingsCatalog.specs.filter { it.introducedCatalogVersion == 13 }
         assertEquals(6, added.size)
         assertTrue(added.all { it.restorePolicy == RestorePolicy.AUTOMATIC && ImportEffect.RESTART_BILIBILI in it.effects })
@@ -397,9 +397,34 @@ class SettingsCatalogTest {
         assertTrue(added.all { it.restorePolicy == RestorePolicy.AUTOMATIC })
     }
 
+    /**
+     * v25 只加了一条：「自动确认新增屏蔽标签」。
+     *
+     * 它是**纯模块 App 行为**（宿主收下这个键但从不读），登记进目录只为了能被
+     * 设置备份带走，所以刻意只带 `RECREATE_MODULE_UI`——导入它去重启哔哩哔哩没有意义。
+     * 同一张面板的 `recommendation_feedback_reviewed_events` 是处理状态不是用户意图，
+     * 继续留在本地、不进目录，这里顺带钉住。
+     */
+    @Test
+    fun `catalog v25 adds only the feedback auto confirm switch`() {
+        val expected = requireNotNull(
+            javaClass.classLoader?.getResourceAsStream("settings-backup/catalog-v25.txt")
+        ).bufferedReader().useLines { it.filter(String::isNotBlank).toList() }
+        assertEquals(expected, SettingsCatalog.specs.filter { it.introducedCatalogVersion <= 25 }.map { it.id }.sorted())
+        val added = SettingsCatalog.specs.single { it.introducedCatalogVersion == 25 }
+        assertEquals("home.recommend.feedback_auto_confirm", added.id)
+        assertEquals("recommendation_feedback_auto_confirm", added.storageKey)
+        assertEquals(SettingValue.Bool(false), added.defaultValue)
+        assertEquals(RestorePolicy.AUTOMATIC, added.restorePolicy)
+        assertEquals(setOf(ImportEffect.RECREATE_MODULE_UI), added.effects)
+        assertFalse(SettingsCatalog.specs.any {
+            it.storageKey == "recommendation_feedback_reviewed_events"
+        })
+    }
+
     @Test
     fun `catalog types and manual roaming boundary are explicit`() {
-        assertEquals(110, SettingsCatalog.specs.count { it.type == SettingValueType.BOOLEAN })
+        assertEquals(111, SettingsCatalog.specs.count { it.type == SettingValueType.BOOLEAN })
         assertEquals(9, SettingsCatalog.specs.count { it.type == SettingValueType.INTEGER })
         assertEquals(23, SettingsCatalog.specs.count { it.type == SettingValueType.STRING })
 

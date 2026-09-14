@@ -106,5 +106,48 @@ internal class RecommendationBlocklistDraft(
     companion object {
         // 本地观测处理状态，不是 Hook 设置，不进入备份目录或远程配置白名单。
         const val REVIEWED_EVENTS_KEY = "recommendation_feedback_reviewed_events"
+
+        /**
+         * 「自动确认新增屏蔽标签」；键定义在 [FeaturePreferences] 里，
+         * 因为它已登记进 `SettingsCatalog`（要能被设置备份带走）。
+         *
+         * 与它同住一张面板的 [REVIEWED_EVENTS_KEY] 刻意留在本地：那是**处理状态**
+         * （哪些观测事件已经处理过），不是用户意图，导出它只会让另一台设备
+         * 凭空少掉一批待确认项。
+         */
+        const val AUTO_CONFIRM_KEY = FeaturePreferences.HOME_RECOMMEND_FEEDBACK_AUTO_CONFIRM
+
+        fun isAutoConfirmEnabled(prefs: SharedPreferences): Boolean =
+            runCatching { prefs.getBoolean(AUTO_CONFIRM_KEY, false) }.getOrDefault(false)
+
+        fun setAutoConfirmEnabled(prefs: SharedPreferences, enabled: Boolean): Boolean =
+            runCatching {
+                prefs.edit().putBoolean(AUTO_CONFIRM_KEY, enabled).commit()
+            }.getOrDefault(false)
+
+        /** 面板与自动确认共用同一条读取，避免两处各读一遍、日后悄悄漂移。 */
+        fun of(prefs: SharedPreferences, snapshots: List<MineComponentSnapshot>) =
+            RecommendationBlocklistDraft(
+                prefs.getString(FeaturePreferences.HOME_RECOMMEND_BLOCKED_TIDS, "").orEmpty(),
+                prefs.getString(FeaturePreferences.HOME_RECOMMEND_BLOCKED_AUTHORS, "").orEmpty(),
+                snapshots,
+                prefs.getString(REVIEWED_EVENTS_KEY, "").orEmpty()
+            )
+
+        /**
+         * 自动确认：把观测到的新点选并入名单，**等价于用户打开面板后直接点确定**。
+         *
+         * 之所以可以完全等价：草稿构造时 `selected` 就是全部条目（已保存 + 待确认），
+         * [save] 写回的也正是这一整份，所以已保存项不会因此丢失。
+         *
+         * 没有待确认项时不写盘——否则模块每次前台都会打一次 `commit()`。
+         * 返回 true 仅代表"这次确实提交了新内容"，调用方据此决定要不要刷新摘要。
+         */
+        fun autoConfirm(prefs: SharedPreferences, snapshots: List<MineComponentSnapshot>): Boolean {
+            if (!isAutoConfirmEnabled(prefs)) return false
+            val draft = of(prefs, snapshots)
+            if (draft.rows.none(RecommendationBlockRow::pending)) return false
+            return draft.save(prefs)
+        }
     }
 }

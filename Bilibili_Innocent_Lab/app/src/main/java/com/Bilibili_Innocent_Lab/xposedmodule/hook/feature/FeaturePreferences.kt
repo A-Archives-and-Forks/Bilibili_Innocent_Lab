@@ -39,6 +39,17 @@ internal object FeaturePreferences {
      * **不能用 `getStringSet`**，原因同 [HOME_RECOMMEND_BLOCKED_TIDS]。
      */
     const val HOME_RECOMMEND_BLOCKED_AUTHORS = "home_recommend_blocked_authors"
+
+    /**
+     * 「自动确认新增屏蔽标签」。
+     *
+     * **纯模块 App 行为，宿主一次都不读**：它只决定反馈面板里记下的点选要不要
+     * 自动并入上面两份名单。放在这里、并登记进 `SettingsCatalog`，是为了让它能被
+     * 设置备份带走（代价是它会跟着授权文档一起发布给宿主，宿主收下但不使用）。
+     * 同一张面板的 `recommendation_feedback_reviewed_events` 是**处理状态**不是设置，
+     * 继续留在本地、不进目录。
+     */
+    const val HOME_RECOMMEND_FEEDBACK_AUTO_CONFIRM = "recommendation_feedback_auto_confirm"
     const val REMOVE_HOME_RECOMMEND_LIVE = "remove_home_recommend_live"
     const val REMOVE_HOME_RECOMMEND_COURSES = "remove_home_recommend_courses"
     const val REMOVE_HOME_RECOMMEND_VERTICAL = "remove_home_recommend_vertical"
