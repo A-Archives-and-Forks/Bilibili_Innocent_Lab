@@ -85,10 +85,12 @@ internal class BlockComponentLibraryFeatureInstaller(
                     environment.registrar.exact(ID, moss, async.name, request, handlerClass) {
                         before {
                             val delegate = argOrNull(1) ?: return@before
-                            val proxy = MossResponseHandlerProxy.wrapTransform(handlerClass, delegate) { reply ->
+                    val proxy = MossResponseHandlerProxy.wrapTransform(handlerClass, delegate) { reply ->
                                 environment.reportRuntimeEvidence(ID, FeatureRuntimeStage.OBSERVED)
                                 observe(reply)
-                                strategy.clearMatchedPools(reply) ?: reply
+                                strategy.clearMatchedPools(reply)?.also {
+                                    environment.reportRuntimeEvidence(ID, FeatureRuntimeStage.APPLIED)
+                                } ?: reply
                             } ?: return@before
                             args[1] = proxy
                         }
@@ -104,8 +106,17 @@ internal class BlockComponentLibraryFeatureInstaller(
         return runCatching {
             environment.reportRuntimeEvidence(ID, FeatureRuntimeStage.ADAPTED)
             val status = if (installed == available) "success" else "partial:$installed/$available"
-            environment.reportStatus(STATUS, status)
-            FeatureInstallResult.Installed(installed, complete = installed == available)
+            val targetConfirmed = targetKeywords.isNotEmpty()
+            val result = FeatureInstallResult.Installed(
+                installed,
+                complete = targetConfirmed && installed == available
+            )
+            environment.reportStatus(
+                STATUS,
+                if (!targetConfirmed) "observing-target-unconfirmed" else status
+            )
+            environment.reportCapability(CAPABILITY, result)
+            result
         }.getOrElse {
             environment.logError("$ID.diagnostics", "[BIL] 组件库清单诊断上报失败")
             skipped(environment, "registration-failed")
@@ -113,8 +124,10 @@ internal class BlockComponentLibraryFeatureInstaller(
     }
 
     private fun skipped(environment: HookEnvironment, reason: String): FeatureInstallResult.Skipped {
+        val result = FeatureInstallResult.Skipped(reason)
         environment.reportStatus(STATUS, reason)
-        return FeatureInstallResult.Skipped(reason)
+        environment.reportCapability(CAPABILITY, result)
+        return result
     }
 
     companion object {
@@ -139,20 +152,41 @@ internal class BlockComponentLibraryFeatureInstaller(
 }
 
 /** 组件库池的保守识别规则；未知/空名称永不命中。 */
+internal data class ComponentLibraryMatch(
+    val wholePool: Boolean,
+    val moduleIndexes: Set<Int> = emptySet()
+)
+
 internal object ComponentLibraryPoolMatcher {
+    fun match(
+        poolName: String?,
+        moduleNames: List<String>,
+        keywords: Set<String> = DEFAULT_KEYWORDS
+    ): ComponentLibraryMatch? {
+        val normalizedKeywords = keywords.asSequence()
+            .map(::normalize)
+            .filterNotNull()
+            .toSet()
+        if (normalizedKeywords.isEmpty()) return null
+        if (normalize(poolName) in normalizedKeywords) {
+            return ComponentLibraryMatch(wholePool = true)
+        }
+        val moduleIndexes = moduleNames.mapIndexedNotNull { index, name ->
+            normalize(name)?.takeIf { it in normalizedKeywords }?.let { index }
+        }.toSet()
+        return ComponentLibraryMatch(wholePool = false, moduleIndexes = moduleIndexes)
+            .takeIf { it.moduleIndexes.isNotEmpty() }
+    }
+
     fun matches(
         poolName: String?,
         moduleNames: List<String>,
         keywords: Set<String> = DEFAULT_KEYWORDS
-    ): Boolean {
-        val names = (listOfNotNull(poolName) + moduleNames)
-            .map { it.trim().lowercase(Locale.ROOT) }
-            .filter(String::isNotEmpty)
-            .toSet()
-        return names.isNotEmpty() && keywords.any { keyword ->
-            keyword.trim().lowercase(Locale.ROOT).takeIf(String::isNotEmpty) in names
-        }
-    }
+    ): Boolean = match(poolName, moduleNames, keywords) != null
+
+    private fun normalize(value: String?): String? = value?.trim()
+        ?.lowercase(Locale.ROOT)
+        ?.takeIf(String::isNotEmpty)
 
     /** 9.12.0 载荷中的真实池名尚未有运行时观测，默认不猜名称，保持原响应。 */
     val DEFAULT_KEYWORDS: Set<String> = emptySet()
@@ -168,6 +202,7 @@ private class ComponentLibraryReplyStrategy private constructor(
     private val poolToBuilder: Method,
     private val poolBuild: Method,
     private val poolClearModules: Method,
+    private val addModule: Method?,
     private val poolName: Method?,
     private val poolModules: Method?,
     private val moduleName: Method?,
@@ -177,24 +212,47 @@ private class ComponentLibraryReplyStrategy private constructor(
         if (targetKeywords.isEmpty()) return@runCatching null
         val pools = (getPools.invoke(reply) as? List<*>)?.filterNotNull().orEmpty()
         if (pools.isEmpty()) return@runCatching null
-        val matched = pools.filter { pool ->
+        val rebuiltPools = ArrayList<Any>(pools.size)
+        var changed = false
+        pools.forEach { pool ->
             val poolText = poolName?.invoke(pool) as? String
-            val moduleText = (poolModules?.invoke(pool) as? List<*>)
+            val moduleList = (poolModules?.invoke(pool) as? List<*>)
                 .orEmpty()
                 .filterNotNull()
-                .mapNotNull { module -> runCatching { moduleName?.invoke(module) as? String }.getOrNull() }
-            ComponentLibraryPoolMatcher.matches(poolText, moduleText, targetKeywords)
+            val moduleText = moduleList.mapNotNull { module ->
+                runCatching { moduleName?.invoke(module) as? String }.getOrNull()
+            }
+            val match = ComponentLibraryPoolMatcher.match(poolText, moduleText, targetKeywords)
+            val updated = when {
+                match == null -> pool
+                match.wholePool -> {
+                    changed = true
+                    rebuildPool(pool, emptyList())
+                }
+                addModule == null -> return@runCatching null
+                else -> {
+                    changed = true
+                    rebuildPool(pool, moduleList.filterIndexed { index, _ -> index !in match.moduleIndexes })
+                }
+            }
+            rebuiltPools += updated
         }
-        if (matched.isEmpty()) return@runCatching null
+        if (!changed) return@runCatching null
         val replyBuilder = toBuilder.invoke(reply)
         clearPools.invoke(replyBuilder)
-        pools.forEach { pool ->
-            val poolBuilder = poolToBuilder.invoke(pool)
-            if (pool in matched) poolClearModules.invoke(poolBuilder)
-            addPool.invoke(replyBuilder, poolBuild.invoke(poolBuilder))
-        }
+        rebuiltPools.forEach { addPool.invoke(replyBuilder, it) }
         build.invoke(replyBuilder)
     }.getOrNull()
+
+    private fun rebuildPool(pool: Any, modules: List<Any>): Any {
+        val poolBuilder = poolToBuilder.invoke(pool)
+        poolClearModules.invoke(poolBuilder)
+        if (modules.isNotEmpty()) {
+            val addModuleMethod = checkNotNull(addModule)
+            modules.forEach { addModuleMethod.invoke(poolBuilder, it) }
+        }
+        return checkNotNull(poolBuild.invoke(poolBuilder))
+    }
 
     fun describe(reply: Any): String? = runCatching {
         val pools = (getPools.invoke(reply) as? List<*>)?.filterNotNull().orEmpty()
@@ -267,13 +325,20 @@ private class ComponentLibraryReplyStrategy private constructor(
                 ?.actualTypeArguments
                 ?.singleOrNull()
                 ?.let { it as? Class<*> }
+            val addModule = moduleClass?.let { elementClass ->
+                poolBuilder.methods.firstOrNull { method ->
+                    method.name == "addModules" && method.parameterCount == 1 &&
+                        !Modifier.isStatic(method.modifiers) && method.parameterTypes[0] == elementClass
+                }
+            }
             val moduleName = moduleClass?.methods?.firstOrNull { method ->
                 method.name in setOf("getName", "getModuleName", "getFilename", "getFileName") &&
                     method.parameterCount == 0 && method.returnType == String::class.java
             }
             ComponentLibraryReplyStrategy(
                 toBuilder, build, getPools, clearPools, addPool,
-                poolToBuilder, poolBuild, poolClearModules, poolName, poolModules, moduleName,
+                poolToBuilder, poolBuild, poolClearModules, addModule,
+                poolName, poolModules, moduleName,
                 targetKeywords
             )
         }.getOrNull()

@@ -22,6 +22,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerSpeedConfig
 import com.Bilibili_Innocent_Lab.xposedmodule.settings.prefs
 import com.highcapable.betterandroid.ui.extension.view.textColor
 import com.highcapable.betterandroid.ui.extension.view.textToString
+import com.highcapable.betterandroid.ui.extension.view.toast
 import com.highcapable.hikage.core.layout.LayoutParams
 import android.widget.EditText as NativeEditText
 import android.widget.FrameLayout as NativeFrameLayout
@@ -154,7 +155,7 @@ private fun MainActivity.showPlayerChoiceDialog(
     current: Int,
     options: List<Pair<Int, String>>,
     anchor: View?,
-    onSelected: (Int) -> Unit
+    onSelected: (Int) -> Boolean
 ) {
     val density = resources.displayMetrics.density
     val dialog = Dialog(this)
@@ -169,8 +170,7 @@ private fun MainActivity.showPlayerChoiceDialog(
     options.forEachIndexed { index, (value, label) ->
         rows.addView(
             createGitHubMenuRow(label, "", value == current) {
-                onSelected(value)
-                dismissWithAnimation(dialog, container) {}
+                if (onSelected(value)) dismissWithAnimation(dialog, container) {}
             },
             NativeLinearLayout.LayoutParams(-1, -2).apply {
                 if (index > 0) topMargin = (4 * density).toInt()
@@ -202,10 +202,19 @@ internal fun MainActivity.showPlayerCodecPreferenceDialog(anchor: View? = null) 
         PlayerCodecPreference.AV1.value to getString(R.string.player_codec_preference_av1)
     )
     showPlayerChoiceDialog(getString(R.string.player_codec_preference), playerCodecPreference, options, anchor) { value ->
-        playerCodecPreference = PlayerCodecPreference.fromValue(value).value
-        runCatching { prefs().edit { putInt(FeaturePreferences.PLAYER_CODEC_PREFERENCE, playerCodecPreference) } }
-            .onFailure { Log.e("BilibiliInnocentLab", "write codec preference failed", it) }
+        val next = PlayerCodecPreference.fromValue(value).value
+        if (!savePlayerIntPreference(
+                FeaturePreferences.PLAYER_CODEC_PREFERENCE,
+                next,
+                "write codec preference failed"
+            )
+        ) {
+            toast(getString(R.string.player_codec_setting_save_failed))
+            return@showPlayerChoiceDialog false
+        }
+        playerCodecPreference = next
         updatePlayerCodecSummaries()
+        true
     }
 }
 
@@ -216,12 +225,31 @@ internal fun MainActivity.showPlayerDecodeModeDialog(anchor: View? = null) {
         PlayerDecodeMode.FORCE_SOFTWARE.value to getString(R.string.player_decode_mode_software)
     )
     showPlayerChoiceDialog(getString(R.string.player_decode_mode), playerDecodeMode, options, anchor) { value ->
-        playerDecodeMode = PlayerDecodeMode.fromValue(value).value
-        runCatching { prefs().edit { putInt(FeaturePreferences.PLAYER_DECODE_MODE, playerDecodeMode) } }
-            .onFailure { Log.e("BilibiliInnocentLab", "write decode mode failed", it) }
+        val next = PlayerDecodeMode.fromValue(value).value
+        if (!savePlayerIntPreference(
+                FeaturePreferences.PLAYER_DECODE_MODE,
+                next,
+                "write decode mode failed"
+            )
+        ) {
+            toast(getString(R.string.player_codec_setting_save_failed))
+            return@showPlayerChoiceDialog false
+        }
+        playerDecodeMode = next
         updatePlayerCodecSummaries()
+        true
     }
 }
+
+/** apply() 不阻塞 UI；立即读回只用于发现本次写入是否被当前 bridge 拒绝。 */
+private fun MainActivity.savePlayerIntPreference(key: String, value: Int, logMessage: String): Boolean =
+    runCatching {
+        val preferences = prefs()
+        preferences.edit { putInt(key, value) }
+        check(preferences.getInt(key, Int.MIN_VALUE) == value)
+    }.onFailure { throwable ->
+        Log.e("BilibiliInnocentLab", logMessage, throwable)
+    }.isSuccess
 
 /** 使用百分比整数发布配置；非法输入留在弹窗内，跟随宿主是独立、明确的操作。 */
 internal fun MainActivity.showPlayerSpeedDialog(longPress: Boolean, anchor: View? = null) {

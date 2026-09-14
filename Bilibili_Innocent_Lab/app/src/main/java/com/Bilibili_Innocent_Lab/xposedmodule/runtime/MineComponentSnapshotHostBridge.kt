@@ -8,6 +8,7 @@ import android.content.pm.PackageInfo
 import android.os.Build
 import androidx.core.content.ContextCompat
 import com.Bilibili_Innocent_Lab.xposedmodule.BuildConfig
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.MineComponentScanEntry
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.MineComponentSnapshotCodec
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.ScanSnapshotContent
 import java.util.concurrent.Executors
@@ -106,8 +107,13 @@ internal object MineComponentSnapshotHostBridge {
     }
 
     private fun persist(context: Context, surface: String, content: ScanSnapshotContent): Boolean = runCatching {
+        val appContext = context.applicationContext ?: context
+        // 来源要先于编码取到：累积面的并集只在同一来源内成立，跨宿主/模块版本必须从头来。
+        val source = processSource ?: currentSource(appContext)?.also { processSource = it }
+            ?: return@runCatching false
         val payload = MineComponentSnapshotCodec.encode(content.processName, content.capabilities,
-            content.entries, surface = surface)
+            MineComponentSnapshotCodec.accumulate(surface, previousEntries(surface, source), content.entries),
+            surface = surface)
         val snapshot = MineComponentSnapshotCodec.decodeOrNull(payload, allowLegacy = false)
             ?: return@runCatching false
         // 载荷自述的面必须和调用方声明的一致，避免写串槽位。
@@ -115,9 +121,6 @@ internal object MineComponentSnapshotHostBridge {
         if (snapshot.processName != MineComponentSnapshotQueryContract.TARGET_PACKAGE ||
             snapshot.entries.isEmpty()
         ) return@runCatching false
-        val appContext = context.applicationContext ?: context
-        val source = processSource ?: currentSource(appContext)?.also { processSource = it }
-            ?: return@runCatching false
         val updated = CachedSnapshot(payload, source)
         val committed = runCatching {
             appContext.getSharedPreferences(CACHE_PREFS, Context.MODE_PRIVATE)
@@ -135,6 +138,27 @@ internal object MineComponentSnapshotHostBridge {
         }
         committed
     }.getOrDefault(false)
+
+    /**
+     * 累积面取并集用的"上一份"，只认**同一来源**的缓存。
+     *
+     * 宿主升级或模块升级后 `source` 变了，旧点选不再复活——与
+     * [readCachedSnapshot] 的版本语义保持一致。合并规则本身是纯函数，
+     * 见 [MineComponentSnapshotCodec.accumulate]。
+     *
+     * **"磁盘上那份一定已经进了 `latest`"靠的是单线程**：[initialize] 把磁盘读取排进
+     * [persistenceExecutor]，[publications] 也调度到同一个执行器，所以任何 [persist]
+     * 都排在那次读取之后。换成线程池会让进程启动后的第一次点选读到空的上一份、
+     * 又把旧记录覆盖掉——正是这次要修的那个故障。
+     */
+    private fun previousEntries(surface: String, source: MineComponentSnapshotSource): List<MineComponentScanEntry> {
+        if (surface !in MineComponentSnapshotCodec.ACCUMULATING_SURFACES) return emptyList()
+        return latest[surface]?.takeIf { it.source == source }
+            ?.let { MineComponentSnapshotCodec.decodeOrNull(it.payload, allowLegacy = false) }
+            ?.takeIf { it.surface == surface }
+            ?.entries
+            .orEmpty()
+    }
 
     /** 两种实时传输读取同一份内存快照，Binder 线程不做磁盘读取。 */
     internal fun response(surface: String, nonce: String): android.os.Bundle {

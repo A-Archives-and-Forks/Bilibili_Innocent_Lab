@@ -18,7 +18,8 @@
     <string name="player_decode_mode_hardware">强制硬解</string>
     <string name="player_decode_mode_software">强制软解</string>
     <string name="block_component_library_download">禁止下载 App 基础组件库</string>
-    <string name="block_component_library_download_tip">在哔哩哔哩存储设置中清理 App 基础组件库后，不再下载已识别的组件库资源池；未识别的响应保持不变。</string>
+    <string name="block_component_library_download_tip">在哔哩哔哩存储设置中清理 App 基础组件库后，可阻止已确认的目标资源池再次下载。当前版本仍在观察目标资源池，确认前会保持响应不变；不会删除已有文件，部分功能可能受影响。</string>
+    <string name="block_component_library_download_save_failed">组件库设置保存失败，已保留原设置。</string>
     <string name="module_version">模块版本：%1$s</string>
     <string name="module_not_activated">模块未激活</string>
     <string name="module_is_activated">模块已激活</string>
@@ -854,6 +855,7 @@
     <string name="player_speed_input_hint">例如 1.25</string>
     <string name="player_speed_invalid">请输入 0.25～4 之间的数值，最多两位小数。</string>
     <string name="player_speed_save_failed">保存失败，请重试。</string>
+    <string name="player_codec_setting_save_failed">播放器设置保存失败，已保留原设置。</string>
     <string name="github_new_update_badge">NEW</string>
     <string name="github_new_update_description">发现新版本 %1$s，查看更新说明</string>
     <string name="diagnostics_feature_install_partial">部分安装，存在缺失或失败的覆盖路径</string>
@@ -910,7 +912,7 @@
     <string name="highlights_stability">完善局部适配与异常处理，减少单条路径缺失对其他功能的影响。</string>
     <string name="highlights_player_codec_preference">新增保守的视频编码偏好，仅作用于新建播放会话。</string>
     <string name="highlights_player_decode_mode">新增可选的硬解/软解方式控制，沿宿主 ijk 参数链生效。</string>
-    <string name="highlights_component_library">新增可选的基础组件库下载拦截；未识别的资源池保持不变。</string>
+    <string name="highlights_component_library">新增可选的基础组件库下载拦截；当前版本仍处于目标资源池观察阶段。</string>
     <string name="component_snapshot_cached_notice">正在显示上次保存的扫描结果，尚未确认哔哩哔哩当前状态。</string>
     <string name="hide_player_popup_promotion">隐藏播放器弹窗推广</string>
     <string name="hide_player_popup_promotion_tip">隐藏播放器内的小程序等通用悬浮推广卡片，保留其他互动组件和普通弹幕。</string>
@@ -923,6 +925,8 @@
     <string name="recommendation_blocklist_empty">暂无屏蔽项，可手动添加，或在视频推荐反馈面板中选择。</string>
     <string name="recommendation_blocklist_saved">已保存，重启哔哩哔哩后生效。</string>
     <string name="recommendation_blocklist_save_failed">保存失败或名单已更新，请重新打开后重试。</string>
+    <string name="recommendation_blocklist_syncing">正在读取哔哩哔哩反馈面板中的新选择…</string>
+    <string name="recommendation_blocklist_sync_unavailable">未能读取哔哩哔哩中的新选择，下面只列出已保存项与上次读取到的内容。</string>
     <string name="communication_compatibility_mode">兼容模式</string>
     <string name="communication_compatibility_tip">开启后增加备用通信方式，改善管理器同步和宿主回执连接。</string>
     <string name="communication_compatibility_warning">兼容模式保留普通模式的全部连接能力，并允许在管理器中转不可用时，由宿主直接读取模块的完整功能配置。它会放宽“必须经管理器成功下发”的限制，扩大宿主进程可直接读取的配置范围，仅应在信任已安装宿主的情况下使用。\n\n仍会校验应用身份、用户同意、版本和数据完整性。连接可能短暂唤醒相关进程、增加耗电，无法保证绕过所有系统限制，也不能代替管理器启用模块。\n\n关闭后停止发放新的直达授权；已加载的功能需要重启宿主后退出。是否开启？</string>

@@ -211,6 +211,39 @@ internal object MineComponentSnapshotCodec {
         SURFACE_SECTION_PICKS, SURFACE_AUTHOR_PICKS
     )
 
+    /**
+     * "点一次记一条"的累积面，与其余四个"每次扫描给出完整列表"的列表面语义相反。
+     *
+     * 列表面每次提交的就是当前页面的全部候选，整份替换才是对的；这两个面的提交只是
+     * **本次宿主进程**里累积到的点选（累积器在内存，见 [ScanSnapshotPublisher]）。
+     * 2026-09-15 真机实测：先点的 `tid:79793` 在宿主进程重启后被新点的 `tid:13160`
+     * 整份覆盖——用户还没来得及在模块里确认，记录就没了。所以落盘时必须与上一份取并集。
+     */
+    val ACCUMULATING_SURFACES = setOf(SURFACE_SECTION_PICKS, SURFACE_AUTHOR_PICKS)
+
+    /**
+     * 累积面与上一份已落盘内容取并集；列表面原样返回。
+     *
+     * 三条边界：① 同 key 以**本次**为准（`showing` 与 `selectionToken` 会变）；
+     * ② 超过 [MAX_ENTRY_COUNT] 时先保本次、再用旧的补齐，不让旧记录挤掉新点选；
+     * ③ 按 key 排序，保证同样的集合编码出同样的载荷，下游按值去重才不会空转。
+     *
+     * 这里**不做**"用户已撤销就别再出现"的判断——那是模块 App 的职责，由
+     * `RecommendationBlocklistDraft` 按 `selectionToken` 的已处理名单完成。
+     * 调用方负责只把**同一来源**（宿主版本 + 模块版本一致）的旧内容传进来。
+     */
+    fun accumulate(
+        surface: String,
+        previous: List<MineComponentScanEntry>,
+        current: List<MineComponentScanEntry>
+    ): List<MineComponentScanEntry> {
+        if (surface !in ACCUMULATING_SURFACES || previous.isEmpty()) return current
+        val merged = LinkedHashMap<String, MineComponentScanEntry>()
+        current.forEach { merged[it.key] = it }
+        previous.forEach { if (merged.size < MAX_ENTRY_COUNT) merged.putIfAbsent(it.key, it) }
+        return merged.values.sortedBy(MineComponentScanEntry::key)
+    }
+
     fun encode(
         processName: String,
         capabilities: Set<String>,

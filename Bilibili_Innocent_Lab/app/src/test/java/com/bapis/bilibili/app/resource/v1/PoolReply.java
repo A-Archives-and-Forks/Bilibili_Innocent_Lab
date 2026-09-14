@@ -39,6 +39,16 @@ public final class PoolReply {
             return this;
         }
 
+        public Builder addModules(ModuleReply module) {
+            modules.add(module);
+            return this;
+        }
+
+        public Builder addModules(ModuleReply.Builder module) {
+            modules.add(module.build());
+            return this;
+        }
+
         public PoolReply build() {
             return new PoolReply(poolName, modules);
         }

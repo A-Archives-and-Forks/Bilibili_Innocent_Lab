@@ -13,7 +13,42 @@ class PlayViewReply(private var configuration: PlayArcConf = PlayArcConf.getDefa
         @JvmStatic fun getDefaultInstance() = DEFAULT
     }
 }
-class PlayViewReq
+enum class CodeType {
+    CODE_UNKNOWN,
+    CODE264,
+    CODE265,
+    CODEAV1
+}
+
+class PlayViewReq(
+    private val preferCodecType: CodeType = CodeType.CODE_UNKNOWN,
+    private val fnval: Int = 16
+) {
+    fun getPreferCodecType() = preferCodecType
+    fun getFnval() = fnval
+
+    companion object {
+        @JvmStatic
+        fun newBuilder(source: PlayViewReq) = Builder(source)
+    }
+
+    class Builder(source: PlayViewReq) {
+        private var preferCodecType = source.preferCodecType
+        private var fnval = source.fnval
+
+        fun setPreferCodecType(value: CodeType): Builder {
+            preferCodecType = value
+            return this
+        }
+
+        fun setFnval(value: Int): Builder {
+            fnval = value
+            return this
+        }
+
+        fun build() = PlayViewReq(preferCodecType, fnval)
+    }
+}
 @Suppress("UNUSED_PARAMETER")
 class PlayURLMoss {
     fun executePlayView(req: PlayViewReq) = PlayViewReply()

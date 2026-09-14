@@ -26,4 +26,13 @@ class PlayerCodecForcePolicyTest {
         assertNull(PlayerCodecForcePolicy.optionValue("unknown-option", PlayerDecodeMode.FORCE_SOFTWARE))
     }
 
+    @Test
+    fun `decode policy keeps unknown option value types and values`() {
+        assertEquals(1L, PlayerCodecForcePolicy.recognizedOptionValue("mediacodec", 1))
+        assertEquals(0L, PlayerCodecForcePolicy.recognizedOptionValue("mediacodec", "0"))
+        assertNull(PlayerCodecForcePolicy.recognizedOptionValue("mediacodec", 2.5))
+        assertNull(PlayerCodecForcePolicy.recognizedOptionValue("mediacodec", "future-mode"))
+        assertNull(PlayerCodecForcePolicy.recognizedOptionValue("decoder_type", 2L))
+    }
+
 }

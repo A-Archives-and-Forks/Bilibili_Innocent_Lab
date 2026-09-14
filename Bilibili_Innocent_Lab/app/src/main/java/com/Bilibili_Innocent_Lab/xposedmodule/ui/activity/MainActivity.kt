@@ -300,6 +300,14 @@ class MainActivity : SkinnedActivity() {
     private var mineComponentHiddenRules = ""
     /** 每个面各自节流一次查询；四个面的面板可以互不阻塞地打开。仅在主线程读写。 */
     private val componentSnapshotQueryInFlight = mutableSetOf<String>()
+    /**
+     * 「管理推荐屏蔽」要同时拉两个点选观测面，整体节流一次。
+     *
+     * internal：外移的 `showRecommendationBlocklistDialog` 要用它防重入。
+     * 是 Activity 成员而不是文件顶层 `var`——顶层 var 是进程级单例，重建后会残留。
+     * 仅在主线程读写（查询回调统一 post 回主线程）。
+     */
+    internal var recommendationPickQueryInFlight = false
     private var blockAppUpdate = false
     private var blockComponentLibraryDownload = false
     private var hideDynamicCityTab = false
@@ -6436,15 +6444,31 @@ class MainActivity : SkinnedActivity() {
             textColor = colorResource(R.color.colorTextGray)
             textSize = 15f
             isChecked = blockComponentLibraryDownload
-            setOnCheckedChangeListener { _, checked ->
-                blockComponentLibraryDownload = checked
-                runCatching {
-                    prefs().edit {
+            setOnCheckedChangeListener { button, checked ->
+                if (programmaticSwitch) return@setOnCheckedChangeListener
+                val previous = blockComponentLibraryDownload
+                val saved = runCatching {
+                    val preferences = prefs()
+                    preferences.edit {
                         putBoolean(FeaturePreferences.BLOCK_COMPONENT_LIBRARY_DOWNLOAD, checked)
                     }
+                    check(
+                        preferences.getBoolean(
+                            FeaturePreferences.BLOCK_COMPONENT_LIBRARY_DOWNLOAD,
+                            !checked
+                        ) == checked
+                    )
                 }.onFailure { throwable ->
                     Log.e("BilibiliInnocentLab", "write component library prefs failed", throwable)
+                }.isSuccess
+                if (!saved) {
+                    programmaticSwitch = true
+                    button.isChecked = previous
+                    programmaticSwitch = false
+                    toast(getString(R.string.block_component_library_download_save_failed))
+                    return@setOnCheckedChangeListener
                 }
+                blockComponentLibraryDownload = checked
             }
         }
         TextView(lparams = LayoutParams(widthMatchParent = true)) {

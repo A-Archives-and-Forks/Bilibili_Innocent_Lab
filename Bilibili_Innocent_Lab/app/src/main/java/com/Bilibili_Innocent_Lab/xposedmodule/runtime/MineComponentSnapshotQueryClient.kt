@@ -26,7 +26,10 @@ internal object MineComponentSnapshotQueryClient {
             ReceiptQueryLog.failure("scan", result.failure)
             main.post { callback(result) }
         }
-        ReceiptQueryTransport.query(app, surface) { reply ->
+        // 扫描快照面的两个调用方（四个勾选面板、管理推荐屏蔽）都是用户点开面板才触发的，
+        // 所以允许用最后那段保底把宿主主进程拉起来；遥测与激活卡检查走的是诊断通道，
+        // 那条默认不唤起，见 ReceiptQueryTransport 的类注释。
+        ReceiptQueryTransport.query(app, surface, allowWake = true) { reply ->
             if (reply.failure != ReceiptQueryFailure.NONE) {
                 val unavailable = ReceiptQueryPolicy.isUnavailable(reply.failure)
                 deliver(Result(if (unavailable) Status.TARGET_UNAVAILABLE else Status.INVALID_RESPONSE, failure = reply.failure))

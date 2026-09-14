@@ -38,6 +38,17 @@ class DiagnosticCapabilityCatalogTest {
         assertEquals(expected, DiagnosticCapabilityCatalog.byLocatorKey.keys)
     }
 
+    @Test fun codecPreferenceAndDecodeModeHaveIndependentCapabilityLeaves() {
+        val codec = DiagnosticCapabilityCatalog.byId.getValue("player_codec_preference")
+        val decode = DiagnosticCapabilityCatalog.byId.getValue("player_decode_mode")
+        assertEquals("player_capabilities", codec.parentId)
+        assertEquals("player_capabilities", decode.parentId)
+        assertEquals(setOf("player.codec.preference"), codec.settingIds)
+        assertEquals(setOf("player.decode.mode"), decode.settingIds)
+        assertEquals(2, DiagnosticCapabilityCatalog.runtimeSupport(codec.id))
+        assertEquals(2, DiagnosticCapabilityCatalog.runtimeSupport(decode.id))
+    }
+
     /**
      * VERSION 涨了就必须有条目标在这个新版本上。
      *

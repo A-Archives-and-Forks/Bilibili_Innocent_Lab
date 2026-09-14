@@ -26,7 +26,14 @@ internal data class InjectedUiMessages(
     /** 注入到宿主三点面板里的「屏蔽标签」行，`%1$s` 是这张卡的标签名。 */
     val panelBlockTagLabel: String,
     /** 注入到宿主三点面板里的「屏蔽 UP」行，`%1$s` 是这张卡的 UP 名。 */
-    val panelBlockAuthorLabel: String
+    val panelBlockAuthorLabel: String,
+    /**
+     * 点过注入行之后的即时回执，`%1$s` 是刚记下的标签名或 UP 名。
+     *
+     * 宿主对我们这一行只会关掉面板，既不弹 toast 也不撤掉当前卡片（过滤只作用于之后
+     * 加载的推荐），所以没有这条回执时用户看到的就是"点了什么都没发生"。
+     */
+    val panelBlockRecordedToast: String
 )
 
 /**
@@ -270,7 +277,10 @@ internal object InjectedUiLocale {
         replyTopologyEntryLabel = "Trace",
         replyTopologyEntryDescription = "Show reply context",
         panelBlockTagLabel = "Stop recommending tag: %1\$s",
-        panelBlockAuthorLabel = "Stop recommending uploader: %1\$s"
+        panelBlockAuthorLabel = "Stop recommending uploader: %1\$s",
+        panelBlockRecordedToast =
+            "Recorded %1\$s. It applies to newly loaded recommendations; " +
+                "confirm it in Innocent_Lab to keep it."
     )
 
     private val SIMPLIFIED_CHINESE_MESSAGES = InjectedUiMessages(
@@ -282,7 +292,9 @@ internal object InjectedUiLocale {
         replyTopologyEntryLabel = "脉络",
         replyTopologyEntryDescription = "查看回复脉络",
         panelBlockTagLabel = "不再推荐标签：%1\$s",
-        panelBlockAuthorLabel = "不再推荐 UP：%1\$s"
+        panelBlockAuthorLabel = "不再推荐 UP：%1\$s",
+        // 模块名一律保持英文 Innocent_Lab，不随界面语言翻译。
+        panelBlockRecordedToast = "已记下 %1\$s，对之后加载的推荐生效；在 Innocent_Lab 中确认后长期保留。"
     )
 
     private val TRADITIONAL_CHINESE_MESSAGES = InjectedUiMessages(
@@ -294,7 +306,9 @@ internal object InjectedUiLocale {
         replyTopologyEntryLabel = "脈絡",
         replyTopologyEntryDescription = "查看回覆脈絡",
         panelBlockTagLabel = "不再推薦標籤：%1\$s",
-        panelBlockAuthorLabel = "不再推薦 UP：%1\$s"
+        panelBlockAuthorLabel = "不再推薦 UP：%1\$s",
+        // 模块名一律保持英文 Innocent_Lab，不随界面语言翻译。
+        panelBlockRecordedToast = "已記下 %1\$s，對之後載入的推薦生效；在 Innocent_Lab 中確認後長期保留。"
     )
 
     private val TRADITIONAL_CHINESE_REGIONS = setOf("TW", "HK", "MO")

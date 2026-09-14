@@ -22,6 +22,51 @@ class NativePickSnapshotTest {
         assertEquals("section_picks", receipts.last().surface)
     }
 
+    /**
+     * 宿主进程重启后的第一次点选**不能**把之前还没确认的点选整份抹掉。
+     *
+     * 2026-09-15 真机实测：`tid:79793` 先被记下，宿主进程重启后点了 `tid:13160`，
+     * 累积器是空的、整份覆盖，`payload_section_picks` 里只剩后者。用户在模块里
+     * 确认之前记录就没了，且全程没有任何错误。
+     */
+    @Test fun aPickMadeAfterAHostRestartUnionsWithTheOnePersistedBefore() {
+        val before = listOf(MineComponentScanEntry("tid:79793", "section", "日本文化", "79793", null, true,
+            selectionToken = "first-session"))
+        // 重启后的新进程只累积到自己这一条。
+        val afterRestart = listOf(MineComponentScanEntry("tid:13160", "section", "学习", "13160", null, true,
+            selectionToken = "second-session"))
+        val merged = MineComponentSnapshotCodec.accumulate(
+            MineComponentSnapshotCodec.SURFACE_SECTION_PICKS, before, afterRestart)
+        assertEquals(listOf("13160", "79793"), merged.map { it.id })
+    }
+
+    @Test fun theNewerEntryWinsOnTheSameKeyAndListSurfacesStillReplaceWholesale() {
+        val previous = listOf(MineComponentScanEntry("tid:11", "section", "old", "11", null, true,
+            selectionToken = "old-token"))
+        val current = listOf(MineComponentScanEntry("tid:11", "section", "new", "11", null, true,
+            selectionToken = "new-token"))
+        assertEquals(listOf("new-token"), MineComponentSnapshotCodec.accumulate(
+            MineComponentSnapshotCodec.SURFACE_SECTION_PICKS, previous, current).map { it.selectionToken })
+        // 列表面每次提交的就是当前页面的完整候选，绝不能并进上一页的残留。
+        assertEquals(current, MineComponentSnapshotCodec.accumulate(
+            MineComponentSnapshotCodec.SURFACE_HOME_TABS, previous, current))
+        assertTrue(MineComponentSnapshotCodec.ACCUMULATING_SURFACES.all {
+            it in MineComponentSnapshotCodec.ALLOWED_SURFACES
+        })
+    }
+
+    /** 满额时保本次点选，用旧记录补齐；否则用户刚点的那条会被历史挤掉。 */
+    @Test fun theCurrentPicksAreKeptWhenTheMergedSetWouldOverflow() {
+        val previous = (1..MineComponentSnapshotCodec.MAX_ENTRY_COUNT).map {
+            MineComponentScanEntry("tid:$it", "section", "old $it", it.toString(), null, true)
+        }
+        val current = listOf(MineComponentScanEntry("tid:900000", "section", "新点的", "900000", null, true))
+        val merged = MineComponentSnapshotCodec.accumulate(
+            MineComponentSnapshotCodec.SURFACE_SECTION_PICKS, previous, current)
+        assertEquals(MineComponentSnapshotCodec.MAX_ENTRY_COUNT, merged.size)
+        assertTrue(merged.any { it.id == "900000" })
+    }
+
     @Test fun authorKeysRoundTripAndForgedTagKeysAreRejected() {
         val entry = checkNotNull(MineComponentScanEntry.create("author", "UP name", "UP name", null, true))
         assertEquals(entry, MineComponentScanEntry.fromJsonOrNull(entry.toJson()))

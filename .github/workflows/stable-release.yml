@@ -139,6 +139,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Gradle and restore build cache
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          # Keep the cache provider open-source and avoid overlapping setup-java caches.
+          cache-provider: basic
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
@@ -152,6 +158,7 @@ jobs:
         run: |
           set -euo pipefail
           ./gradlew \
+            "-Dorg.gradle.jvmargs=-Xmx6144m -Dfile.encoding=UTF-8" \
             "-Pproject.android.compileSdk=${CI_COMPILE_SDK}" \
             assembleDebug testDebugUnitTest lintDebug minifyReleaseWithR8 \
             --console=plain --no-daemon
@@ -203,6 +210,12 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Set up Gradle and restore build cache
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          # Restore the verify job's dependency/R8 task cache before signing.
+          cache-provider: basic
+
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
@@ -243,6 +256,7 @@ jobs:
         run: |
           set -euo pipefail
           ./gradlew \
+            "-Dorg.gradle.jvmargs=-Xmx6144m -Dfile.encoding=UTF-8" \
             "-Pproject.android.compileSdk=${CI_COMPILE_SDK}" \
             assembleRelease \
             --console=plain --no-daemon

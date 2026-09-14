@@ -217,7 +217,8 @@
     <string name="client_update_settings">Update prompts</string>
     <string name="block_app_update">Disable client update prompts</string>
     <string name="block_component_library_download">Block App component-library downloads</string>
-    <string name="block_component_library_download_tip">After clearing the App component library in Bilibili storage settings, matching component-library pools will not be downloaded. The target pool must be recognized; unmatched responses are kept unchanged.</string>
+    <string name="block_component_library_download_tip">After clearing the App component library in Bilibili storage settings, recognized target pools can be kept from downloading. The current target pool is still being observed; until it is confirmed, this option leaves responses unchanged. Existing files are not deleted and some features may be affected.</string>
+    <string name="block_component_library_download_save_failed">Could not save the component-library setting. The previous setting was kept.</string>
     <string name="block_app_update_tip">When enabled, Bilibili client update prompts are no longer shown. This module\'s update checks are unaffected. Restart Bilibili to apply.</string>
     <string name="dynamic_page_settings">Dynamic page</string>
     <string name="hide_dynamic_city_tab">Hide the City tab</string>
@@ -854,6 +855,7 @@
     <string name="player_speed_input_hint">For example, 1.25</string>
     <string name="player_speed_invalid">Enter a value from 0.25 to 4, with up to two decimal places.</string>
     <string name="player_speed_save_failed">Could not save. Please try again.</string>
+    <string name="player_codec_setting_save_failed">Could not save the player setting. The previous setting was kept.</string>
     <string name="github_new_update_badge">NEW</string>
     <string name="github_new_update_description">New version %1$s available. View update details.</string>
     <string name="diagnostics_feature_install_partial">Partially installed; some required paths are unavailable</string>
@@ -910,7 +912,7 @@
     <string name="highlights_stability">Improve partial adaptation and error handling so missing paths do not disable unrelated features.</string>
     <string name="highlights_player_codec_preference">Add a conservative video-codec preference for new playback sessions.</string>
     <string name="highlights_player_decode_mode">Add opt-in hardware/software decoder mode control through the host ijk option path.</string>
-    <string name="highlights_component_library">Add opt-in component-library download blocking; unmatched resource pools remain unchanged.</string>
+    <string name="highlights_component_library">Add opt-in component-library download blocking for confirmed target pools; the current version remains in target-observation mode.</string>
     <string name="component_snapshot_cached_notice">Showing the last saved scan. The current Bilibili state could not be confirmed.</string>
     <string name="hide_player_popup_promotion">Hide player popup promotions</string>
     <string name="hide_player_popup_promotion_tip">Hide common floating promotion cards in the player, including mini program promotions. Other interactive components and regular danmaku are preserved.</string>
@@ -923,6 +925,8 @@
     <string name="recommendation_blocklist_empty">No blocked items. Add rules manually or select them in recommendation feedback.</string>
     <string name="recommendation_blocklist_saved">Saved. Restart Bilibili to apply.</string>
     <string name="recommendation_blocklist_save_failed">Could not save, or the list has changed. Reopen and try again.</string>
+    <string name="recommendation_blocklist_syncing">Reading new picks from the Bilibili feedback panel…</string>
+    <string name="recommendation_blocklist_sync_unavailable">Could not read new picks from Bilibili. Only saved entries and the last successful read are listed.</string>
     <string name="communication_compatibility_mode">Compatibility mode</string>
     <string name="communication_compatibility_tip">Use additional communication paths for manager synchronization and host receipts.</string>
     <string name="communication_compatibility_warning">Compatibility mode keeps all normal connection methods and additionally lets the host read the complete module configuration directly when manager delivery is unavailable. This removes the requirement for successful manager-mediated delivery and increases the configuration exposed to the host process. Use it only if you trust the installed host app.\n\nApp identity, your consent, version and data integrity are still checked. Connections may briefly wake related processes and use more power. This cannot guarantee bypassing system restrictions or replace enabling the module in its manager.\n\nTurning it off prevents new direct grants; restart the host to remove hooks already loaded. Enable it?</string>

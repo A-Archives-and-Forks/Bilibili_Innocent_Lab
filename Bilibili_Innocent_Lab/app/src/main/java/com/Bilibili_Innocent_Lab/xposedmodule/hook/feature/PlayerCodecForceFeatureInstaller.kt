@@ -14,20 +14,38 @@ internal class PlayerCodecForceFeatureInstaller(
     decodeModeValue: Int
 ) : FeatureInstaller {
     override val id: String = ID
-    override val capabilityIds: List<String> = listOf(CAPABILITY)
     private val preference = PlayerCodecPreference.fromValue(codecPreferenceValue)
     private val decodeMode = PlayerDecodeMode.fromValue(decodeModeValue)
+    override val capabilityIds: List<String> = buildList {
+        if (preference != PlayerCodecPreference.FOLLOW_HOST) add(CODEC_CAPABILITY)
+        if (decodeMode != PlayerDecodeMode.FOLLOW_HOST) add(DECODE_CAPABILITY)
+    }
+
+    private data class InstallCoverage(val available: Int = 0, val installed: Int = 0)
+
+    private data class RequestResolution(
+        val owner: Class<*>,
+        val request: Class<*>,
+        val sync: Method?,
+        val async: Method?
+    )
 
     override fun install(environment: HookEnvironment): FeatureInstallResult {
         if (preference == PlayerCodecPreference.FOLLOW_HOST && decodeMode == PlayerDecodeMode.FOLLOW_HOST) {
             environment.reportStatus(STATUS, "disabled")
             return FeatureInstallResult.Skipped("disabled")
         }
-        val loader = environment.classLoader ?: return skipped(environment, "missing-class-loader")
-        var installed = 0
-        var expected = 0
-        if (preference != PlayerCodecPreference.FOLLOW_HOST) {
-            val requestResults = listOf(
+        val loader = environment.classLoader ?: run {
+            capabilityIds.forEach { capability ->
+                environment.reportCapability(
+                    capability,
+                    FeatureInstallResult.Skipped("missing-class-loader")
+                )
+            }
+            return skipped(environment, "missing-class-loader")
+        }
+        val requestCoverage = if (preference != PlayerCodecPreference.FOLLOW_HOST) {
+            listOf(
                 installRequestFamily(
                     environment, loader,
                     MOSS_CLASSES_UNITE, REQUEST_CLASSES_UNITE,
@@ -40,20 +58,28 @@ internal class PlayerCodecForceFeatureInstaller(
                     setOf("executePlayView", "playView"),
                     nestedVod = false
                 )
-            )
-            installed += requestResults.count { it }
-            expected += requestResults.size
-        }
-        if (decodeMode != PlayerDecodeMode.FOLLOW_HOST) {
-            val decodeInstalled = installDecodePaths(environment, loader)
-            installed += decodeInstalled
-            expected += 3
-        }
+            ).fold(InstallCoverage()) { total, current ->
+                InstallCoverage(total.available + current.available, total.installed + current.installed)
+            }
+        } else InstallCoverage()
+        val decodeCoverage = if (decodeMode != PlayerDecodeMode.FOLLOW_HOST) {
+            installDecodePaths(environment, loader)
+        } else InstallCoverage()
+        reportCapabilityCoverage(environment, CODEC_CAPABILITY, requestCoverage)
+        reportCapabilityCoverage(environment, DECODE_CAPABILITY, decodeCoverage)
+
+        val installed = requestCoverage.installed + decodeCoverage.installed
+        val expected = requestCoverage.available + decodeCoverage.available
         if (installed == 0) return skipped(environment, "missing-host-structure")
-        environment.reportRuntimeEvidence(ID, FeatureRuntimeStage.ADAPTED)
-        val status = if (installed == expected) "success" else "partial:$installed/$expected"
+        if (requestCoverage.installed > 0) {
+            environment.reportRuntimeEvidence(CODEC_CAPABILITY, FeatureRuntimeStage.ADAPTED)
+        }
+        if (decodeCoverage.installed > 0) {
+            environment.reportRuntimeEvidence(DECODE_CAPABILITY, FeatureRuntimeStage.ADAPTED)
+        }
+        val status = if (expected > 0 && installed == expected) "success" else "partial:$installed/$expected"
         environment.reportStatus(STATUS, status)
-        return FeatureInstallResult.Installed(installed, complete = installed == expected)
+        return FeatureInstallResult.Installed(installed, complete = expected > 0 && installed == expected)
     }
 
     private fun installRequestFamily(
@@ -63,59 +89,114 @@ internal class PlayerCodecForceFeatureInstaller(
         requestCandidates: List<String>,
         methodNames: Set<String>,
         nestedVod: Boolean
-    ): Boolean = runCatching {
+    ): InstallCoverage = runCatching {
+        val handlerClass = KavaMemberLookup.classOrNull(loader, MOSS_HANDLER)?.takeIf { it.isInterface }
         val resolved = mossCandidates.asSequence().flatMap { mossName ->
             requestCandidates.asSequence().mapNotNull { requestName ->
                 val owner = KavaMemberLookup.classOrNull(loader, mossName) ?: return@mapNotNull null
                 val request = KavaMemberLookup.classOrNull(loader, requestName) ?: return@mapNotNull null
-                val method = KavaMemberLookup.methods(owner, includeSuperclasses = true, makeAccessible = true) {
+                val sync = KavaMemberLookup.methods(owner, includeSuperclasses = true, makeAccessible = true) {
                     it.name in methodNames && it.parameterTypes.contentEquals(arrayOf(request)) &&
                         !Modifier.isStatic(it.modifiers) && !it.returnType.isPrimitive
-                }.singleOrNull() ?: return@mapNotNull null
-                Triple(owner, request, method)
+                }.singleOrNull()
+                val async = handlerClass?.let { handler ->
+                    KavaMemberLookup.methods(owner, includeSuperclasses = true, makeAccessible = true) {
+                        it.name in methodNames &&
+                            it.parameterTypes.contentEquals(arrayOf(request, handler)) &&
+                            it.returnType == Void.TYPE && !Modifier.isStatic(it.modifiers)
+                    }.singleOrNull()
+                }
+                if (sync == null && async == null) return@mapNotNull null
+                RequestResolution(owner, request, sync, async)
             }
-        }.firstOrNull() ?: return false
-        val owner = resolved.first
-        val request = resolved.second
-        val method = resolved.third
-        val access = RequestAccess.resolve(request, nestedVod, preference) ?: return false
-        environment.registrar.exact("$ID.request.${request.simpleName}", owner, method.name, request) {
-            before {
-                val original = argOrNull(0) ?: return@before
-                val updated = access.rewrite(original, preference) ?: return@before
-                args[0] = updated
-                environment.reportRuntimeEvidence(ID, FeatureRuntimeStage.OBSERVED)
-                environment.reportRuntimeEvidence(ID, FeatureRuntimeStage.APPLIED)
-            }
+        }.firstOrNull() ?: return InstallCoverage()
+        val access = RequestAccess.resolve(resolved.request, nestedVod, preference)
+            ?: return InstallCoverage()
+        var available = 0
+        var installed = 0
+        resolved.sync?.let { method ->
+            available++
+            if (registerRequestHook(
+                    environment,
+                    CODEC_CAPABILITY,
+                    "$ID.request.${resolved.request.simpleName}",
+                    resolved.owner,
+                    method,
+                    access
+                )
+            ) installed++
         }
-        true
+        resolved.async?.let { method ->
+            available++
+            if (registerRequestHook(
+                    environment,
+                    CODEC_CAPABILITY,
+                    "$ID.request.${resolved.request.simpleName}.async",
+                    resolved.owner,
+                    method,
+                    access
+                )
+            ) installed++
+        }
+        InstallCoverage(available, installed)
     }.getOrElse {
         environment.logError("$ID.request", "[BIL] 编码偏好入口解析/注册失败")
-        false
+        InstallCoverage()
     }
 
-    private fun installDecodePaths(environment: HookEnvironment, loader: ClassLoader): Int {
+    private fun registerRequestHook(
+        environment: HookEnvironment,
+        capability: String,
+        hookId: String,
+        owner: Class<*>,
+        method: Method,
+        access: RequestAccess
+    ): Boolean = runCatching {
+        environment.registrar.exact(hookId, owner, method.name, *method.parameterTypes) {
+            before {
+                val original = argOrNull(0) ?: return@before
+                environment.reportRuntimeEvidence(capability, FeatureRuntimeStage.OBSERVED)
+                access.rewrite(original, preference)?.let { updated ->
+                    args[0] = updated
+                    environment.reportRuntimeEvidence(capability, FeatureRuntimeStage.APPLIED)
+                }
+            }
+        }
+    }.onFailure {
+        environment.logError(hookId, "[BIL] 编码偏好入口解析/注册失败")
+    }.isSuccess
+
+    private fun installDecodePaths(environment: HookEnvironment, loader: ClassLoader): InstallCoverage {
         val owner = IJK_CLIENT_CLASSES.firstNotNullOfOrNull { KavaMemberLookup.classOrNull(loader, it) }
-            ?: return 0
+            ?: return InstallCoverage()
+        var available = 0
         var installed = 0
         val bundleMethod = KavaMemberLookup.methods(owner, includeSuperclasses = true, makeAccessible = true) {
             it.name == "setOptionBundle" && it.parameterTypes.contentEquals(
                 arrayOf(Int::class.javaPrimitiveType, Bundle::class.java)
             ) && !Modifier.isStatic(it.modifiers)
         }.singleOrNull()
-        if (bundleMethod != null && runCatching {
-                environment.registrar.exact("$ID.bundle", owner, bundleMethod.name, *bundleMethod.parameterTypes) {
-                    before {
-                        if ((argOrNull(0) as? Number)?.toInt() != 4) return@before
-                        val bundle = argOrNull(1) as? Bundle ?: return@before
-                        val rewrite = PlayerCodecForcePolicy.rewriteBundle(bundle, decodeMode)
-                            ?: return@before
-                        args[1] = rewrite.bundle
-                        environment.reportRuntimeEvidence(ID, FeatureRuntimeStage.OBSERVED)
-                        environment.reportRuntimeEvidence(ID, FeatureRuntimeStage.APPLIED, rewrite.changed)
+        if (bundleMethod != null) {
+            available++
+            if (runCatching {
+                    environment.registrar.exact("$ID.bundle", owner, bundleMethod.name, *bundleMethod.parameterTypes) {
+                        before {
+                            if ((argOrNull(0) as? Number)?.toInt() != 4) return@before
+                            val bundle = argOrNull(1) as? Bundle ?: return@before
+                            if (!PlayerCodecForcePolicy.OPTION_KEYS.any(bundle::containsKey)) return@before
+                            environment.reportRuntimeEvidence(DECODE_CAPABILITY, FeatureRuntimeStage.OBSERVED)
+                            val rewrite = PlayerCodecForcePolicy.rewriteBundle(bundle, decodeMode)
+                                ?: return@before
+                            args[1] = rewrite.bundle
+                            environment.reportRuntimeEvidence(
+                                DECODE_CAPABILITY,
+                                FeatureRuntimeStage.APPLIED,
+                                rewrite.changed
+                            )
+                        }
                     }
-                }
-            }.isSuccess) installed++
+                }.isSuccess) installed++
+        }
 
         val optionMethods = KavaMemberLookup.declaredMethods(owner, makeAccessible = true) {
             it.name == "_setOption" && it.parameterCount == 3 && !Modifier.isStatic(it.modifiers) &&
@@ -124,6 +205,7 @@ internal class PlayerCodecForceFeatureInstaller(
                 (it.parameterTypes[2] == Long::class.javaPrimitiveType || it.parameterTypes[2] == String::class.java)
         }.distinctBy(Method::toGenericString)
         optionMethods.forEachIndexed { index, method ->
+            available++
             if (runCatching {
                     environment.registrar.exact("$ID.option.$index", owner, method.name, *method.parameterTypes) {
                         before {
@@ -131,21 +213,38 @@ internal class PlayerCodecForceFeatureInstaller(
                             val key = argOrNull(1) as? String ?: return@before
                             val target = PlayerCodecForcePolicy.optionValue(key, decodeMode) ?: return@before
                             val current = argOrNull(2)
-                            if (current is Long) {
-                                if (current != target) {
-                                    args[2] = target
-                                    environment.reportRuntimeEvidence(ID, FeatureRuntimeStage.APPLIED)
-                                }
-                            } else if (current is String && current != target.toString()) {
-                                args[2] = target.toString()
-                                environment.reportRuntimeEvidence(ID, FeatureRuntimeStage.APPLIED)
+                            environment.reportRuntimeEvidence(DECODE_CAPABILITY, FeatureRuntimeStage.OBSERVED)
+                            val currentValue = PlayerCodecForcePolicy.recognizedOptionValue(key, current)
+                                ?: return@before
+                            if (currentValue == target) return@before
+                            when (current) {
+                                is Long -> args[2] = target
+                                is String -> args[2] = target.toString()
+                                else -> return@before
                             }
-                            environment.reportRuntimeEvidence(ID, FeatureRuntimeStage.OBSERVED)
+                            environment.reportRuntimeEvidence(DECODE_CAPABILITY, FeatureRuntimeStage.APPLIED)
                         }
                     }
                 }.isSuccess) installed++
         }
-        return installed
+        return InstallCoverage(available, installed)
+    }
+
+    private fun reportCapabilityCoverage(
+        environment: HookEnvironment,
+        capability: String,
+        coverage: InstallCoverage
+    ) {
+        if (capability !in capabilityIds) return
+        val result = when {
+            coverage.available <= 0 -> FeatureInstallResult.Skipped("missing-host-structure")
+            coverage.installed <= 0 -> FeatureInstallResult.Skipped("registration-failed")
+            else -> FeatureInstallResult.Installed(
+                coverage.installed,
+                complete = coverage.installed == coverage.available
+            )
+        }
+        environment.reportCapability(capability, result)
     }
 
     private fun skipped(environment: HookEnvironment, reason: String): FeatureInstallResult.Skipped {
@@ -155,7 +254,6 @@ internal class PlayerCodecForceFeatureInstaller(
 
     private data class RequestAccess(
         val requestPlan: ProtobufBuilderPlan,
-        val target: Class<*>,
         val targetGetter: Method?,
         val targetSetter: Method?,
         val targetPlan: ProtobufBuilderPlan,
@@ -209,7 +307,7 @@ internal class PlayerCodecForceFeatureInstaller(
                     requestPlan.method("setVod", getter.returnType)
                 }
                 if (nestedVod && targetSetter == null) return null
-                RequestAccess(requestPlan, target, targetGetter, targetSetter, targetPlan,
+                RequestAccess(requestPlan, targetGetter, targetSetter, targetPlan,
                     preferGetter, preferSetter, fnvalGetter, fnvalSetter, preferredCode)
             }.getOrNull()
 
@@ -223,8 +321,10 @@ internal class PlayerCodecForceFeatureInstaller(
 
     companion object {
         const val ID = "player_codec_force"
-        private const val CAPABILITY = ID
+        private const val CODEC_CAPABILITY = "player_codec_preference"
+        private const val DECODE_CAPABILITY = "player_decode_mode"
         private const val STATUS = "player_codec_force_status"
+        private const val MOSS_HANDLER = "com.bilibili.lib.moss.api.MossResponseHandler"
         private val MOSS_CLASSES_UNITE = listOf(
             "com.bapis.bilibili.app.playerunite.v1.PlayerMoss",
             "com.bapis.bilibili.app.playerunite.v1.KPlayerMoss"

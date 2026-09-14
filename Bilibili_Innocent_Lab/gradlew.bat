@@ -44,9 +44,12 @@ for %%i in ("%BIL_GRADLE_TMP%") do set "BIL_GRADLE_TMP=%%~fsi"
 @rem so the daemon, worker launcher, test JVM and compiler workers all agree.
 set "TEMP=%BIL_GRADLE_TMP%"
 set "TMP=%BIL_GRADLE_TMP%"
+@rem Keep the Windows local build heap larger without putting a machine-specific
+@rem value into shared gradle.properties used by Linux CI and other checkouts.
 @rem Match org.gradle.jvmargs so --no-daemon can reuse this JVM instead of
 @rem forking a single-use Daemon and opening a local selector/AF_UNIX pipe.
-set DEFAULT_JVM_OPTS="-Xmx2048m" "-Dfile.encoding=UTF-8" "-Djava.io.tmpdir=%BIL_GRADLE_TMP%"
+set "BIL_GRADLE_HEAP=6144m"
+set DEFAULT_JVM_OPTS="-Xmx%BIL_GRADLE_HEAP%" "-Dfile.encoding=UTF-8" "-Djava.io.tmpdir=%BIL_GRADLE_TMP%"
 @rem Find java.exe
 if defined JAVA_HOME goto findJavaFromJavaHome
 
@@ -83,7 +86,7 @@ set CLASSPATH=%APP_HOME%\gradle\wrapper\gradle-wrapper.jar
 
 
 @rem Execute Gradle
-"%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.appname=%APP_BASE_NAME%" -classpath "%CLASSPATH%" org.gradle.wrapper.GradleWrapperMain %*
+"%JAVA_EXE%" %DEFAULT_JVM_OPTS% %JAVA_OPTS% %GRADLE_OPTS% "-Dorg.gradle.jvmargs=-Xmx%BIL_GRADLE_HEAP% -Dfile.encoding=UTF-8" "-Dorg.gradle.appname=%APP_BASE_NAME%" -classpath "%CLASSPATH%" org.gradle.wrapper.GradleWrapperMain %*
 
 :end
 @rem End local scope for the variables with windows NT shell

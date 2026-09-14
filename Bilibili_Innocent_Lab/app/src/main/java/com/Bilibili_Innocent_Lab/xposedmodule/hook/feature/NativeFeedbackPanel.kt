@@ -1,6 +1,7 @@
 package com.Bilibili_Innocent_Lab.xposedmodule.hook.feature
 
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.VersionAdapter
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.modern.ReflectAccess
 import com.Bilibili_Innocent_Lab.xposedmodule.runtime.InjectedUiLocale
 import com.Bilibili_Innocent_Lab.xposedmodule.runtime.KavaMemberLookup
 import java.lang.ref.WeakReference
@@ -130,12 +131,27 @@ internal class NativeFeedbackPanel(
                 MineComponentSnapshotCodec.SURFACE_SECTION_PICKS, setOf("home_recommend_tid_block"))
             val authors = ScanSnapshotPublisher(environment,
                 MineComponentSnapshotCodec.SURFACE_AUTHOR_PICKS, setOf("home_recommend_author_block"))
+            /**
+             * 点过之后给一次即时回执。
+             *
+             * 宿主对我们注入的这一行只会关掉面板：它既不弹自己的 toast（那是不感兴趣流程
+             * 里发请求之后才有的），也不会撤掉当前这张卡（过滤只作用于之后加载的推荐）。
+             * 没有这一条，用户看到的就是"点了什么都没发生"。
+             *
+             * Application 在 `attach.before` 还没建好，所以在点击时才取，不在安装期缓存。
+             */
+            fun announce(name: String) {
+                val context = ReflectAccess.currentApplication() ?: return
+                VersionAdapter.showAdaptToast(context,
+                    String.format(InjectedUiLocale.messages().panelBlockRecordedToast, name))
+            }
             fun picked(tag: FeedbackTag) {
                 val added = SectionPickSession.add(tag.id)
                 if (!added && !SectionPickSession.contains(tag.id)) return
                 publisher.accumulate(MineComponentScanEntry(SectionPickPolicy.snapshotKey(tag.id),
                     SectionPickPolicy.SNAPSHOT_KIND, tag.name, tag.id.toString(), null, true,
                     selectionToken = java.util.UUID.randomUUID().toString()))
+                announce(tag.name)
                 if (!added) return
                 environment.reportRuntimeEvidence(SectionPickFeatureInstaller.ID, FeatureRuntimeStage.APPLIED)
                 environment.logInfo("section_pick_hit:${tag.id}", "[BIL] 已选择标签 id=${tag.id}，本次会话生效，长期保存需在模块中确认")
@@ -165,6 +181,8 @@ internal class NativeFeedbackPanel(
                                     authors.accumulate(MineComponentScanEntry.create("author", upName, upName, null, true)
                                         ?.copy(selectionToken = java.util.UUID.randomUUID().toString()))
                                 }
+                                // 重复点同一个 UP 也回执：用户看到的应当是"这次点击被收到了"。
+                                announce(upName)
                             }?.let(::add)
                         }
                     }

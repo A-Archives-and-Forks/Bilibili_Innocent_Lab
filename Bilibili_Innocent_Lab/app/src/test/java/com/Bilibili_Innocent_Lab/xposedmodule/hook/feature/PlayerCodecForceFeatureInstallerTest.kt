@@ -1,10 +1,13 @@
 package com.Bilibili_Innocent_Lab.xposedmodule.hook.feature
 
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.HookPointRegistry
+import com.bapis.bilibili.app.playurl.v1.PlayURLMoss
+import com.bapis.bilibili.app.playurl.v1.PlayViewReq
 import com.bapis.bilibili.app.playerunite.v1.CodeType
 import com.bapis.bilibili.app.playerunite.v1.PlayViewUniteReq
 import com.bapis.bilibili.app.playerunite.v1.PlayerMoss
 import com.bapis.bilibili.app.playerunite.v1.VideoVod
+import com.bilibili.lib.moss.api.MossResponseHandler
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -31,7 +34,7 @@ class PlayerCodecForceFeatureInstallerTest {
             PlayerDecodeMode.FOLLOW_HOST.value
         ).install(environment(registrar))
 
-        assertEquals(FeatureInstallResult.Installed(1, false), result)
+        assertEquals(FeatureInstallResult.Installed(4), result)
         val source = PlayViewUniteReq(VideoVod(CodeType.CODE_UNKNOWN, 16))
         val args = arrayOf<Any?>(source)
         val actual = registrar.invoke(
@@ -45,6 +48,43 @@ class PlayerCodecForceFeatureInstallerTest {
         assertEquals(2064, actual.getVod().getFnval())
         assertEquals(CodeType.CODE_UNKNOWN, source.getVod().getPreferCodecType())
         assertEquals(16, source.getVod().getFnval())
+    }
+
+    @Test
+    fun `async and legacy request hooks preserve their independent request shapes`() {
+        val registrar = PlayerPortTestRegistrar()
+        PlayerCodecForceFeatureInstaller(
+            PlayerCodecPreference.H265.value,
+            PlayerDecodeMode.FOLLOW_HOST.value
+        ).install(environment(registrar))
+
+        val asyncSource = PlayViewUniteReq(VideoVod(CodeType.CODE_UNKNOWN, 2064))
+        val callback = object : MossResponseHandler {
+            override fun onNext(reply: Any?) = Unit
+            override fun onError(error: Throwable) = Unit
+            override fun onCompleted() = Unit
+        }
+        var asyncRequest: PlayViewUniteReq? = null
+        registrar.invoke(
+            "player_codec_force.request.PlayViewUniteReq.async",
+            PlayerMoss(),
+            arrayOf(asyncSource, callback)
+        ) { args ->
+            asyncRequest = args[0] as PlayViewUniteReq
+            null
+        }
+        assertEquals(CodeType.CODE265, asyncRequest?.getVod()?.getPreferCodecType())
+        assertEquals(16, asyncRequest?.getVod()?.getFnval())
+        assertEquals(CodeType.CODE_UNKNOWN, asyncSource.getVod().getPreferCodecType())
+
+        val legacySource = PlayViewReq()
+        val legacy = registrar.invoke(
+            "player_codec_force.request.PlayViewReq",
+            PlayURLMoss(),
+            arrayOf(legacySource)
+        ) { args -> args[0] } as PlayViewReq
+        assertEquals(com.bapis.bilibili.app.playurl.v1.CodeType.CODE265, legacy.getPreferCodecType())
+        assertEquals(16, legacy.getFnval())
     }
 
     @Test
@@ -72,6 +112,43 @@ class PlayerCodecForceFeatureInstallerTest {
             ) { callbackArgs -> callbackArgs[2] }
             assertEquals(if (type == String::class.java) "0" else 0L, rewritten)
         }
+        registrar.hooks.filterKeys { it.startsWith("player_codec_force.option.") }.forEach { (id, entry) ->
+            val type = entry.member.parameterTypes[2]
+            val args = if (type == String::class.java) {
+                arrayOf<Any?>(4, "mediacodec", "future-mode")
+            } else {
+                arrayOf<Any?>(4, "mediacodec", 2L)
+            }
+            val unchanged = registrar.invoke(
+                id,
+                tv.danmaku.ijk.media.player.services.IjkMediaPlayerItemClient(),
+                args
+            ) { callbackArgs -> callbackArgs[2] }
+            assertEquals(if (type == String::class.java) "future-mode" else 2L, unchanged)
+        }
+    }
+
+    @Test
+    fun `coordinator records codec and decode leaves without unverified overwrite`() {
+        val registrar = PlayerPortTestRegistrar()
+        val events = mutableListOf<FeatureInstallRecord>()
+        val record = FeatureInstallCoordinator(
+            environment(registrar).copy(installationEvidence = { events += it })
+        ).installAll(
+            listOf(
+                PlayerCodecForceFeatureInstaller(
+                    PlayerCodecPreference.AV1.value,
+                    PlayerDecodeMode.FORCE_SOFTWARE.value
+                )
+            )
+        ).single()
+
+        assertEquals(FeatureInstallResult.Installed(7), record.result)
+        val leaves = events.filter { it.id in setOf("player_codec_preference", "player_decode_mode") }
+        assertEquals(setOf("player_codec_preference", "player_decode_mode"), leaves.map { it.id }.toSet())
+        assertTrue(leaves.all { it.result !is FeatureInstallResult.Unverified })
+        assertEquals(1, leaves.count { it.id == "player_codec_preference" })
+        assertEquals(1, leaves.count { it.id == "player_decode_mode" })
     }
 
     @Test

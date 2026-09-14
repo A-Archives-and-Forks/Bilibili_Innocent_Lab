@@ -10,4 +10,17 @@ public final class ModuleReply {
     public String getModuleName() {
         return moduleName;
     }
+
+    public static final class Builder {
+        private String moduleName;
+
+        public Builder setModuleName(String value) {
+            moduleName = value;
+            return this;
+        }
+
+        public ModuleReply build() {
+            return new ModuleReply(moduleName);
+        }
+    }
 }

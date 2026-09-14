@@ -51,6 +51,17 @@ internal object PlayerCodecForcePolicy {
         }
     }
 
+    /** 两条 ijk 写入路径共用的严格值解释；未知类型、文本和值域均保持原样。 */
+    fun recognizedOptionValue(key: String, value: Any?): Long? {
+        val parsed = when (value) {
+            is Int -> value.toLong()
+            is Long -> value
+            is String -> value.takeIf { it == "0" || it == "1" }?.toLongOrNull()
+            else -> null
+        } ?: return null
+        return parsed.takeIf { it in 0L..1L && key in OPTION_KEYS }
+    }
+
     fun rewriteBundle(bundle: Bundle, mode: PlayerDecodeMode): BundleRewrite? {
         if (mode == PlayerDecodeMode.FOLLOW_HOST) return null
         val edits = mutableListOf<Pair<String, Long>>()
@@ -58,11 +69,7 @@ internal object PlayerCodecForcePolicy {
             if (!bundle.containsKey(key)) continue
             val target = optionValue(key, mode) ?: continue
             val currentValue = bundle.get(key)
-            val current = when (currentValue) {
-                is Number -> currentValue.toLong()
-                is String -> currentValue.toLongOrNull()
-                else -> null
-            } ?: continue
+            val current = recognizedOptionValue(key, currentValue) ?: continue
             if (current == target) continue
             edits += key to target
         }
@@ -72,7 +79,7 @@ internal object PlayerCodecForcePolicy {
             when (bundle.get(key)) {
                 is Int -> copy.putInt(key, value.toInt())
                 is String -> copy.putString(key, value.toString())
-                else -> copy.putLong(key, value)
+                is Long -> copy.putLong(key, value)
             }
         }
         return BundleRewrite(copy, edits.size)
