@@ -157,17 +157,75 @@ class SettingsUiSourceTest {
         assertTrue(SettingsUiSource.functions(code, "target").single().contains("val kept = 1"))
     }
 
-    @Test fun `declaredFunctions survives the comment-stripped view of MainActivity`() {
-        val raw = SettingsUiSource.mainActivity()
-        val stripped = SettingsUiSource.code(raw)
-        val onRaw = SettingsUiSource.declaredFunctions(raw, indent = 4).size
-        val onStripped = SettingsUiSource.declaredFunctions(stripped, indent = 4).size
-        assertTrue("MainActivity should have plenty of members: $onRaw", onRaw > 100)
-        assertEquals("stripping comments must not change the member set", onRaw, onStripped)
+    /**
+     * **去注释不得改变函数集合** —— 对扫描集里的每一个文件都成立。
+     *
+     * `> 100` 这条**不是**"MainActivity 必须保留 100 个成员"的结构约束，
+     * 而是上面那组等式的**样本量下限**：语料太小时 `assertEquals` 会在空集上
+     * 平凡通过，护栏静默失效。同一个模式见 `AdvancedCategoryTreeTest` 的
+     * `check(builders.size >= 14)`。
+     *
+     * 2026-09-15 改口径：原来只看 MainActivity 单文件，于是"外移越多、样本越小"，
+     * 逻辑分卷搬到第 3 个就会跌破 100——**而被测性质一点没变弱**。
+     * 现在等式逐文件检查（比原来更严：分卷也纳入了），
+     * 下限改为对准工具实际扫描的整个语料。外移只是把成员换个文件放，
+     * 语料总量不该因此缩水。
+     */
+    @Test fun `declaredFunctions survives the comment-stripped view of every scanned file`() {
+        var total = 0
+        SettingsUiSource.settingsUiFiles().forEach { (name, raw) ->
+            val stripped = SettingsUiSource.code(raw)
+            // 缩进 4 = 类成员，缩进 0 = 分卷里的顶层扩展函数，两种都要覆盖。
+            listOf(0, 4).forEach { indent ->
+                val onRaw = SettingsUiSource.declaredFunctions(raw, indent)
+                val onStripped = SettingsUiSource.declaredFunctions(stripped, indent)
+                assertEquals(
+                    "$name (indent=$indent): stripping comments must not change the member set",
+                    onRaw.map { it.first },
+                    onStripped.map { it.first }
+                )
+                total += onRaw.size
+            }
+        }
+        assertTrue("the scanned surface should declare plenty of members: $total", total > 100)
     }
 
     @Test fun `MainActivity is always part of the scanned set`() {
         assertTrue(SettingsUiSource.settingsUiFiles().map { it.first }.contains("MainActivity.kt"))
         assertTrue(SettingsUiSource.all().contains("class MainActivity"))
+    }
+
+    /**
+     * **从 MainActivity 搬出去的代码不许脱离门禁。**
+     *
+     * 外移的落地形态就是在新文件里写 `fun MainActivity.…` 扩展，
+     * 所以"有扩展但不在扫描集"是绕过 `SettingsDialogExtractionTest` 四条结构约束
+     * （禁顶层 var / 禁生命周期注册 / 必须是扩展 / SetTextI18n 抑制）的唯一入口。
+     *
+     * 这条把那个入口焊死：新分卷要么用 `VOLUME_SUFFIXES` 里的后缀命名，
+     * 要么显式扩充那份清单，没有第三条路。
+     *
+     * 2026-09-15 首次跑这条时揪出了 `PendingCompatibilityRetry.kt`——
+     * 它本身写得没问题，但那是运气：门禁一直没在看它。
+     */
+    @Test fun `every extracted MainActivity extension lives in a scanned volume`() {
+        assertEquals(
+            "these files declare fun MainActivity.<name> but escape the extraction gates; " +
+                "rename them to a SettingsUiSource.VOLUME_SUFFIXES suffix (or extend that list)",
+            emptyList<String>(),
+            SettingsUiSource.unscannedMainActivityExtensions()
+        )
+    }
+
+    /** 扫描集必须真的比弹窗集大（或相等），且弹窗集仍只认 `Dialogs.kt`。 */
+    @Test fun `the volume set is a superset of the dialog set`() {
+        val volumes = SettingsUiSource.volumeFileNames
+        val dialogs = SettingsUiSource.dialogFileNames
+        assertTrue("dialogs must stay inside the scanned volumes", volumes.containsAll(dialogs))
+        assertTrue("dialogFileNames must keep its narrow meaning",
+            dialogs.all { it.endsWith("Dialogs.kt") })
+        assertEquals("the scanned set must not contain duplicates", volumes.distinct(), volumes)
+        assertTrue("MainActivity is added separately, never as a volume",
+            "MainActivity.kt" !in volumes)
     }
 }

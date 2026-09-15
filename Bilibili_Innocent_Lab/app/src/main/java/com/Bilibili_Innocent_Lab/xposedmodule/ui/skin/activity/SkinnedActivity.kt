@@ -193,7 +193,10 @@ abstract class SkinnedActivity : AppViewsActivity() {
     }
 
     /** 当前持久化选择是否请求 Liquid；未准备会话时保持 false。 */
-    protected val isLiquidSkinRequested: Boolean
+    // internal 而非 protected：同上，外移的摘要文案（SkinSummaryPresenter）是扩展函数，
+    // 拿不到 protected。两者都是只读 val，放宽的是"读"而不是"写"，
+    // isLiquidSkinEffective / isMaterialYouSkinEffective 只被 Activity 体内调用，仍是 protected。
+    internal val isLiquidSkinRequested: Boolean
         get() = skinSessionOrNull?.requestedSkin == SkinId.LIQUID
 
     /** 当前 Activity 是否已安全装配 Liquid renderer。 */
@@ -210,7 +213,7 @@ abstract class SkinnedActivity : AppViewsActivity() {
         get() = skinSessionOrNull?.effectiveSkin != SkinId.LIQUID
 
     /** 当前实际后端名称；Material You 或尚未准备时为 null。 */
-    protected val liquidBackendName: String?
+    internal val liquidBackendName: String?
         get() = skinSessionOrNull?.liquidBackendName
 
     /** 当前 Activity 的无引用诊断摘要；调用方不能由此接触 renderer 或 View。 */

@@ -647,11 +647,13 @@ class MainActivity : SkinnedActivity() {
     internal var termsDiagnosticsValueView: NativeTextView? = null
 
     /** Liquid renderer 的同一 Activity 失败只处理一次，避免重复 toast/recreate。 */
-    private var skinFailureHandled = false
+    // internal：外移的 SkinSummaryPresenter 要用；扩展函数看不见 private 成员。
+    internal var skinFailureHandled = false
 
     /** 皮肤选择的同步写入和退场动画只允许单飞，避免重复动画吞掉 recreate 回调。 */
     internal var skinSelectionActionInProgress = false
-    private var skinSummaryView: NativeTextView? = null
+    // internal：外移的 SkinSummaryPresenter 要用；扩展函数看不见 private 成员。
+    internal var skinSummaryView: NativeTextView? = null
     private var materialColorSpecProgrammaticSwitch = false
 
     /** 自定义背景导入只允许单飞；文件解码、哈希和原子替换全部离开主线程。 */
@@ -660,7 +662,8 @@ class MainActivity : SkinnedActivity() {
     }
     internal var liquidBackgroundTask: Future<*>? = null
     internal var liquidBackgroundImportInProgress = false
-    private var liquidBackgroundSummaryView: NativeTextView? = null
+    // internal：外移的 SkinSummaryPresenter 要用；扩展函数看不见 private 成员。
+    internal var liquidBackgroundSummaryView: NativeTextView? = null
     internal var liquidBackgroundDialog: Dialog? = null
     internal var liquidBackgroundDialogContainer: NativeLinearLayout? = null
 
@@ -1432,32 +1435,8 @@ class MainActivity : SkinnedActivity() {
         }
     }
 
-    private fun currentAppLanguageSummary(): String {
-        val language = currentAppLanguage()
-        return getString(R.string.app_language_current, getString(language.labelRes))
-    }
 
-    /** 实验性功能区显示实际请求的皮肤；Liquid 同时公开当前降级后端。 */
-    private fun currentSkinSummary(): String {
-        if (!isLiquidSkinRequested) return getString(R.string.skin_current_material_you)
-        val backendLabel = liquidBackendLabelRes(liquidBackendName)?.let { getString(it) }
-            ?: getString(R.string.skin_backend_initializing)
-        return getString(R.string.skin_current_liquid, backendLabel)
-    }
 
-    private fun currentLiquidBackgroundSummary(): String {
-        val state = LiquidBackgroundStore.read(applicationContext)
-        if (state.config.mode == LiquidBackgroundMode.AUTOMATIC) {
-            return getString(R.string.liquid_background_summary_automatic)
-        }
-        if (!state.assetPresent) {
-            return getString(R.string.liquid_background_summary_unavailable)
-        }
-        return getString(
-            if (isLiquidSkinRequested) R.string.liquid_background_summary_active
-            else R.string.liquid_background_summary_saved
-        )
-    }
 
     internal fun isLiquidRealtimeCaptureSupported(): Boolean = AndroidVersion.code >= 31
 
@@ -1485,51 +1464,9 @@ class MainActivity : SkinnedActivity() {
         }
     }
 
-    internal fun finishLiquidBackgroundChange() {
-        liquidBackgroundSummaryView?.text = currentLiquidBackgroundSummary()
-        val dialog = liquidBackgroundDialog
-        val container = liquidBackgroundDialogContainer
-        if (dialog != null && container != null && dialog.isShowing) {
-            dismissWithAnimation(dialog, container) {
-                if (!isFinishing && !isDestroyed) recreate()
-            }
-        } else if (!isFinishing && !isDestroyed) recreate()
-    }
 
-    @StringRes
-    private fun liquidBackgroundFailureText(reason: LiquidBackgroundImportFailure): Int =
-        when (reason) {
-            LiquidBackgroundImportFailure.READ_FAILED -> R.string.liquid_background_read_failed
-            LiquidBackgroundImportFailure.FILE_TOO_LARGE -> R.string.liquid_background_file_too_large
-            LiquidBackgroundImportFailure.UNSUPPORTED_IMAGE -> R.string.liquid_background_unsupported
-            LiquidBackgroundImportFailure.DIMENSIONS_TOO_LARGE ->
-                R.string.liquid_background_dimensions_too_large
-            LiquidBackgroundImportFailure.ENCODE_FAILED -> R.string.liquid_background_encode_failed
-            LiquidBackgroundImportFailure.STORAGE_FAILED -> R.string.liquid_background_storage_failed
-        }
 
-    @StringRes
-    private fun liquidBackendLabelRes(backendName: String?): Int? = when (backendName) {
-        "REFRACTION" -> R.string.skin_backend_refraction
-        "BLUR" -> R.string.skin_backend_blur
-        "TRANSLUCENT" -> R.string.skin_backend_translucent
-        else -> null
-    }
 
-    /** renderer 已完成核心侧回退后，当前 Activity 只负责提示并重建 Material 界面。 */
-    private fun handleSkinRendererFailure() {
-        runOnUiThread {
-            if (skinFailureHandled || isFinishing || isDestroyed) return@runOnUiThread
-            skinFailureHandled = true
-            if (SkinRepository.resolveRequestedSkin(applicationContext) == SkinId.MATERIAL_YOU) {
-                toast(getString(R.string.skin_start_failed))
-                recreate()
-            } else {
-                toast(getString(R.string.skin_recovery_save_failed))
-                skinSummaryView?.text = currentSkinSummary()
-            }
-        }
-    }
 
     /** 右上角 GitHub 图标的二级菜单。 */
     private fun scheduleReleaseHighlights() {
@@ -1883,29 +1820,6 @@ class MainActivity : SkinnedActivity() {
             R.string.home_recommend_blocked_authors_current, recommendationRuleCount(homeRecommendBlockedAuthors, tags = false)
         )
     }
-
-    private fun recommendationRuleCount(value: String, tags: Boolean): String {
-        val count = if (tags) TidBlocklistCodec.parse(value).size + TidBlocklistCodec.parseNames(value).size
-            else ExactRuleSetCodec.parse(value).size
-        return if (count == 0) "" else count.toString()
-    }
-
-    private fun ruleEntryText(
-        @StringRes titleRes: Int,
-        @StringRes emptyRes: Int,
-        @StringRes currentRes: Int,
-        value: String
-    ): String = getString(titleRes) + "\n" +
-        if (value.isBlank()) getString(emptyRes) else getString(currentRes, value)
-
-    /** 评论发布者规则入口文案；与评论关键词入口保持同一行结构。 */
-    private fun commentUserFilterSummaryText(value: String): String =
-        getString(R.string.comment_user_filter_rules) + "\n" +
-            if (value.isBlank()) {
-                getString(R.string.comment_user_filter_rules_empty)
-            } else {
-                getString(R.string.comment_user_filter_rules_current, value)
-            }
 
     /** 读取当前更新渠道（未知/损坏值回退稳定版，兼容旧版本升级）。 */
     internal fun readUpdateChannel(
@@ -2884,25 +2798,9 @@ class MainActivity : SkinnedActivity() {
         }
     }
 
-    internal fun recommendVideoDurationSummary(): String = when {
-        recommendVideoMinDurationSeconds <= 0 && recommendVideoMaxDurationSeconds <= 0 ->
-            getString(R.string.recommend_video_duration_range_empty)
-        recommendVideoMaxDurationSeconds <= 0 -> getString(
-            R.string.recommend_video_duration_min_only,
-            formatDurationSeconds(recommendVideoMinDurationSeconds)
-        )
-        recommendVideoMinDurationSeconds <= 0 -> getString(
-            R.string.recommend_video_duration_max_only,
-            formatDurationSeconds(recommendVideoMaxDurationSeconds)
-        )
-        else -> getString(
-            R.string.recommend_video_duration_both,
-            formatDurationSeconds(recommendVideoMinDurationSeconds),
-            formatDurationSeconds(recommendVideoMaxDurationSeconds)
-        )
-    }
-
-    private fun formatDurationSeconds(totalSeconds: Int): String {
+    // 外移的 recommendVideoDurationSummary() 要用它；扩展函数看不见 private 成员，
+    // 按 SettingsUiSource 的既定做法放宽成 internal，而不是把它也搬出去。
+    internal fun formatDurationSeconds(totalSeconds: Int): String {
         val hours = totalSeconds / 3_600
         val minutes = (totalSeconds % 3_600) / 60
         val seconds = totalSeconds % 60
@@ -2913,12 +2811,6 @@ class MainActivity : SkinnedActivity() {
         } else {
             "${totalSeconds / 60}:$paddedSeconds"
         }
-    }
-
-    private fun ruleSummary(value: String): String = if (value.isBlank()) {
-        getString(R.string.custom_hide_rules_empty)
-    } else {
-        getString(R.string.custom_hide_rules_current, value)
     }
 
     internal fun openExternalUrl(url: String) {
@@ -3455,141 +3347,6 @@ class MainActivity : SkinnedActivity() {
         val section: SettingsSearchSection,
         val settingIds: Set<String> = emptySet()
     )
-
-    internal fun homeRecommendFilterValues(): Map<String, Boolean> = mapOf(
-        FeaturePreferences.REMOVE_HOME_RECOMMEND_ADS to removeHomeRecommendAds,
-        FeaturePreferences.REMOVE_HOME_RECOMMEND_PICTURES to removeHomeRecommendPictures,
-        FeaturePreferences.REMOVE_HOME_RECOMMEND_GAME_PROMOTIONS to removeHomeRecommendGamePromotions,
-        FeaturePreferences.REMOVE_HOME_RECOMMEND_LIVE to removeHomeRecommendLive,
-        FeaturePreferences.REMOVE_HOME_RECOMMEND_PGC to removeHomeRecommendPgc,
-        FeaturePreferences.REMOVE_HOME_RECOMMEND_SPECIAL_CARDS to removeHomeRecommendSpecialCards,
-        FeaturePreferences.REMOVE_HOME_RECOMMEND_COURSES to removeHomeRecommendCourses,
-        FeaturePreferences.REMOVE_HOME_RECOMMEND_LARGE to removeHomeRecommendLarge
-    )
-
-    internal fun homeRecommendFilterSummary(): String {
-        val selected = homeRecommendFilterValues().values.count { it }
-        return if (selected == 0) getString(R.string.home_recommend_filter_summary_none) else {
-            getString(R.string.home_recommend_filter_summary_selected,
-                selected, HomeRecommendFilterCatalog.preferenceKeys.size)
-        }
-    }
-
-    @StringRes
-    internal fun homeRecommendFilterLabel(preferenceKey: String): Int = when (preferenceKey) {
-        FeaturePreferences.REMOVE_HOME_RECOMMEND_ADS -> R.string.remove_home_recommend_ads
-        FeaturePreferences.REMOVE_HOME_RECOMMEND_PICTURES -> R.string.remove_home_recommend_pictures
-        FeaturePreferences.REMOVE_HOME_RECOMMEND_GAME_PROMOTIONS ->
-            R.string.remove_home_recommend_game_promotions
-        FeaturePreferences.REMOVE_HOME_RECOMMEND_LIVE -> R.string.remove_home_recommend_live
-        FeaturePreferences.REMOVE_HOME_RECOMMEND_PGC -> R.string.remove_home_recommend_pgc
-        FeaturePreferences.REMOVE_HOME_RECOMMEND_SPECIAL_CARDS -> R.string.remove_home_recommend_special_cards
-        FeaturePreferences.REMOVE_HOME_RECOMMEND_COURSES -> R.string.remove_home_recommend_courses
-        FeaturePreferences.REMOVE_HOME_RECOMMEND_LARGE -> R.string.remove_home_recommend_large
-        else -> error("Unknown home recommendation filter key: $preferenceKey")
-    }
-
-    internal fun portraitContentFilterValues(): Map<String, Boolean> = mapOf(
-        FeaturePreferences.REMOVE_HOME_RECOMMEND_VERTICAL to removeHomeRecommendVertical,
-        FeaturePreferences.REMOVE_STORY_ADS to removeStoryAds,
-        FeaturePreferences.REMOVE_STORY_LIVE to removeStoryLive,
-        FeaturePreferences.REMOVE_STORY_GAMES to removeStoryGames,
-        FeaturePreferences.REMOVE_STORY_COURSES to removeStoryCourses,
-        FeaturePreferences.REMOVE_STORY_SHORT_DRAMA to removeStoryShortDrama,
-        FeaturePreferences.REMOVE_STORY_SHOPPING to removeStoryShopping,
-        FeaturePreferences.REMOVE_STORY_MUSIC to removeStoryMusic,
-        FeaturePreferences.REMOVE_STORY_BANGUMI to removeStoryBangumi,
-        FeaturePreferences.REMOVE_STORY_MOVIES to removeStoryMovies,
-        FeaturePreferences.REMOVE_STORY_DOCUMENTARIES to removeStoryDocumentaries,
-        FeaturePreferences.REMOVE_STORY_TV to removeStoryTv,
-        FeaturePreferences.REMOVE_STORY_VARIETY to removeStoryVariety
-    )
-
-    internal fun portraitContentFilterSummary(): String {
-        val selected = portraitContentFilterValues().values.count { it }
-        return if (selected == 0) {
-            getString(R.string.portrait_content_filter_summary_none)
-        } else {
-            getString(
-                R.string.portrait_content_filter_summary_selected,
-                selected,
-                PortraitContentFilterCatalog.options.size
-            )
-        }
-    }
-
-    internal fun detailModuleFilterValues(): Map<String, Boolean> = mapOf(
-        FeaturePreferences.REMOVE_DETAIL_HONOR to removeDetailHonor,
-        FeaturePreferences.REMOVE_DETAIL_LIVE_ORDER to removeDetailLiveOrder,
-        FeaturePreferences.REMOVE_DETAIL_UGC_SEASON to removeDetailUgcSeason,
-        FeaturePreferences.REMOVE_DETAIL_UP_VIP_LABEL to removeDetailUpVipLabel,
-        FeaturePreferences.REMOVE_DETAIL_TOPIC_TAGS to removeDetailTopicTags,
-        FeaturePreferences.REMOVE_DETAIL_STAFF_FOLLOW to removeDetailStaffFollow,
-        FeaturePreferences.REMOVE_DETAIL_HOT_BANNER to removeDetailHotBanner
-    )
-
-    internal fun detailModuleFilterSummary(): String {
-        val selected = detailModuleFilterValues().values.count { it }
-        return if (selected == 0) {
-            getString(R.string.detail_module_purify_summary_none)
-        } else {
-            getString(
-                R.string.detail_module_purify_summary_selected,
-                selected,
-                DetailComponentPanelCatalog.preferenceKeys.size
-            )
-        }
-    }
-
-    @StringRes
-    internal fun detailModuleFilterLabel(preferenceKey: String): Int = when (preferenceKey) {
-        FeaturePreferences.REMOVE_DETAIL_HONOR -> R.string.remove_detail_honor
-        FeaturePreferences.REMOVE_DETAIL_LIVE_ORDER -> R.string.remove_detail_live_order
-        FeaturePreferences.REMOVE_DETAIL_UGC_SEASON -> R.string.remove_detail_ugc_season
-        FeaturePreferences.REMOVE_DETAIL_UP_VIP_LABEL -> R.string.remove_detail_up_vip_label
-        FeaturePreferences.REMOVE_DETAIL_TOPIC_TAGS -> R.string.remove_detail_topic_tags
-        FeaturePreferences.REMOVE_DETAIL_STAFF_FOLLOW -> R.string.remove_detail_staff_follow
-        FeaturePreferences.REMOVE_DETAIL_HOT_BANNER -> R.string.remove_detail_hot_banner
-        else -> error("Unknown detail module filter key: ")
-    }
-
-    internal fun videoRelateFilterValues(): Map<String, Boolean> = mapOf(
-        FeaturePreferences.REMOVE_RELATE_COMMERCIAL to removeRelateCommercial,
-        FeaturePreferences.REMOVE_RELATE_GAME to removeRelateGame,
-        FeaturePreferences.REMOVE_RELATE_LIVE to removeRelateLive,
-        FeaturePreferences.REMOVE_RELATE_COURSE to removeRelateCourse,
-        FeaturePreferences.REMOVE_RELATE_SPECIAL to removeRelateSpecial,
-        FeaturePreferences.VIDEO_RELATE_MATCHING_ENHANCEMENT_ENABLED to
-            videoRelateMatchingEnhancementEnabled,
-        FeaturePreferences.VIDEO_RELATE_STRONG_MODE_ENABLED to
-            videoRelateStrongModeEnabled,
-        FeaturePreferences.VIDEO_RELATE_REASON_FILTER_ENABLED to
-            videoRelateReasonFilterEnabled
-    )
-
-    internal fun videoRelateFilterSummary(): String {
-        val selected = VideoRelateFilterCatalog.contentOptions.count {
-            videoRelateFilterValues()[it.preferenceKey] == true
-        }
-        return when {
-            videoRelateMatchingEnhancementEnabled && videoRelateStrongModeEnabled -> getString(
-                R.string.video_relate_filter_summary_strong,
-                selected,
-                VideoRelateFilterCatalog.contentOptions.size
-            )
-            videoRelateMatchingEnhancementEnabled -> getString(
-                R.string.video_relate_filter_summary_enhanced,
-                selected,
-                VideoRelateFilterCatalog.contentOptions.size
-            )
-            selected == 0 -> getString(R.string.video_relate_filter_summary_none)
-            else -> getString(
-                R.string.video_relate_filter_summary_selected,
-                selected,
-                VideoRelateFilterCatalog.contentOptions.size
-            )
-        }
-    }
 
     private fun settingsSearchSectionLabel(section: SettingsSearchSection): String =
         getString(

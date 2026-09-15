@@ -39,9 +39,54 @@ internal object SettingsUiSource {
     // 设置页弹窗外移后的落点约定：ui/activity 下以 Dialogs.kt 结尾的文件。
     // （这行不能写成 KDoc 里的 glob——Kotlin 的块注释是**可嵌套**的，
     //   路径里的 "/" 紧接 "*" 会开一个嵌套注释，把后面整份文件吞掉。）
-    val dialogFileNames: List<String> by lazy {
-        (dir.listFiles() ?: emptyArray())
-            .filter { it.isFile && it.name.endsWith("Dialogs.kt") }
+    val dialogFileNames: List<String> by lazy { named("Dialogs.kt") }
+
+    /**
+     * MainActivity 外移分卷的**文件名后缀**约定。
+     *
+     * 弹窗是第一批外移形态，逻辑分卷（Presenter / Summaries）是第二批。
+     * 两批的结构约束完全一样——不许顶层 `var`、不许注册生命周期回调、
+     * 顶层函数必须挂在 MainActivity 上——所以它们必须落进**同一个扫描集**。
+     *
+     * 2026-09-15 的教训：外移方案原本打算把逻辑分卷命名成不在扫描集里的文件，
+     * 理由是"不被 [function] 扫描，所以后缀不影响门禁"。那是把**覆盖真空**当成了安全：
+     * `SettingsDialogExtractionTest` 的四条结构约束全都只遍历这个集合，
+     * 落在集合外的文件等于完全不受管。真到那一步，1,900 行代码会一次性脱管。
+     *
+     * **后缀要选得够专。** 第一版把 `Controller.kt` 放了进来，结果顺手收编了
+     * `BubbleMotionController.kt` 与 `IconAnchoredMotionController.kt`——这两个是动效控制器，
+     * 根本不是 MainActivity 分卷（一个顶层扩展都没有）。它们碰巧过了四条约束，
+     * 但 C7 的报错文案会给出"请改成 fun MainActivity.<name>"这种对它们而言错误的建议。
+     * 收多了不危险只是失真，收少了才会脱管——两个方向都要避开。
+     *
+     * 加后缀时同步更新 [SettingsUiSourceTest] 里那条"扫描集覆盖所有 MainActivity 扩展"
+     * 的断言——它是这套约定唯一的强制力来源。
+     */
+    private val VOLUME_SUFFIXES = listOf("Dialogs.kt", "Presenter.kt", "Summaries.kt")
+
+    /** 所有外移分卷的文件名（含弹窗），排序后返回。 */
+    val volumeFileNames: List<String> by lazy {
+        VOLUME_SUFFIXES.flatMap(::named).distinct().sorted()
+    }
+
+    private fun named(suffix: String): List<String> = (dir.listFiles() ?: emptyArray())
+        .filter { it.isFile && it.name.endsWith(suffix) }
+        .map(File::getName)
+        .sorted()
+
+    /**
+     * `ui/activity` 下声明了顶层 `fun MainActivity.…` 扩展、却**不在**扫描集里的文件。
+     *
+     * 从 MainActivity 里搬东西出去，落地形态就是在新文件里写这种扩展函数。
+     * 所以"有扩展但不在扫描集"正是**绕过门禁的唯一入口**，由
+     * [SettingsUiSourceTest] 断言它恒为空：新分卷要么用约定后缀命名，要么显式扩充
+     * [VOLUME_SUFFIXES]，没有第三条路可以悄悄溜过去。
+     */
+    fun unscannedMainActivityExtensions(): List<String> {
+        val extension = Regex("""(?m)^(?:internal |private |public )*fun MainActivity\.""")
+        return (dir.listFiles() ?: emptyArray())
+            .filter { it.isFile && it.name.endsWith(".kt") && it.name != "MainActivity.kt" }
+            .filter { it.name !in volumeFileNames && extension.containsMatchIn(code(it.readText())) }
             .map(File::getName)
             .sorted()
     }
@@ -57,12 +102,12 @@ internal object SettingsUiSource {
     /** MainActivity 的源码。 */
     fun mainActivity(): String = file("MainActivity")
 
-    /** 文件名 → 源码：MainActivity 加上所有已外移的弹窗文件。 */
+    /** 文件名 → 源码：MainActivity 加上所有已外移分卷（弹窗与逻辑分卷）。 */
     fun settingsUiFiles(): List<Pair<String, String>> =
         listOf("MainActivity.kt" to file("MainActivity")) +
-            dialogFileNames.map { it to file(it) }
+            volumeFileNames.map { it to file(it) }
 
-    /** MainActivity 与所有已外移弹窗文件拼在一起，供"整体存在性"断言使用。 */
+    /** MainActivity 与所有已外移分卷拼在一起，供"整体存在性"断言使用。 */
     fun all(): String = settingsUiFiles().joinToString("\n") { it.second }
 
     /**

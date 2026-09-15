@@ -13,16 +13,26 @@ import org.junit.Test
  */
 class SettingsDialogExtractionTest {
 
-    private fun dialogFiles(): List<Pair<String, String>> =
-        SettingsUiSource.dialogFileNames.map { it to SettingsUiSource.file(it) }
+    /**
+     * 受本组结构约束管辖的文件：**所有外移分卷**，不只是弹窗。
+     *
+     * 2026-09-15 起从 `dialogFileNames` 换成 `volumeFileNames`：逻辑分卷
+     * （Presenter / Controller / Summaries）与弹窗的退化方向一模一样，
+     * 没有理由只管后者。换之前 `PendingCompatibilityRetry.kt` 就已经是漏网的
+     * ——它写得没问题，但那是运气，门禁根本没在看它。
+     */
+    private fun volumeFiles(): List<Pair<String, String>> =
+        SettingsUiSource.volumeFileNames.map { it to SettingsUiSource.file(it) }
 
     /** 去注释后的源码：文件头注释解释"为什么不能这么写"时不该被判成违规。 */
-    private fun dialogCode(): List<Pair<String, String>> =
-        dialogFiles().map { (name, text) -> name to SettingsUiSource.code(text) }
+    private fun volumeCode(): List<Pair<String, String>> =
+        volumeFiles().map { (name, text) -> name to SettingsUiSource.code(text) }
 
     @Test fun `the dialogs were actually extracted into per-topic files`() {
-        val files = dialogFiles()
-        assertTrue("no *Dialogs.kt found; did the extraction get reverted?", files.size >= 9)
+        // 这条仍按**弹窗**计数：它防的是"弹窗被搬回 MainActivity"，
+        // 逻辑分卷的增减不该把这个下限稀释掉。
+        val dialogs = SettingsUiSource.dialogFileNames
+        assertTrue("no *Dialogs.kt found; did the extraction get reverted?", dialogs.size >= 9)
         val main = SettingsUiSource.mainActivity().lines().size
         // MainActivity 曾经是 13909 行。这条不是为了追求短，而是防止弹窗被搬回去。
         assertTrue("MainActivity is $main lines; dialogs look like they moved back in",
@@ -38,7 +48,7 @@ class SettingsDialogExtractionTest {
      */
     @Test fun `extracted dialog files declare no top-level mutable state`() {
         val offenders = mutableListOf<String>()
-        dialogCode().forEach { (name, code) ->
+        volumeCode().forEach { (name, code) ->
             Regex("""(?m)^(?:private |internal |public )*var\s+(\w+)""")
                 .findAll(code)
                 .forEach { offenders += "$name: var ${it.groupValues[1]}" }
@@ -54,7 +64,7 @@ class SettingsDialogExtractionTest {
      */
     @Test fun `extracted dialog files do not register lifecycle-scoped callbacks`() {
         val offenders = mutableListOf<String>()
-        dialogCode().forEach { (name, code) ->
+        volumeCode().forEach { (name, code) ->
             listOf("registerForActivityResult", "registerReceiver(", "getOnBackInvokedDispatcher")
                 .filter { code.contains(it) }
                 .forEach { offenders += "$name: $it" }
@@ -65,7 +75,7 @@ class SettingsDialogExtractionTest {
     /** 每个外移文件的顶层函数都必须挂在 MainActivity 上（或是不需要 Activity 的纯函数）。 */
     @Test fun `top-level functions are MainActivity extensions or pure helpers`() {
         val offenders = mutableListOf<String>()
-        dialogFiles().forEach { (name, text) ->
+        volumeFiles().forEach { (name, text) ->
             SettingsUiSource.declaredFunctions(text, indent = 0).forEach { (fn, body) ->
                 val header = body.substringBefore('\n')
                 val isExtension = header.contains("fun MainActivity.")
@@ -88,7 +98,7 @@ class SettingsDialogExtractionTest {
      */
     @Test fun `files that concatenate setText content carry the same file-level suppression`() {
         val offenders = mutableListOf<String>()
-        dialogFiles().forEach { (name, text) ->
+        volumeFiles().forEach { (name, text) ->
             val concatenates = Regex("""text = getString\([^)]*\)\s*\+""").containsMatchIn(text) ||
                 Regex("""text = [^\n]*\+ getString\(""").containsMatchIn(text)
             if (concatenates && !text.contains("""@file:Suppress("SetTextI18n")""")) {
@@ -107,7 +117,7 @@ class SettingsDialogExtractionTest {
             "fun createModalContainer(",
             "fun dismissWithAnimation("
         ).forEach { assertTrue(it, main.contains(it)) }
-        dialogFiles().forEach { (name, text) ->
+        volumeFiles().forEach { (name, text) ->
             assertFalse("$name must not fork the presenter",
                 text.contains("fun MainActivity.presentSizedModalDialog("))
         }
