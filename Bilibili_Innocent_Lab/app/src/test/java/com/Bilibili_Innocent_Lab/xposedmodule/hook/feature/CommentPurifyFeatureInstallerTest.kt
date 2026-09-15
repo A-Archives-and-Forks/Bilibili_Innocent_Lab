@@ -16,6 +16,34 @@ class CommentPurifyFeatureInstallerTest {
         private val displayText: String
     )
 
+    /**
+     * 判据是「跳搜索」这个类别，不是某个 `from` 值。
+     *
+     * 真值取自 2026-09-15 的 `Reply/MainList` 抓包：
+     * `Content.urls{}.value.app_url_schema = bilibili://search?from=appcommentline_search…`。
+     */
+    @Test
+    fun `the search jump criterion matches the captured comment link by category`() {
+        assertTrue(CommentPurifyFeatureInstaller.isSearchJumpUri(
+            "bilibili://search?from=appcommentline_search&search_from_source=appcommentline_search" +
+                "&direct_return=true&keyword=%E6%A2%81%E5%BF%97%E8%B6%85&seid=2798521577071992304"))
+        // 同类别的其它 from 也必须命中——不能退化成"一个词一个开关"。
+        assertTrue(CommentPurifyFeatureInstaller.isSearchJumpUri("bilibili://search?from=whatever"))
+        assertTrue(CommentPurifyFeatureInstaller.isSearchJumpUri("bilibili://search/result?keyword=x"))
+    }
+
+    @Test
+    fun `the search jump criterion does not swallow neighbouring hosts or the web url`() {
+        // 前缀写法会把这一条误判成命中，类别判据不会。
+        assertFalse(CommentPurifyFeatureInstaller.isSearchJumpUri("bilibili://searchxyz?keyword=x"))
+        assertFalse(CommentPurifyFeatureInstaller.isSearchJumpUri("bilibili://video/117246567387357"))
+        // pc_url(13) 是无 scheme 的网页地址，不归这条判据管（移动端不走它跳转）。
+        assertFalse(CommentPurifyFeatureInstaller.isSearchJumpUri(
+            "//search.bilibili.com/all?from_source=webcommentline_search&keyword=x"))
+        assertFalse(CommentPurifyFeatureInstaller.isSearchJumpUri(null))
+        assertFalse(CommentPurifyFeatureInstaller.isSearchJumpUri(""))
+    }
+
     @Test
     fun `blocks only implicit comment quick reply origins`() {
         assertTrue(CommentPurifyFeatureInstaller.shouldBlockQuickReply(true, "CARD"))

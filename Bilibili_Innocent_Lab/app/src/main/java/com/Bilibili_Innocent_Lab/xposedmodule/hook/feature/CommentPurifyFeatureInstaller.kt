@@ -56,6 +56,9 @@ internal class CommentPurifyFeatureInstaller(
             val beforeInstalled = installedCount
             val beforeExpected = expectedCount
             val beforeMissing = missingGroups.size
+            expectedCount += 1
+            if (installRequestSideOptOut(environment)) installedCount += 1
+            else missingGroups += "search-request"
             val urlPoints = adapted.urlMapGetters
             if (urlPoints.isEmpty()) missingGroups += "search"
             expectedCount += urlPoints.size
@@ -82,6 +85,52 @@ internal class CommentPurifyFeatureInstaller(
                     environment.logError(
                         "comment_purify_search_$index",
                         "[BIL] 评论搜索跳转净化 Hook 注册失败(" +
+                            "${point.className}#${point.methodName}): $throwable"
+                    )
+                }
+            }
+            // 第二道防线：把跳转目标字段本身置空。
+            //
+            // **必须与上面那道互不知情**（AGENTS 纵深防御条目）：各自 try/catch、
+            // 各自计入分母、各自降级。上面摘不掉 map 条目时，这里仍然能让链接点不动；
+            // 这里定位不到时，上面照常工作。两道都失败才是真的失效。
+            //
+            // 判据是"渲染侧读这个字段才能跳转"，31 个本地宿主逐版实测它每一版都有
+            // 跨 dex 消费者，所以不是空 Hook；反过来 `getUrlsOrDefault` /
+            // `getUrlsOrThrow` / `getUrlsCount` 31 版全是 0 消费者，故意不挂。
+            val schemaPoints = adapted.urlSchemaGetters
+            if (schemaPoints.isEmpty()) missingGroups += "search-schema"
+            expectedCount += schemaPoints.size
+            schemaPoints.forEachIndexed { index, point ->
+                runCatching {
+                    environment.registrar.adapted("comment.purify.url_schema.$index", point) {
+                        after {
+                            val current = result as? String ?: return@after
+                            environment.reportRuntimeEvidence("comments_search_links_removed", FeatureRuntimeStage.OBSERVED)
+                            if (isSearchJumpUri(current)) {
+                                // 置空后的实际表现是「**照常显示、点击不跳转**」，不是不显示。
+                                // 9.11.0 反汇编实证（classes4.dex）：
+                                // ① `Ph.a#e(Content, ReplyControl)` 只是逐字段把 Url 拷进
+                                //    `comment2.model.UrlInfo`（title/prefixIcon/appUrl/…），
+                                //    建 span 时**不看** appUrl 是否为空；
+                                // ② 真正的判空在点击侧 `Dh.v#e(Context, UrlInfo, …)`：
+                                //    `if (appUrl == null || appUrl.length() <= 0) return;`
+                                //    早退在 `BLRouter.routeTo` **之前**；
+                                //    `UrlInfo.isInternalSchema()` 也对空串返回 false。
+                                // 所以这道防线的降级形态是"看得见但点不动"，
+                                // 而防线①（摘 map 条目）才是"关键词连带搜索小图标一起不显示"。
+                                // 两者都不动 title / message，评论文字和表情照旧。
+                                result = ""
+                                environment.reportRuntimeEvidence("comments_search_links_removed",
+                                    FeatureRuntimeStage.APPLIED)
+                            }
+                        }
+                    }
+                    installedCount += 1
+                }.onFailure { throwable ->
+                    environment.logError(
+                        "comment_purify_search_schema_$index",
+                        "[BIL] 评论搜索跳转目标净化 Hook 注册失败(" +
                             "${point.className}#${point.methodName}): $throwable"
                     )
                 }
@@ -410,7 +459,7 @@ internal class CommentPurifyFeatureInstaller(
         return fields.any { field ->
             runCatching { field.get(value) as? CharSequence }
                 .getOrNull()
-                ?.startsWith(SEARCH_URI_PREFIX, ignoreCase = true) == true
+                ?.let { isSearchJumpUri(it) } == true
         }
     }
 
@@ -503,6 +552,58 @@ internal class CommentPurifyFeatureInstaller(
         return installed
     }
 
+
+    /**
+     * 第 0 道防线：走宿主自己的开关，**让服务端一开始就不下发**。
+     *
+     * 2026-09-15 反汇编把整条链追通了（9.11.0）：
+     * ```
+     * CommentViewModel.<init>(Bundle)
+     *   Bundle["search_word_disabled"] → toBooleanStrictOrNull
+     *     → RemoteContentFilter(searchWordDisabled, weSearchDisabled, filterTagDisabled)
+     *       → 评论状态 bl.m.f
+     *         → 构建 MainListReq.extra 的那份 JSON：
+     *              if (searchWordDisabled) put("disable_underline", true)
+     *           → 随请求发出（extra 里同时有 spmid/from_spmid/track_id，与抓包逐字段对得上）
+     * ```
+     * 名字也对得上：评论里的搜索关键词就是带下划线渲染的（`Url.underline` 是字段 11）。
+     * 宿主自己在用这个开关——会员购商品详情页 `com.mall.ui.page.detail.t#run()`
+     * 就往 `CommentV3Fragment` 的参数里塞 `search_word_disabled`。
+     *
+     * 类名未混淆、31 个本地宿主（8.84.0–9.12.0）逐版实测**类与键都零缺失**，
+     * 所以按名解析（与 `LegacyFeedbackPanel` 同一套做法），不接 VersionAdapter。
+     *
+     * **只在 Bundle 里没有这个键时才写**：宿主自己已经设过（会员购那类页面）就不覆盖，
+     * 也不去动 `we_search_disabled` / `filter_tag_disabled`——那是另外两件事。
+     */
+    private fun installRequestSideOptOut(environment: HookEnvironment): Boolean = runCatching {
+        val owner = KavaMemberLookup.classOrNull(
+            environment.classLoader, COMMENT_VIEW_MODEL_CLASS
+        ) ?: error("missing-comment-view-model")
+        val constructor = KavaMemberLookup.declaredConstructors(owner) {
+            it.parameterTypes.contentEquals(arrayOf(classOf<android.os.Bundle>()))
+        }.singleOrNull() ?: error("ambiguous-or-missing-bundle-constructor")
+        environment.registrar.constructor("comment.purify.search.request", constructor) {
+            before {
+                val bundle = args.firstOrNull() as? android.os.Bundle ?: return@before
+                environment.reportRuntimeEvidence("comments_search_links_removed", FeatureRuntimeStage.OBSERVED)
+                if (bundle.containsKey(SEARCH_WORD_DISABLED_KEY)) return@before
+                bundle.putString(SEARCH_WORD_DISABLED_KEY, "true")
+                environment.reportRuntimeEvidence("comments_search_links_removed", FeatureRuntimeStage.APPLIED)
+                environment.logInfo(
+                    "comment_purify_search_request",
+                    "[BIL] 评论请求已声明 $SEARCH_WORD_DISABLED_KEY=true"
+                )
+            }
+        }
+        true
+    }.onFailure { throwable ->
+        environment.logError(
+            "comment_purify_search_request_missing",
+            "[BIL] 评论搜索链接请求侧开关不可用，退回响应侧两道防线: $throwable"
+        )
+    }.getOrDefault(false)
+
     private fun missing(
         environment: HookEnvironment,
         reason: String
@@ -519,7 +620,42 @@ internal class CommentPurifyFeatureInstaller(
         const val ID = "comment_purify"
         private const val TARGET_PACKAGE = "tv.danmaku.bili"
         private const val CHANNEL_STATUS = "comment_purify_status"
-        private const val SEARCH_URI_PREFIX = "bilibili://search"
+
+        /** 未混淆；31 个本地宿主（8.84.0–9.12.0）逐版实测零缺失。 */
+        internal const val COMMENT_VIEW_MODEL_CLASS =
+            "com.bilibili.app.comment3.viewmodel.CommentViewModel"
+
+        /** 宿主自己的启动参数键；同上，31 版零缺失。值按 `toBooleanStrictOrNull` 解析。 */
+        internal const val SEARCH_WORD_DISABLED_KEY = "search_word_disabled"
+
+        /**
+         * 一次会话里最多记几条"服务端到底还发不发"的观测。
+         *
+         * 这条日志是**判据不是装饰**：请求侧开关开着时，如果 map 仍然带搜索条目，
+         * 说明服务端没吃这个 flag、真正生效的是响应侧那两道；如果 map 恒为空，
+         * 才是"服务端不下发"。有界，记满彻底静默。
+         */
+        // 2026-09-15 曾在这里放过一条"服务端到底还发不发 urls"的取样探针，
+        // 第 0 道防线实证通过后已移除：它在每条评论的映射路径上都要做一次
+        // AtomicInteger 自增，属于纯诊断开销。退化仍然看得见——`getUrlsMap`
+        // 那道钩子本来就按 capability 上报 OBSERVED/APPLIED，服务端要是重新下发
+        // 搜索链接，第 1 道会开始报 APPLIED 且带删除条数。取样口径的两条教训
+        // 记在 AGENTS 与长期文档 2026-09-15（三）里，别照着第一版重写。
+
+        /**
+         * 「这是不是一条跳搜索的链接」——**全仓唯一一份判据**。
+         *
+         * 直接复用 [DetailUnitedPresentationPurifyPolicy.isSearchJumpLabelUri]（scheme=bilibili
+         * ＋ host=search），不再自己留一个 `startsWith("bilibili://search")`：
+         * 前缀写法会把 `bilibili://searchxyz` 这种误判成命中，也接不住
+         * `bilibili://search/` 这类写法；更重要的是档案红线——同一类判据不许存两份，
+         * 复制出来的那份迟早和主份漂移。
+         *
+         * **不按 `from=appcommentline_search` 这个更精确的标记判**：那是"一个词一个开关"，
+         * 宿主换个 from 值就静默失效；类别判据（跳搜索）才是稳的。
+         */
+        internal fun isSearchJumpUri(value: CharSequence?): Boolean =
+            DetailUnitedPresentationPurifyPolicy.isSearchJumpLabelUri(value?.toString())
 
         /** 只遍历已适配的头部装饰小容器，保留其它徽章、图片与长按监听。 */
         internal fun hideTypedChildren(root: ViewGroup, targetClass: Class<*>): Int {

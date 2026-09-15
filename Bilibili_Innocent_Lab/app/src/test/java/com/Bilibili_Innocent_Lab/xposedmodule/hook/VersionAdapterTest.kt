@@ -1462,6 +1462,49 @@ class VersionAdapterTest {
         })
     }
 
+    /**
+     * 搜索链接的第二道防线：`Url#getAppUrlSchema`。
+     *
+     * 替身上同时放了 `getTitle` / `getPcUrl` 和一个带参重载，用来证明定位器
+     * 只按"无参 + 返回 String + 方法名"选中唯一那一个，没有顺手捞别的读取方法。
+     */
+    @Test
+    fun `locates the comment search jump target getter and nothing else on Url`() {
+        val points = VersionAdapter.locateCommentPurify(requireNotNull(javaClass.classLoader))
+            ?.urlSchemaGetters.orEmpty()
+
+        assertEquals(1, points.size)
+        assertEquals("com.bapis.bilibili.main.community.reply.v1.Url", points.single().className)
+        assertEquals("getAppUrlSchema", points.single().methodName)
+        assertEquals(emptyList<String>(), points.single().paramClassNames)
+    }
+
+    /**
+     * 老缓存里没有 `url_schemas` 这个键时降级成空列表，不能解析失败。
+     *
+     * 这正是只抬 `RULE_VERSION`、不抬 `SCHEMA_VERSION` 的前提：形状兼容 ⇒ 老缓存能读，
+     * 抬 rule ⇒ 指纹变化 ⇒ 下次启动重定位补上第二道防线。
+     */
+    @Test
+    fun `a cached comment purify payload without the schema key degrades instead of failing`() {
+        val full = VersionAdapter.CommentPurifyPoints(
+            urlMapGetters = listOf(VersionAdapter.HookPoint("A", "getUrlsMap", emptyList())),
+            emptyPageGetters = emptyList(),
+            voteWidgetMethods = emptyList(),
+            follow = null,
+            qoe = null,
+            operations = emptyList(),
+            urlSchemaGetters = listOf(VersionAdapter.HookPoint("B", "getAppUrlSchema", emptyList()))
+        )
+        val json = full.toJson()
+        assertEquals(full, VersionAdapter.CommentPurifyPoints.fromJson(json))
+
+        json.remove("url_schemas")
+        val degraded = VersionAdapter.CommentPurifyPoints.fromJson(json)
+        assertEquals(emptyList<VersionAdapter.HookPoint>(), degraded.urlSchemaGetters)
+        assertEquals(full.urlMapGetters, degraded.urlMapGetters)
+    }
+
     @Test
     fun `locates comment filter through exact public protobuf list and signal getters`() {
         val points = VersionAdapter.locateCommentFilter(requireNotNull(javaClass.classLoader))

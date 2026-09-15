@@ -1629,10 +1629,20 @@ object VersionAdapter {
         val follow: CommentFollowPoints?,
         val qoe: CommentOptionalPayloadPoint?,
         val operations: List<CommentOptionalPayloadPoint>,
-        val quickReplyDialogMethods: List<HookPoint> = emptyList()
+        val quickReplyDialogMethods: List<HookPoint> = emptyList(),
+        /**
+         * `reply.v1.Url#getAppUrlSchema`：搜索链接的**第二道防线**。
+         *
+         * 与 [urlMapGetters] 各自独立：前者摘掉整条 map 条目（连搜索小图标一起没有），
+         * 后者把跳转目标本身置空。渲染侧只要还想跳转，就绕不开这个字段——
+         * 31 个本地宿主（8.84.0–9.12.0）逐版实测它**每一版都有跨 dex 消费者**，
+         * 不是空 Hook。两道必须互不知情，见 AGENTS 的纵深防御条目。
+         */
+        val urlSchemaGetters: List<HookPoint> = emptyList()
     ) {
         fun toJson(): JSONObject = JSONObject().apply {
             put("urls", JSONArray().apply { urlMapGetters.forEach { put(it.toJson()) } })
+            put("url_schemas", JSONArray().apply { urlSchemaGetters.forEach { put(it.toJson()) } })
             put(
                 "empty_pages",
                 JSONArray().apply { emptyPageGetters.forEach { put(it.toJson()) } }
@@ -1673,6 +1683,13 @@ object VersionAdapter {
                         }
                     },
                     o.optJSONArray("quick_reply")?.let { methods ->
+                        (0 until methods.length()).map {
+                            HookPoint.fromJson(methods.getJSONObject(it))
+                        }
+                    }.orEmpty(),
+                    // 老缓存没有这个键：降级成空列表，第二道防线这次不装，
+                    // 由 RULE_VERSION 抬升保证下次启动会重定位补上。
+                    o.optJSONArray("url_schemas")?.let { methods ->
                         (0 until methods.length()).map {
                             HookPoint.fromJson(methods.getJSONObject(it))
                         }
@@ -2040,8 +2057,10 @@ object VersionAdapter {
                     (value.urlMapGetters.isNotEmpty() || value.emptyPageGetters.isNotEmpty() ||
                         value.voteWidgetMethods.isNotEmpty() || value.follow != null ||
                         value.qoe != null || value.operations.isNotEmpty() ||
-                        value.quickReplyDialogMethods.isNotEmpty()) &&
+                        value.quickReplyDialogMethods.isNotEmpty() ||
+                        value.urlSchemaGetters.isNotEmpty()) &&
                         value.urlMapGetters.all { it.isValid() } &&
+                        value.urlSchemaGetters.all { it.isValid() } &&
                         value.emptyPageGetters.all {
                             it.contentGetter.isValid() && it.defaultInstanceGetter.isValid()
                         } && value.voteWidgetMethods.all { it.isValid() } &&
@@ -2553,6 +2572,24 @@ object VersionAdapter {
     private val COMMENT_CONTENT_CLASS_CANDIDATES = listOf(
         "com.bapis.bilibili.main.community.reply.v1.Content",
         "com.bapis.bilibili.p4311main.community.reply.p4312v1.Content"
+    )
+
+    /**
+     * 搜索链接的载体消息。
+     *
+     * 2026-09-15 抓包定死的形状（`Reply/MainList` 响应，字段号即 wire 协议）：
+     * `MainListReply.replies(2) → ReplyInfo.content(12) → Content.urls(5)
+     * → map value → Url.app_url_schema(4) = bilibili://search?from=appcommentline_search…`。
+     * 同一条 `Url` 还带 `title(1)`＝被链接的关键词、`prefix_icon(3)`＝搜索小图标、
+     * `pc_url(13)`＝网页版地址。
+     *
+     * 31 个本地宿主逐版核对：类名恒为 `com.bapis...reply.v1.Url`（`com.bapis` 不混淆），
+     * `Url` 恒有 14 个字段号。`p4311main` 那种拼法是 jadx 的重命名产物，
+     * **没有任何一个真实 APK 用过**，保留只为兼容历史缓存里可能写进去的值。
+     */
+    private val COMMENT_URL_CLASS_CANDIDATES = listOf(
+        "com.bapis.bilibili.main.community.reply.v1.Url",
+        "com.bapis.bilibili.p4311main.community.reply.p4312v1.Url"
     )
     private val COMMENT_EMPTY_PAGE_OWNER_CANDIDATES = listOf(
         "com.bapis.bilibili.main.community.reply.v1.SubjectControl",
@@ -6047,6 +6084,20 @@ object VersionAdapter {
             .distinctBy(Method::toGenericString)
             .map { it.toHookPoint() }
             .toList()
+        // 第二道防线：跳转目标字段本身。只认无参、返回 String 的公开读取方法，
+        // 不按方法名以外的任何宿主结构猜测；类不在就整条不装（空列表 → partial）。
+        val urlSchemaGetters = COMMENT_URL_CLASS_CANDIDATES.asSequence()
+            .mapNotNull { KavaMemberLookup.classOrNull(loader, it) }
+            .flatMap { owner ->
+                KavaMemberLookup.declaredMethods(owner, makeAccessible = true) { method ->
+                    !method.isStatic && method.parameterCount == 0 &&
+                        method.name == "getAppUrlSchema" &&
+                        method.returnType == classOf<String>()
+                }.asSequence()
+            }
+            .distinctBy(Method::toGenericString)
+            .map { it.toHookPoint() }
+            .toList()
         val emptyPageGetters = COMMENT_EMPTY_PAGE_OWNER_CANDIDATES.asSequence()
             .mapNotNull { KavaMemberLookup.classOrNull(loader, it) }
             .mapNotNull { owner ->
@@ -6220,7 +6271,8 @@ object VersionAdapter {
                 followPoints,
                 qoePoint,
                 operationPoints,
-                quickReplyDialogMethods
+                quickReplyDialogMethods,
+                urlSchemaGetters
             )
         }
     }.getOrNull()

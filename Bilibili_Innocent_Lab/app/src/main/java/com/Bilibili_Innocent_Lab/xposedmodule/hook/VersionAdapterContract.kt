@@ -18,7 +18,15 @@ internal object VersionAdapterContract {
      * owner 搬家，`AdaptResult` JSON 形状没有变化，所以只抬规则版本，不抬 schema。
      * 快路径指纹包含 rule，旧缓存会重定位；旧候选仍保留以维持跨版本回退。
      */
-    const val RULE_VERSION = 60
+    /**
+     * 60 → 61（2026-09-15，评论搜索链接加第二道防线）：
+     * `CommentPurifyPoints` **新增 `url_schemas` 键**，定位
+     * `reply.v1.Url#getAppUrlSchema`。JSON 只是新增键、老缓存缺它时降级成空列表，
+     * `AdaptResult` 形状没变，所以只抬规则版本、不抬 schema。
+     * 但必须抬——快路径指纹含 rule，不抬的话已经缓存过的设备永远拿不到新定位点，
+     * 第二道防线会静默缺席。
+     */
+    const val RULE_VERSION = 61
 
     /**
      * 51 → 52（2026-09-11，9.11.0(9110400) 适配）：
