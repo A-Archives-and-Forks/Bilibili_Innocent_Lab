@@ -92,6 +92,15 @@ internal object ReleaseHighlightsCatalog {
             HighlightDestination("player.decode.mode")),
         ReleaseHighlight("component-library-download", HighlightKind.NEW, R.string.highlights_component_library,
             HighlightDestination("client.component_library.download.blocked")),
+        // selectors / rules 各自成条（门禁要求每个新增设置都有导航目标），两条指向同一个
+        // 面板入口；第二条借 standaloneTitleRes 取「全量禁止」的标题，免得列表里两行同名。
+        ReleaseHighlight("component-library-pools", HighlightKind.NEW,
+            R.string.highlights_component_pool_pick,
+            HighlightDestination("client.component_library.blocked_pools.selectors")),
+        ReleaseHighlight("component-library-pools-all", HighlightKind.NEW,
+            R.string.highlights_component_pool_block_all,
+            HighlightDestination("client.component_library.blocked_pools.rules"),
+            standaloneTitleRes = R.string.component_picker_block_all),
         // 开关本体住在「管理推荐屏蔽」弹窗里，所以导航目标绑在那一行入口上
         // （MainActivity 里 settingsDestinations.bind 的那处），点进去再打开面板。
         ReleaseHighlight("recommend-feedback-auto-confirm", HighlightKind.NEW,

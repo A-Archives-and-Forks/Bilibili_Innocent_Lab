@@ -67,7 +67,7 @@ internal object DiagnosticCapabilityCatalog {
         DiagnosticCapabilityDefinition("mine_vip_space_kept", "mine_vip_purify", R.string.keep_mine_vip_space, setOf("mine.vip.space_kept")),
         DiagnosticCapabilityDefinition("mine_component_filter", "mine_component_filter", R.string.custom_mine_component_hide, setOf("mine.components.hidden_rules", "mine.components.hidden_ids", "mine.components.hidden_selectors")),
         DiagnosticCapabilityDefinition("block_app_update", "block_app_update", R.string.block_app_update, setOf("client.update_prompt.blocked")),
-        DiagnosticCapabilityDefinition("block_component_library_download", "block_component_library_download", R.string.block_component_library_download, setOf("client.component_library.download.blocked"), introducedCatalogVersion = 12),
+        DiagnosticCapabilityDefinition("block_component_library_download", "block_component_library_download", R.string.block_component_library_download, setOf("client.component_library.download.blocked", "client.component_library.blocked_pools.rules", "client.component_library.blocked_pools.selectors"), introducedCatalogVersion = 12),
         DiagnosticCapabilityDefinition("player_codec_preference", "player_capabilities", R.string.player_codec_preference, setOf("player.codec.preference"), introducedCatalogVersion = 12),
         DiagnosticCapabilityDefinition("player_decode_mode", "player_capabilities", R.string.player_decode_mode, setOf("player.decode.mode"), introducedCatalogVersion = 12),
         DiagnosticCapabilityDefinition("dynamic_city_tab_hidden", "dynamic_tabs_purify", R.string.hide_dynamic_city_tab, setOf("dynamic.city_tab.hidden")),

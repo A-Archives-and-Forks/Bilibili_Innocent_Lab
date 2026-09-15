@@ -138,6 +138,8 @@ internal object MineComponentSelector {
             ?: title?.let { "home_tab:title:${normalize(it)}" }
         // 首页子组件：标识只有混淆类名，放在 id 里；title 仅作展示，不参与键。
         "home_component" -> id?.let { "home_component:id:${normalize(it)}" }
+        // 池名就是稳定标识，没有第二个候选；空名永不成键，避免匿名池被勾成"全选"。
+        "component_pool" -> id?.takeIf(String::isNotBlank)?.let { "component_pool:${normalize(it)}" }
         "section" -> id?.toLongOrNull()?.takeIf { it > 0 }?.let { "tid:$it" }
         "author" -> id?.takeIf(String::isNotBlank)?.let { "author:name:${normalize(it)}" }
         else -> null
@@ -183,6 +185,7 @@ internal object MineComponentSnapshotCodec {
         "home_tab",                              // 首页顶栏 Tab
         "home_component",                        // 首页子组件（标识是混淆类名）
         "section", "author",                    // 原生面板中显式选择的标签、UP
+        "component_pool",                        // 组件库资源池（标识就是池名）
     )
 
     const val SURFACE_MINE = "mine"
@@ -206,20 +209,40 @@ internal object MineComponentSnapshotCodec {
      * 标签进标签名单、UP 进 UP 名单，两者在模块设置里是两个独立入口。
      */
     const val SURFACE_AUTHOR_PICKS = "author_picks"
+
+    /**
+     * 组件库资源池（哔哩哔哩存储设置里的「App基础组件库」）。
+     *
+     * ⚠️ **累积面，不是列表面。** 宿主的清单请求按需分片下发，一次 `ModuleMoss.list`
+     * 只回这次要用的池和模块，不是全量目录。2026-09-15 真机实测：该设备
+     * `app_mod_resource/manifest/` 下有 17 个池、8549 个文件 / 442.6 MiB，
+     * 而单次响应只带了 `appletBasic` 的 1 个模块——按列表面"整份替换"发布时，
+     * 面板里就只剩这一条。见 [ACCUMULATING_SURFACES] 与 `ComponentPoolCatalog`。
+     */
+    const val SURFACE_COMPONENT_POOLS = "component_pools"
     val ALLOWED_SURFACES = setOf(
         SURFACE_MINE, SURFACE_BOTTOM_BAR, SURFACE_HOME_TABS, SURFACE_HOME_COMPONENTS,
-        SURFACE_SECTION_PICKS, SURFACE_AUTHOR_PICKS
+        SURFACE_SECTION_PICKS, SURFACE_AUTHOR_PICKS, SURFACE_COMPONENT_POOLS
     )
 
     /**
-     * "点一次记一条"的累积面，与其余四个"每次扫描给出完整列表"的列表面语义相反。
+     * 提交内容只是**本次宿主进程**所见片段的面，与"每次扫描给出完整列表"的列表面相反。
      *
-     * 列表面每次提交的就是当前页面的全部候选，整份替换才是对的；这两个面的提交只是
-     * **本次宿主进程**里累积到的点选（累积器在内存，见 [ScanSnapshotPublisher]）。
-     * 2026-09-15 真机实测：先点的 `tid:79793` 在宿主进程重启后被新点的 `tid:13160`
-     * 整份覆盖——用户还没来得及在模块里确认，记录就没了。所以落盘时必须与上一份取并集。
+     * 列表面每次提交的就是当前页面的全部候选，整份替换才是对的。这三个面不是：
+     *
+     * - `section_picks` / `author_picks`：进程内累积到的**点选**（累积器在内存，
+     *   见 [ScanSnapshotPublisher]）。2026-09-15 真机实测：先点的 `tid:79793`
+     *   在宿主进程重启后被新点的 `tid:13160` 整份覆盖——用户还没来得及在模块里确认，
+     *   记录就没了。
+     * - `component_pools`：宿主**按需分片**下发资源清单，进程内累积到的只是这一场
+     *   恰好请求过的池（见 `ComponentPoolCatalog`）。同日真机实测：磁盘上 17 个池，
+     *   而落盘快照只剩最后一片里的 `appletBasic` 一条。
+     *
+     * 三者的落盘都必须与上一份取并集，否则新的一片会把攒了很久的候选打回原形。
      */
-    val ACCUMULATING_SURFACES = setOf(SURFACE_SECTION_PICKS, SURFACE_AUTHOR_PICKS)
+    val ACCUMULATING_SURFACES = setOf(
+        SURFACE_SECTION_PICKS, SURFACE_AUTHOR_PICKS, SURFACE_COMPONENT_POOLS
+    )
 
     /**
      * 累积面与上一份已落盘内容取并集；列表面原样返回。

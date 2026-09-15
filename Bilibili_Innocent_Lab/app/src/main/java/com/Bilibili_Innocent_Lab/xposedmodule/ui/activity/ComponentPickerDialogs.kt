@@ -263,11 +263,29 @@ internal fun MainActivity.showComponentPickerDialog(
 
 internal fun MainActivity.showComponentManualRuleEditor(spec: ComponentPickerSurface) {
     val anchor = spec.summaryView()
-    showRuleEditorDialog(spec.titleRes, spec.hintRes, spec.currentRules(), anchor) { value ->
+    showRuleEditorDialog(
+        spec.titleRes, spec.hintRes, spec.currentRules(), anchor, spec.blockAllSentinel
+    ) { value ->
         spec.onRulesSaved(value)
         prefs().edit { putString(spec.rulesKey, value) }
         spec.refreshSummary()
     }
+}
+
+/**
+ * 手填规则里是否已含"全量"哨兵。
+ *
+ * 哨兵必须**独占一项**才算数：`*` 是通配语义，混在别的名字里（比如 `live*`）
+ * 不能当成"全选"，否则用户写个近似名就意外全拦了。
+ */
+private fun String.containsSentinel(sentinel: String): Boolean =
+    split(',', '，', ';', '；', '\n', '\r').any { it.trim() == sentinel }
+
+private fun String.withSentinel(sentinel: String, enabled: Boolean): String {
+    val rest = split(',', '，', ';', '；', '\n', '\r')
+        .map(String::trim)
+        .filter { it.isNotEmpty() && it != sentinel }
+    return (if (enabled) listOf(sentinel) + rest else rest).joinToString("\n")
 }
 
 /** 自定义隐藏规则编辑器：沿用项目模态弹窗与统一退场动画。 */
@@ -276,11 +294,15 @@ internal fun MainActivity.showRuleEditorDialog(
     @StringRes hintRes: Int,
     initialValue: String,
     anchor: View? = null,
+    blockAllSentinel: String? = null,
     onConfirm: (String) -> Unit
 ) {
     val density = resources.displayMetrics.density
     val dialog = Dialog(this)
     val container = createModalContainer()
+    // 扫描没结果时这个编辑器就是唯一入口，逐条手打池名并不现实，
+    // 所以给一个「全量禁止」开关；它写的是 `*` 哨兵，与手填 `*` 完全等价。
+    var blockAll = blockAllSentinel != null && initialValue.containsSentinel(blockAllSentinel)
 
     container.addView(
         NativeTextView(this).apply {
@@ -331,6 +353,43 @@ internal fun MainActivity.showRuleEditorDialog(
             ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = (14 * density).toInt() }
     )
+
+    if (blockAllSentinel != null) {
+        val blockAllSwitch = com.Bilibili_Innocent_Lab.xposedmodule.ui.view
+            .MaterialSwitch(this, null).apply {
+                text = getString(R.string.component_picker_block_all)
+                setTextColor(getColor(R.color.colorTextDark))
+                textSize = 14f
+                isChecked = blockAll
+                setOnCheckedChangeListener { _, checked ->
+                    blockAll = checked
+                    // 全量开着时逐条名单没有意义，置灰避免"我填了却不生效"的困惑。
+                    editor.isEnabled = !checked
+                    editor.alpha = if (checked) 0.45f else 1f
+                }
+            }
+        editor.isEnabled = !blockAll
+        editor.alpha = if (blockAll) 0.45f else 1f
+        container.addView(
+            blockAllSwitch,
+            NativeLinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (14 * density).toInt() }
+        )
+        container.addView(
+            NativeTextView(this).apply {
+                text = getString(R.string.component_picker_block_all_summary)
+                textColor = getColor(R.color.colorTextGray)
+                textSize = 12f
+                setLineSpacing(4 * density, 1f)
+            },
+            NativeLinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (4 * density).toInt() }
+        )
+    }
 
     val buttonRow = NativeLinearLayout(this).apply {
         orientation = NativeLinearLayout.HORIZONTAL
@@ -387,7 +446,10 @@ internal fun MainActivity.showRuleEditorDialog(
             isClickable = true
             isFocusable = true
             setOnClickListener {
-                val value = editor.textToString().trim()
+                val typed = editor.textToString().trim()
+                val value = blockAllSentinel
+                    ?.let { typed.withSentinel(it, blockAll) }
+                    ?: typed
                 dismissWithAnimation(dialog, container) { onConfirm(value) }
             }
         },

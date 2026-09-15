@@ -21,7 +21,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.settings.appearance.ModalBackdropB
 internal object SettingsCatalog {
     const val PRODUCT_ID = "bilibili-innocent-lab.settings"
     const val SCOPE_ID = "core-user-settings"
-    const val CATALOG_VERSION = 25
+    const val CATALOG_VERSION = 26
     const val ID_PLAYER_DEFAULT_SPEED = "player.default_speed.percent"
     const val ID_PLAYER_LONG_PRESS_SPEED = "player.long_press_speed.percent"
     const val ID_FREE_COPY_COMMENT = "free_copy.comment.enabled"
@@ -473,6 +473,20 @@ internal object SettingsCatalog {
             R.string.block_component_library_download,
             introducedCatalogVersion = 24
         ),
+        // 勾选面板的两把钥匙，与其余四个面同构：selectors 是勾出来的，rules 是手填的
+        //（`*` 即「全量禁止」开关写的哨兵），两者取并集。
+        text(
+            "client.component_library.blocked_pools.rules",
+            FeaturePreferences.COMPONENT_POOL_BLOCKED_RULES,
+            R.string.component_pool_block,
+            introducedCatalogVersion = 26
+        ),
+        text(
+            "client.component_library.blocked_pools.selectors",
+            FeaturePreferences.COMPONENT_POOL_BLOCKED_SELECTORS,
+            R.string.component_pool_block,
+            introducedCatalogVersion = 26
+        ),
         bool("prompt.teenagers_mode.blocked", FeaturePreferences.BLOCK_TEENAGERS_MODE_PROMPT, R.string.block_teenagers_mode_prompt),
         bool("player.capability.background", FeaturePreferences.PLAYER_UNLOCK_BACKGROUND,
             R.string.player_unlock_background, introducedCatalogVersion = 13),
@@ -648,7 +662,7 @@ internal object SettingsCatalog {
     val byStorageKey: Map<String, SettingSpec> = specs.associateBy(SettingSpec::storageKey)
 
     init {
-        check(specs.size == 143) { "Expected 143 catalog settings, found ${specs.size}" }
+        check(specs.size == 145) { "Expected 145 catalog settings, found ${specs.size}" }
         check(byId.size == specs.size) { "Duplicate logical setting id" }
         check(specs.map(SettingSpec::storageKey).distinct().size == specs.size) {
             "Duplicate settings storage key"

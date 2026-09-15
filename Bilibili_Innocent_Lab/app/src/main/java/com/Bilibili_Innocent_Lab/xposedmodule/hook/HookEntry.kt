@@ -39,6 +39,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.hook.modern.ModernMethodHook
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.modern.ReflectAccess
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.BlockUpdateFeatureInstaller
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.BlockComponentLibraryFeatureInstaller
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.ComponentLibraryPoolMatcher
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.BottomBarFeatureInstaller
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.BvToAvFeatureInstaller
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.CommentPurifyFeatureInstaller
@@ -2895,6 +2896,17 @@ class HookEntry : XposedModule() {
                         enabled = prefs.getBoolean(
                             FeaturePreferences.BLOCK_COMPONENT_LIBRARY_DOWNLOAD,
                             false
+                        ),
+                        // 勾选与手填取并集，与其余四个勾选面同规则。
+                        targetKeywords = ComponentLibraryPoolMatcher.selection(
+                            selectors = prefs.getString(
+                                FeaturePreferences.COMPONENT_POOL_BLOCKED_SELECTORS,
+                                ""
+                            ).orEmpty(),
+                            rules = prefs.getString(
+                                FeaturePreferences.COMPONENT_POOL_BLOCKED_RULES,
+                                ""
+                            ).orEmpty()
                         )
                     )
                 )

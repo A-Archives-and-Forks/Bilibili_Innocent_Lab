@@ -95,6 +95,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.hook.HookEntry
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.VersionAdapter
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.RoamingCompatHook
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.DetailModulePurifyPolicy
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.ComponentLibraryPoolMatcher
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.FeaturePreferences
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.CommentFilterFeatureInstaller
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.DanmakuPurifyPolicy
@@ -280,6 +281,7 @@ class MainActivity : SkinnedActivity() {
     internal var removeHomeRecommendSpecialCards = false
     private var homeTabHiddenRules = ""
     private var homeComponentHiddenRules = ""
+    private var componentPoolBlockedRules = ""
     private var bottomBarHiddenRules = ""
     internal var recommendVideoMinDurationSeconds = 0
     internal var recommendVideoMaxDurationSeconds = 0
@@ -420,6 +422,7 @@ class MainActivity : SkinnedActivity() {
     private var homeRecommendFilterEntryView: View? = null
     internal var homeRecommendFilterSummaryView: NativeTextView? = null
     private var homeComponentRulesSummaryView: NativeTextView? = null
+    private var componentPoolRulesSummaryView: NativeTextView? = null
     private var mineComponentRulesSummaryView: NativeTextView? = null
     private var bottomBarRulesSummaryView: NativeTextView? = null
     internal var recommendVideoDurationSummaryView: NativeTextView? = null
@@ -2696,7 +2699,15 @@ class MainActivity : SkinnedActivity() {
         val onRulesSaved: (String) -> Unit,
         val summaryView: () -> NativeTextView?,
         /** 仅"我的"页有历史遗留的 id 名单；其余面为 null。 */
-        val legacyIdsKey: String? = null
+        val legacyIdsKey: String? = null,
+        /**
+         * 非 null 时，手填规则编辑器上会多一个「全量禁止」开关，写入这个哨兵。
+         *
+         * 只有组件库资源池用它：那个面的候选要等宿主真的请求过清单才会出现，
+         * 扫描为空时逐条手打池名并不现实，得给个"整份都不要"的出口。
+         * 其余四个面的候选在页面打开时就齐了，不需要这条。
+         */
+        val blockAllSentinel: String? = null
     )
 
     /**
@@ -2795,6 +2806,20 @@ class MainActivity : SkinnedActivity() {
         currentRules = { homeComponentHiddenRules },
         onRulesSaved = { homeComponentHiddenRules = it },
         summaryView = { homeComponentRulesSummaryView }
+    )
+
+    private fun componentPoolPickerSurface() = ComponentPickerSurface(
+        surface = MineComponentSnapshotCodec.SURFACE_COMPONENT_POOLS,
+        titleRes = R.string.component_pool_block_dialog_title,
+        hintRes = R.string.component_pool_block_hint,
+        labelRes = R.string.component_pool_block,
+        selectorsKey = FeaturePreferences.COMPONENT_POOL_BLOCKED_SELECTORS,
+        rulesKey = FeaturePreferences.COMPONENT_POOL_BLOCKED_RULES,
+        status = genericStatusText(R.string.component_picker_surface_component_pools),
+        currentRules = { componentPoolBlockedRules },
+        onRulesSaved = { componentPoolBlockedRules = it },
+        summaryView = { componentPoolRulesSummaryView },
+        blockAllSentinel = ComponentLibraryPoolMatcher.MATCH_ALL_POOLS
     )
 
     /** 勾选数 + 手填规则的两行摘要；两者是并集关系，缺一方就只显示另一方。 */
@@ -4036,6 +4061,7 @@ class MainActivity : SkinnedActivity() {
         removeHomeRecommendSpecialCards = uiSettings.bool(FeaturePreferences.REMOVE_HOME_RECOMMEND_SPECIAL_CARDS)
         homeTabHiddenRules = uiSettings.string(FeaturePreferences.HOME_TAB_HIDDEN_RULES)
         homeComponentHiddenRules = uiSettings.string(FeaturePreferences.HOME_COMPONENT_HIDDEN_RULES)
+        componentPoolBlockedRules = uiSettings.string(FeaturePreferences.COMPONENT_POOL_BLOCKED_RULES)
         bottomBarHiddenRules = uiSettings.string(FeaturePreferences.BOTTOM_BAR_HIDDEN_RULES)
         recommendVideoMinDurationSeconds =
             uiSettings.int(FeaturePreferences.RECOMMEND_VIDEO_MIN_DURATION_SECONDS)
@@ -6477,6 +6503,32 @@ class MainActivity : SkinnedActivity() {
             alpha = 0.6f
             setLineSpacing(6f, 1f)
             text = stringResource(R.string.block_component_library_download_tip)
+            textColor = colorResource(R.color.colorTextDark)
+            textSize = 12f
+        }
+        TextView(
+            lparams = LayoutParams(widthMatchParent = true) { topMargin = 12.dp }
+        ) {
+            componentPoolRulesSummaryView = this
+            text = stringResource(R.string.component_pool_block) + "\n" +
+                componentPoolPickerSurface().summaryText()
+            textColor = colorResource(R.color.colorTextGray)
+            textSize = 15f
+            maxLines = 3
+            ellipsize = TextUtils.TruncateAt.END
+            setLineSpacing(5f, 1f)
+            setPadding(12.dp, 10.dp, 12.dp, 10.dp)
+            background = selfRippleBackground(10f)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener {
+                queryComponentSnapshotAndOpenPicker(componentPoolPickerSurface())
+            }
+        }
+        TextView(lparams = LayoutParams(widthMatchParent = true)) {
+            alpha = 0.6f
+            setLineSpacing(6f, 1f)
+            text = stringResource(R.string.component_pool_block_tip)
             textColor = colorResource(R.color.colorTextDark)
             textSize = 12f
         }

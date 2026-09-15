@@ -18,8 +18,15 @@
     <string name="player_decode_mode_hardware">強制硬解</string>
     <string name="player_decode_mode_software">強制軟解</string>
     <string name="block_component_library_download">禁止下載 App 基礎元件庫</string>
-    <string name="block_component_library_download_tip">在嗶哩嗶哩儲存設定中清理 App 基礎元件庫後，可阻止已確認的目標資源池再次下載。目前版本仍在觀察目標資源池，確認前會維持回應不變；不會刪除已有檔案，部分功能可能受影響。</string>
+    <string name="block_component_library_download_tip">啟用後可在下方勾選要攔截的資源池。只攔下載，不刪已有檔案，需先在嗶哩嗶哩儲存設定中清理一次才看得出效果；被攔資源池對應的功能會缺少資源。</string>
     <string name="block_component_library_download_save_failed">元件庫設定儲存失敗，已保留原設定。</string>
+    <string name="component_pool_block">選擇要攔截的資源池</string>
+    <string name="component_pool_block_dialog_title">選擇要攔截的資源池</string>
+    <string name="component_pool_block_hint">每行一個資源池名，也可用逗號分隔</string>
+    <string name="component_pool_block_tip">候選來自嗶哩嗶哩實際下發的清單，需先開啟一次對應頁面才會出現。攔掉某個池，該池支撐的功能會缺少資源。</string>
+    <string name="component_picker_surface_component_pools">元件庫資源池</string>
+    <string name="component_picker_block_all">全量禁止</string>
+    <string name="component_picker_block_all_summary">掃描不到候選時可直接攔截全部資源池。⚠️ 直播間、番劇、創作中心、小程式、前端離線頁都會缺少資源。</string>
     <string name="module_version">模組版本：%1$s</string>
     <string name="module_not_activated">模組尚未啟用</string>
     <string name="module_is_activated">模組已啟用</string>
@@ -913,6 +920,8 @@
     <string name="highlights_player_codec_preference">新增保守的影片編碼偏好，只作用於新建播放工作階段。</string>
     <string name="highlights_player_decode_mode">新增可選的硬解/軟解方式控制，沿主機 ijk 參數鏈生效。</string>
     <string name="highlights_component_library">新增可選的基礎元件庫下載攔截；目前版本仍處於目標資源池觀察階段。</string>
+    <string name="highlights_component_pool_pick">元件庫攔截改成勾選面板：掃描一次，勾中哪些資源池就攔哪些，不再一刀切。</string>
+    <string name="highlights_component_pool_block_all">掃描不到資源池時，可開啟「全量禁止」，拒收所有元件庫下載。</string>
     <string name="highlights_recommendation_auto_confirm">在嗶哩嗶哩回饋面板裡點過的標籤和 UP 主可以自動進入封鎖名單，不必再去「管理推薦封鎖」逐條確認。</string>
     <string name="component_snapshot_cached_notice">正在顯示上次儲存的掃描結果，尚未確認嗶哩嗶哩目前狀態。</string>
     <string name="hide_player_popup_promotion">隱藏播放器彈窗推廣</string>

@@ -50,6 +50,16 @@ internal object FeaturePreferences {
      * 继续留在本地、不进目录。
      */
     const val HOME_RECOMMEND_FEEDBACK_AUTO_CONFIRM = "recommendation_feedback_auto_confirm"
+
+    /**
+     * 要拦截下载的组件库资源池。
+     *
+     * 与其余四个勾选面同构：`_SELECTORS` 是面板勾出来的，`_RULES` 是手填的，
+     * 两者**取并集**。手填这条对本功能尤其有用——某个池本次会话没被宿主请求过就不会
+     * 出现在扫描快照里，只能手打池名。
+     */
+    const val COMPONENT_POOL_BLOCKED_SELECTORS = "component_pool_blocked_selectors"
+    const val COMPONENT_POOL_BLOCKED_RULES = "component_pool_blocked_rules"
     const val REMOVE_HOME_RECOMMEND_LIVE = "remove_home_recommend_live"
     const val REMOVE_HOME_RECOMMEND_COURSES = "remove_home_recommend_courses"
     const val REMOVE_HOME_RECOMMEND_VERTICAL = "remove_home_recommend_vertical"

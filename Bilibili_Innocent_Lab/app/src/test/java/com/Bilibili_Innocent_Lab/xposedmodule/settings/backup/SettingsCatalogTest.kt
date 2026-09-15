@@ -130,11 +130,11 @@ class SettingsCatalogTest {
     }
 
     @Test
-    fun `catalog is a unique allowlist with 143 settings`() {
-        assertEquals(143, SettingsCatalog.specs.size)
-        assertEquals(143, SettingsCatalog.specs.map { it.id }.distinct().size)
-        assertEquals(143, SettingsCatalog.specs.map { it.storageKey }.distinct().size)
-        assertEquals(141, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.AUTOMATIC })
+    fun `catalog is a unique allowlist with 145 settings`() {
+        assertEquals(145, SettingsCatalog.specs.size)
+        assertEquals(145, SettingsCatalog.specs.map { it.id }.distinct().size)
+        assertEquals(145, SettingsCatalog.specs.map { it.storageKey }.distinct().size)
+        assertEquals(143, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.AUTOMATIC })
         assertEquals(2, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.MANUAL })
         assertTrue(SettingsCatalog.specs.all { it.accepts(it.defaultValue) })
         assertTrue(SettingsCatalog.specs.all { it.id.matches(Regex("[a-z0-9][a-z0-9._-]{0,127}")) })
@@ -365,7 +365,7 @@ class SettingsCatalogTest {
         val expected = requireNotNull(javaClass.classLoader?.getResourceAsStream("settings-backup/catalog-v13.txt"))
             .bufferedReader().useLines { it.filter(String::isNotBlank).toList() }
         assertEquals(expected, SettingsCatalog.specs.filter { it.introducedCatalogVersion <= 13 }.map { it.id }.sorted())
-        assertEquals(25, SettingsCatalog.CATALOG_VERSION)
+        assertEquals(26, SettingsCatalog.CATALOG_VERSION)
         val added = SettingsCatalog.specs.filter { it.introducedCatalogVersion == 13 }
         assertEquals(6, added.size)
         assertTrue(added.all { it.restorePolicy == RestorePolicy.AUTOMATIC && ImportEffect.RESTART_BILIBILI in it.effects })
@@ -422,11 +422,42 @@ class SettingsCatalogTest {
         })
     }
 
+    /**
+     * v26 = 组件库拦截从"一刀切开关"改成勾选面板，两条 Text 与其余四个面同构：
+     * selectors 是勾出来的，rules 是手填的（含「全量禁止」写进去的 `*` 哨兵），宿主取并集。
+     * 两条都进宿主，导入后必须提示重启哔哩哔哩。
+     */
+    @Test
+    fun `catalog v26 adds the component pool selection pair`() {
+        val expected = requireNotNull(
+            javaClass.classLoader?.getResourceAsStream("settings-backup/catalog-v26.txt")
+        ).bufferedReader().useLines { it.filter(String::isNotBlank).toList() }
+        assertEquals(expected, SettingsCatalog.specs.filter { it.introducedCatalogVersion <= 26 }.map { it.id }.sorted())
+        val added = SettingsCatalog.specs.filter { it.introducedCatalogVersion == 26 }
+        assertEquals(
+            listOf(
+                "client.component_library.blocked_pools.rules",
+                "client.component_library.blocked_pools.selectors"
+            ),
+            added.map { it.id }.sorted()
+        )
+        assertEquals(
+            listOf("component_pool_blocked_rules", "component_pool_blocked_selectors"),
+            added.map { it.storageKey }.sorted()
+        )
+        added.forEach {
+            assertEquals(SettingValueType.STRING, it.type)
+            assertEquals(SettingValue.Text(""), it.defaultValue)
+            assertEquals(RestorePolicy.AUTOMATIC, it.restorePolicy)
+            assertTrue(ImportEffect.RESTART_BILIBILI in it.effects)
+        }
+    }
+
     @Test
     fun `catalog types and manual roaming boundary are explicit`() {
         assertEquals(111, SettingsCatalog.specs.count { it.type == SettingValueType.BOOLEAN })
         assertEquals(9, SettingsCatalog.specs.count { it.type == SettingValueType.INTEGER })
-        assertEquals(23, SettingsCatalog.specs.count { it.type == SettingValueType.STRING })
+        assertEquals(25, SettingsCatalog.specs.count { it.type == SettingValueType.STRING })
 
         val roaming = requireNotNull(SettingsCatalog.byId["compat.roaming.enabled"])
         assertEquals(RestorePolicy.MANUAL, roaming.restorePolicy)

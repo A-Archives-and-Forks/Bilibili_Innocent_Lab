@@ -217,8 +217,15 @@
     <string name="client_update_settings">Update prompts</string>
     <string name="block_app_update">Disable client update prompts</string>
     <string name="block_component_library_download">Block App component-library downloads</string>
-    <string name="block_component_library_download_tip">After clearing the App component library in Bilibili storage settings, recognized target pools can be kept from downloading. The current target pool is still being observed; until it is confirmed, this option leaves responses unchanged. Existing files are not deleted and some features may be affected.</string>
+    <string name="block_component_library_download_tip">When enabled, pick the resource pools to block below. Downloads are blocked but existing files are kept, so clear the App component library in Bilibili storage settings once to see the effect. Features backed by a blocked pool will be missing resources.</string>
     <string name="block_component_library_download_save_failed">Could not save the component-library setting. The previous setting was kept.</string>
+    <string name="component_pool_block">Pick resource pools to block</string>
+    <string name="component_pool_block_dialog_title">Pick resource pools to block</string>
+    <string name="component_pool_block_hint">One pool name per line, or separate with commas</string>
+    <string name="component_pool_block_tip">Candidates come from the manifest Bilibili actually sends, so open the matching page once for them to appear. Blocking a pool leaves the features it backs without resources.</string>
+    <string name="component_picker_surface_component_pools">component-library pools</string>
+    <string name="component_picker_block_all">Block every pool</string>
+    <string name="component_picker_block_all_summary">Use this when no candidates were found. Warning: live rooms, anime, the creator centre, mini-programs and offline web pages will all be missing resources.</string>
     <string name="block_app_update_tip">When enabled, Bilibili client update prompts are no longer shown. This module\'s update checks are unaffected. Restart Bilibili to apply.</string>
     <string name="dynamic_page_settings">Dynamic page</string>
     <string name="hide_dynamic_city_tab">Hide the City tab</string>
@@ -913,6 +920,8 @@
     <string name="highlights_player_codec_preference">Add a conservative video-codec preference for new playback sessions.</string>
     <string name="highlights_player_decode_mode">Add opt-in hardware/software decoder mode control through the host ijk option path.</string>
     <string name="highlights_component_library">Add opt-in component-library download blocking for confirmed target pools; the current version remains in target-observation mode.</string>
+    <string name="highlights_component_pool_pick">Component-library blocking is now a checklist: scan once, then tick the pools you want to keep off the device.</string>
+    <string name="highlights_component_pool_block_all">If the scan finds no pools, turn on Block everything to refuse every component-library download.</string>
     <string name="highlights_recommendation_auto_confirm">Tags and uploaders picked in the Bilibili feedback panel can now go into the blocklist on their own, without confirming each one in Manage recommendation blocks.</string>
     <string name="component_snapshot_cached_notice">Showing the last saved scan. The current Bilibili state could not be confirmed.</string>
     <string name="hide_player_popup_promotion">Hide player popup promotions</string>

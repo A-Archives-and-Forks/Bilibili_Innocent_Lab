@@ -18,8 +18,15 @@
     <string name="player_decode_mode_hardware">强制硬解</string>
     <string name="player_decode_mode_software">强制软解</string>
     <string name="block_component_library_download">禁止下载 App 基础组件库</string>
-    <string name="block_component_library_download_tip">在哔哩哔哩存储设置中清理 App 基础组件库后，可阻止已确认的目标资源池再次下载。当前版本仍在观察目标资源池，确认前会保持响应不变；不会删除已有文件，部分功能可能受影响。</string>
+    <string name="block_component_library_download_tip">开启后可在下方勾选要拦截的资源池。只拦下载，不删已有文件，需先在哔哩哔哩存储设置中清理一次才看得出效果；被拦资源池对应的功能会缺少资源。</string>
     <string name="block_component_library_download_save_failed">组件库设置保存失败，已保留原设置。</string>
+    <string name="component_pool_block">选择要拦截的资源池</string>
+    <string name="component_pool_block_dialog_title">选择要拦截的资源池</string>
+    <string name="component_pool_block_hint">每行一个资源池名，也可用逗号分隔</string>
+    <string name="component_pool_block_tip">候选来自哔哩哔哩实际下发的清单，需先打开一次对应页面才会出现。拦掉某个池，该池支撑的功能会缺少资源。</string>
+    <string name="component_picker_surface_component_pools">组件库资源池</string>
+    <string name="component_picker_block_all">全量禁止</string>
+    <string name="component_picker_block_all_summary">扫描不到候选时可直接拦截全部资源池。⚠️ 直播间、番剧、创作中心、小程序、前端离线页都会缺少资源。</string>
     <string name="module_version">模块版本：%1$s</string>
     <string name="module_not_activated">模块未激活</string>
     <string name="module_is_activated">模块已激活</string>
@@ -913,6 +920,8 @@
     <string name="highlights_player_codec_preference">新增保守的视频编码偏好，仅作用于新建播放会话。</string>
     <string name="highlights_player_decode_mode">新增可选的硬解/软解方式控制，沿宿主 ijk 参数链生效。</string>
     <string name="highlights_component_library">新增可选的基础组件库下载拦截；当前版本仍处于目标资源池观察阶段。</string>
+    <string name="highlights_component_pool_pick">组件库拦截改成勾选面板：扫描一次，勾中哪些资源池就拦哪些，不再一刀切。</string>
+    <string name="highlights_component_pool_block_all">扫描不到资源池时，可打开「全量禁止」，拒收所有组件库下载。</string>
     <string name="highlights_recommendation_auto_confirm">在哔哩哔哩反馈面板里点过的标签和 UP 主可以自动进入屏蔽名单，不必再去「管理推荐屏蔽」逐条确认。</string>
     <string name="component_snapshot_cached_notice">正在显示上次保存的扫描结果，尚未确认哔哩哔哩当前状态。</string>
     <string name="hide_player_popup_promotion">隐藏播放器弹窗推广</string>

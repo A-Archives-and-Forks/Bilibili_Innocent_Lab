@@ -12,8 +12,67 @@ import org.junit.Test
 class ComponentSelectionReconciliationTest {
     private val kinds = mapOf(
         "mine" to "item", "bottom_bar" to "bottom_tab",
-        "home_tabs" to "home_tab", "home_components" to "home_component"
+        "home_tabs" to "home_tab", "home_components" to "home_component",
+        "component_pools" to "component_pool"
     )
+
+    /**
+     * 每一个勾选面都必须在 [ComponentSelectionReconciler.SELECTOR_KEYS] 里登记。
+     *
+     * 2026-09-15 真机故障的直接判据：组件库资源池面进了 `ALLOWED_SURFACES`，
+     * 却没进这张表，`selectorsKey` 抛出的异常被 `MineComponentSnapshotStore.write`
+     * 的 `runCatching` 吞成 `false` → 面板每次都提示"模块缓存写入失败"。
+     * 异常被吞掉意味着日志里也看不出所以然，只能靠这条把漏登记钉在单测里。
+     *
+     * 反馈面板的两个草稿面（`section_picks` / `author_picks`）落到
+     * RecommendationBlocklistDraft 等用户确认，不走勾选存储，所以点名豁免；
+     * 以后再加面时这条会强制做出选择，不会再静默漏过去。
+     *
+     * 注意豁免判据是"草稿面"而不是 `ACCUMULATING_SURFACES`：`component_pools`
+     * 也是累积面，但它有自己的勾选存储键，两个集合并不是同一回事。
+     */
+    @Test
+    fun `every scan surface either has a selectors key or is a draft only surface`() {
+        val draftOnly = setOf(
+            MineComponentSnapshotCodec.SURFACE_SECTION_PICKS,
+            MineComponentSnapshotCodec.SURFACE_AUTHOR_PICKS
+        )
+        assertEquals(
+            MineComponentSnapshotCodec.ALLOWED_SURFACES,
+            ComponentSelectionReconciler.SELECTOR_KEYS.keys + draftOnly
+        )
+        assertEquals(kinds.keys, ComponentSelectionReconciler.SELECTOR_KEYS.keys)
+        assertEquals(
+            ComponentSelectionReconciler.SELECTOR_KEYS.size,
+            ComponentSelectionReconciler.SELECTOR_KEYS.values.distinct().size
+        )
+        assertEquals(
+            FeaturePreferences.COMPONENT_POOL_BLOCKED_SELECTORS,
+            ComponentSelectionReconciler.selectorsKey(MineComponentSnapshotCodec.SURFACE_COMPONENT_POOLS)
+        )
+        draftOnly.forEach { surface ->
+            assertThrows(IllegalStateException::class.java) {
+                ComponentSelectionReconciler.selectorsKey(surface)
+            }
+        }
+    }
+
+    /** 走完整条落盘路：资源池快照必须真的写进模块偏好，而不是被吞成 STORE_FAILED。 */
+    @Test
+    fun `a component pool snapshot is stored instead of reported as a failed write`() {
+        val prefs = MemoryPreferences()
+        val pool = entry("component_pool", "mod-fitness")
+        assertTrue(write(prefs, "component_pools", 910L, listOf(pool)))
+        assertEquals(
+            payload("component_pools", listOf(pool)),
+            prefs.values["mine_component_scan_snapshot_component_pools"]
+        )
+        // 勾选在版本没变时原样保留，和其余四个面一致。
+        val key = ComponentSelectionReconciler.selectorsKey("component_pools")
+        prefs.values[key] = MineComponentSelectionCodec.encode(setOf(pool.key))
+        assertTrue(write(prefs, "component_pools", 910L, listOf(pool)))
+        assertEquals(setOf(pool.key), selected(prefs, key))
+    }
 
     @Test
     fun `downgrade from three components to two releases only the missing selection on every surface`() {
@@ -56,7 +115,7 @@ class ComponentSelectionReconciliationTest {
     }
 
     @Test
-    fun `legacy global source remains available for all four surfaces scanned in any order`() {
+    fun `legacy global source remains available for every picker surface scanned in any order`() {
         val prefs = MemoryPreferences()
         prefs.values.putAll(mapOf(
             "mine_component_scan_source_present" to true,
