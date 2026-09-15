@@ -20,6 +20,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerCodecPreference
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerDecodeMode
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerSpeedConfig
 import com.Bilibili_Innocent_Lab.xposedmodule.settings.prefs
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.widget.MaxHeightScrollView
 import com.highcapable.betterandroid.ui.extension.view.textColor
 import com.highcapable.betterandroid.ui.extension.view.textToString
 import com.highcapable.betterandroid.ui.extension.view.toast
@@ -177,9 +178,17 @@ private fun MainActivity.showPlayerChoiceDialog(
             }
         )
     }
-    container.addView(android.widget.ScrollView(this).apply {
+    // 按选项数收敛：解码方式只有 3 项、优先视频解码 4 项，且这两处的行都不带副标题，
+    // 原先写死的 360dp 会在选项下方留出一大片空白。换成 MaxHeightScrollView：
+    // 内容少就按内容高，只有多到超过上限才停住并开始滚动。
+    // 上限再与屏高取小，横屏/小屏下不会把下面的关闭按钮顶出面板。
+    val listCap = minOf(
+        (360 * density).toInt(),
+        (resources.displayMetrics.heightPixels * 0.44f).toInt()
+    )
+    container.addView(MaxHeightScrollView(this, listCap).apply {
         addView(rows, NativeFrameLayout.LayoutParams(-1, -2))
-    }, NativeLinearLayout.LayoutParams(-1, (360 * density).toInt()))
+    }, NativeLinearLayout.LayoutParams(-1, -2))
     container.addView(NativeTextView(this).apply {
         text = getString(R.string.dialog_close)
         textColor = getColor(R.color.colorTextGray)

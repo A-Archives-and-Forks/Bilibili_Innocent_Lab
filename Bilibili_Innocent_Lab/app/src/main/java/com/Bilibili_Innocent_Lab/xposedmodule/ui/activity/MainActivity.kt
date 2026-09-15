@@ -1575,7 +1575,10 @@ class MainActivity : SkinnedActivity() {
                     ViewGroup.LayoutParams.WRAP_CONTENT
                 )
             )
-            addView(
+            // 空副标题不建视图：TextView 即使文本为空也会占满一行行高，加上 4dp 上边距
+            // 等于每行凭空多出约 18dp。只有解码方式/优先视频解码那两张纯标题面板会传空串，
+            // 其余 30 多个调用点都带副标题，行高不变。
+            if (subtitle.isNotBlank()) addView(
                 NativeTextView(this@MainActivity).apply {
                     text = subtitle
                     textColor = getColor(R.color.colorTextDark)
