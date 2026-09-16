@@ -9,6 +9,7 @@ import android.util.Log
 import androidx.core.content.IntentCompat
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.HookEntry
 import com.Bilibili_Innocent_Lab.xposedmodule.provider.RoamingCompatProvider
+import com.Bilibili_Innocent_Lab.xposedmodule.runtime.AdmissionReplayBook
 import com.Bilibili_Innocent_Lab.xposedmodule.runtime.HostAdmissionEndpoint
 import com.Bilibili_Innocent_Lab.xposedmodule.runtime.noroot.NoRootSupportStore
 import com.Bilibili_Innocent_Lab.xposedmodule.runtime.noroot.NoRootUpgradeRecoveryCoordinator
@@ -16,7 +17,6 @@ import com.Bilibili_Innocent_Lab.xposedmodule.settings.terms.UserTermsConsentSto
 import com.highcapable.betterandroid.system.extension.utils.AndroidVersion
 import com.highcapable.kavaref.extension.classOf
 import java.util.concurrent.atomic.AtomicLong
-import java.util.LinkedHashMap
 
 /**
  * 代开哔哩漫游设置的接收器（B 站进程 → 本模块 App 的跨进程通道）。
@@ -62,9 +62,9 @@ class RoamingOpenReceiver : BroadcastReceiver() {
         private const val MAX_REQUEST_AGE_MS = 5_000L
         private const val MIN_REQUEST_INTERVAL_MS = 1_000L
         private val lastAcceptedRequestMs = AtomicLong(0L)
-        private const val ADMISSION_REPLAY_TTL_MS = 5_000L
-        private const val ADMISSION_REPLAY_LIMIT = 32
-        private val admissionReplayCache = LinkedHashMap<String, AdmissionReplay>(ADMISSION_REPLAY_LIMIT, 0.75f, true)
+        private val admissionReplays = AdmissionReplayBook(
+            clock = { SystemClock.elapsedRealtime() }
+        )
     }
 
     override fun onReceive(context: Context, intent: Intent) {
@@ -149,9 +149,11 @@ class RoamingOpenReceiver : BroadcastReceiver() {
         if (!HostAdmissionQueryContract.isValidNoncePair(nonce, request)) return
         val method = intent.getStringExtra(EXTRA_ADMISSION_METHOD).orEmpty()
         if (method != "prepare_admission" && method != "confirm_admission") return
-        val response = admissionReplay(nonce, method) ?: runCatching {
-            HostAdmissionEndpoint.handleBroadcast(context, method, request, proof.creatorUid)
-        }.getOrNull()?.also { rememberAdmissionReplay(nonce, method, it) } ?: return
+        val response = admissionReplays.getOrPut(nonce, method) {
+            runCatching {
+                HostAdmissionEndpoint.handleBroadcast(context, method, request, proof.creatorUid)
+            }.getOrNull()
+        } ?: return
         val responseAction = intent.getStringExtra(EXTRA_ADMISSION_RESPONSE_ACTION).orEmpty()
         if (responseAction.isEmpty() ||
             !HostAdmissionQueryContract.isValidResponseAction(creatorPackage, responseAction)
@@ -169,25 +171,6 @@ class RoamingOpenReceiver : BroadcastReceiver() {
         }
         Log.i("BilibiliInnocentLab", "[BIL] 启动授权广播已处理(status=${response.getString("status")}, ordered=$ordered)")
     }
-
-    private fun admissionReplay(nonce: String, method: String): android.os.Bundle? = synchronized(admissionReplayCache) {
-        val now = SystemClock.elapsedRealtime()
-        admissionReplayCache.entries.removeIf { now - it.value.createdAt > ADMISSION_REPLAY_TTL_MS }
-        admissionReplayCache["$nonce|$method"]?.response?.let { android.os.Bundle(it) }
-    }
-
-    private fun rememberAdmissionReplay(nonce: String, method: String, response: android.os.Bundle) {
-        synchronized(admissionReplayCache) {
-            val now = SystemClock.elapsedRealtime()
-            admissionReplayCache.entries.removeIf { now - it.value.createdAt > ADMISSION_REPLAY_TTL_MS }
-            while (admissionReplayCache.size >= ADMISSION_REPLAY_LIMIT) {
-                admissionReplayCache.remove(admissionReplayCache.entries.firstOrNull()?.key ?: break)
-            }
-            admissionReplayCache["$nonce|$method"] = AdmissionReplay(now, android.os.Bundle(response))
-        }
-    }
-
-    private data class AdmissionReplay(val createdAt: Long, val response: android.os.Bundle)
 
     /** 完整配置只回送到由 B 站 uid 创建的一次性 PendingIntent，不进入 ordered extras。 */
     private fun sendSecureBootstrapReply(

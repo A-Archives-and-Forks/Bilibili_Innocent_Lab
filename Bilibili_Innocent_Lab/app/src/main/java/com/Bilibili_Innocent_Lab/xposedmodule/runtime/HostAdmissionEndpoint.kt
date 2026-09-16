@@ -26,12 +26,29 @@ internal object HostAdmissionEndpoint {
     fun handleBroadcast(context: Context, method: String, extras: Bundle?, callerUid: Int): Bundle =
         handleWithIdentity(context, method, extras, callerUid, BROADCAST_CALLER_PID)
 
-    private fun handleWithIdentity(context: Context, method: String, extras: Bundle?, uid: Int, pid: Int): Bundle {
+    /**
+     * 宿主进程内通过 createPackageContext 拿到的模块 Context。调用方必须先用宿主
+     * 自己的 PackageManager 把 UID 验成目标宿主；这里不再向模块 PM 查询宿主包，
+     * 否则包可见性会把整条 in-process 握手打成 identity_rejected，冷启动空等 2s。
+     */
+    fun handleLocal(context: Context, method: String, extras: Bundle?, callerUid: Int): Bundle =
+        handleWithIdentity(context, method, extras, callerUid, LOCAL_CALLER_PID, callerAlreadyBound = true)
+
+    private fun handleWithIdentity(
+        context: Context,
+        method: String,
+        extras: Bundle?,
+        uid: Int,
+        pid: Int,
+        callerAlreadyBound: Boolean = false,
+    ): Bundle {
         // 身份先于任何应用提供的 Bundle 解码；不信任载荷里的包名/UID。
-        val trusted = runCatching {
+        // 模块 Context 的 PackageManager 可能因包可见性看不到宿主，此时 status
+        // 为 identity_rejected：调用方必须把它当成这一路不可用，而不是条款拒绝。
+        val trusted = callerAlreadyBound || runCatching {
             context.packageManager.getApplicationInfo(HostRuntimeDiagnosticsQueryContract.TARGET_PACKAGE, 0).uid == uid
         }.getOrDefault(false)
-        if (!trusted || pid <= 0) return status("identity_rejected")
+        if (!trusted || pid <= 0 || uid <= 0) return status("identity_rejected")
         return runCatching {
             if (extras == null || extras.getInt("version") != HostAdmissionContract.VERSION) return@runCatching status("protocol_rejected")
             val nonce = extras.getString("nonce").orEmpty()
@@ -66,7 +83,12 @@ internal object HostAdmissionEndpoint {
                         val lease = leases.consume(uid, pid, nonce, extras.getString("challenge").orEmpty(), identity)
                             ?: return@withAuthorityLock status("stale", nonce)
                         if (lease.identity != current.identity ||
-                            lease.source == HostAdmissionContract.DIRECT && !current.directAllowed) return@withAuthorityLock status("stale", nonce)
+                            lease.source == HostAdmissionContract.DIRECT && !current.directAllowed
+                        ) {
+                            // 握手期间权威记录已换成另一份仍授权的文档，或关掉了直达来源。
+                            // 条款拒绝走上面的 denied，不会落到这里。
+                            return@withAuthorityLock status("stale", nonce)
+                        }
                         if (current.pending) {
                             val outcome = UserTermsConsentStore.completePendingAcceptance(context, current.identity.consentRevision)
                             if (outcome != UserTermsPendingCompletion.COMPLETED) {
@@ -94,4 +116,5 @@ internal object HostAdmissionEndpoint {
     }
 
     private const val BROADCAST_CALLER_PID = 1
+    private const val LOCAL_CALLER_PID = 2
 }
