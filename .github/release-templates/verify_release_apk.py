@@ -14,8 +14,18 @@ from typing import Sequence
 PACKAGE_PATTERN = re.compile(
     r"^package: name='([^']+)' versionCode='([^']+)' versionName='([^']+)'"
 )
-SIGNER_PATTERN = re.compile(
-    r"Signer #(\d+) certificate SHA-256 digest:\s*([0-9A-Fa-f:\s]+)"
+# apksigner 的行前缀不是稳定 API，官方文档也没规定输出格式，已经见过三种形态：
+#   Build-Tools <= 36：Signer #1 certificate SHA-256 digest: <hex>
+#   Build-Tools >= 37：V2 Signer: certificate SHA-256 digest: <hex>
+#                      V3.0 Signer: certificate SHA-256 digest: <hex>
+#   密钥轮换时：       Signer (minSdkVersion=24, maxSdkVersion=32) #1 certificate SHA-256 digest: <hex>
+# 因此**不锚定前缀**，只认 "certificate SHA-256 digest:" 这个短语。
+#
+# 必须保留 "certificate" 这个词：同一份输出里还有 "public key SHA-256 digest:"，
+# 那是公钥摘要，和证书指纹**不是同一个值**。放宽成匹配任意 "SHA-256 digest:" 会让校验
+# 变成拿错值去比对，属于把安全检查反转，不是放宽。
+CERTIFICATE_SHA256_PATTERN = re.compile(
+    r"\bcertificate SHA-256 digest:[ \t]*([0-9A-Fa-f:][0-9A-Fa-f: \t]*)"
 )
 
 
@@ -65,22 +75,31 @@ def parse_aapt_badging(output: str) -> ApkIdentity:
 
 
 def parse_single_signer_sha256(output: str) -> str:
-    """Return the only signer certificate digest reported by ``apksigner``."""
+    """Return the only signer certificate digest reported by ``apksigner``.
 
-    signers: dict[int, str] = {}
-    for signer_number, digest in SIGNER_PATTERN.findall(output):
-        normalized = normalize_sha256(digest)
-        number = int(signer_number)
-        previous = signers.setdefault(number, normalized)
-        if previous != normalized:
-            raise ReleaseApkValidationError(
-                f"Signer #{number} reports conflicting certificate digests"
-            )
-    if len(signers) != 1:
+    One certificate signing several schemes (v1/v2/v3) is printed once per scheme, so
+    identical digests are collapsed. Two *distinct* certificate digests — key rotation,
+    a lineage, or a genuinely multi-signed APK — still fail: the publication contract is
+    a single fixed identity.
+    """
+
+    digests = {
+        normalize_sha256(digest) for digest in CERTIFICATE_SHA256_PATTERN.findall(output)
+    }
+    if not digests:
+        # 解析不出来 != 没有签名者。把 0 当成"签名者数量为 0"会让一次格式变更伪装成
+        # "签名身份不对"，反而掩盖真正的原因（Build-Tools 37 就是这么炸的）。
         raise ReleaseApkValidationError(
-            f"Expected exactly one APK signer, found {len(signers)}"
+            "Could not read any certificate SHA-256 digest from apksigner output; "
+            "the output format may have changed. Raw apksigner output follows:\n"
+            f"{output.strip()}"
         )
-    return next(iter(signers.values()))
+    if len(digests) != 1:
+        raise ReleaseApkValidationError(
+            "Expected exactly one APK signer certificate, found "
+            f"{len(digests)}: {', '.join(sorted(digests))}"
+        )
+    return next(iter(digests))
 
 
 def validate_release_identity(
