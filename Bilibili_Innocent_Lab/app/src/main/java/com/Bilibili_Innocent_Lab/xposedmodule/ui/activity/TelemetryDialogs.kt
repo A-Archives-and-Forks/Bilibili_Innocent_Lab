@@ -82,7 +82,11 @@ internal fun MainActivity.showTelemetryDisclosureDialog() {
     presentModalDialog(dialog, container)
 }
 
-internal fun MainActivity.showTelemetryInfoDialog() {
+/**
+ * @param origin ⓘ 在**点击那一刻**的屏幕矩形。GitHub 面板会先收起把 ⓘ 一起带走，所以这里只能
+ *   收矩形、不能收 View。传 null（从遥测说明返回等路径）保持原有的居中缩放入场。
+ */
+internal fun MainActivity.showTelemetryInfoDialog(origin: SettingsBackupMotionRect? = null) {
     val density = resources.displayMetrics.density
     val dialog = Dialog(this)
     val container = createModalContainer()
@@ -184,7 +188,7 @@ internal fun MainActivity.showTelemetryInfoDialog() {
             ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = (14 * density).toInt() }
     )
-    presentModalDialog(dialog, container)
+    presentModalDialog(dialog, container, morphAnchorBounds = origin)
 }
 
 private fun MainActivity.showTelemetryExplanationDialog() {

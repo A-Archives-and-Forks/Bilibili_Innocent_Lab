@@ -32,8 +32,12 @@ class ModalAnchorRegressionTest {
         assertTrue(origin.contains("sourceRoot.scaleX != 1f"))
         assertTrue(origin.contains("!anchor.isShown"))
         assertTrue(origin.contains("visible.bottom.toFloat()"))
-        assertTrue(SettingsUiSource.all()
-            .contains("morphAnchor?.let(::modalAnchorBounds)?.let { currentAnchor ->"))
+        // 这里钉的是"每次形变都重新解析来源"，不是某一行的写法：来源解析收进了
+        // `resolveAnchorOnScreen()`（为了让"另一张弹窗里的 ⓘ"也能当锚点），
+        // 但**实时 View 仍然优先、仍然每次重取**，缓存来源会让旋转后用上陈旧矩形。
+        val present = SettingsUiSource.function("presentSizedModalDialog")
+        assertTrue(present.contains("resolveAnchorOnScreen()?.let { currentAnchor ->"))
+        assertTrue(present.contains("morphAnchor?.let(::modalAnchorBounds) ?: capturedAnchorBounds"))
     }
 
     @Test fun visibleRootBoundsMapThroughScreenBeforeEnteringAnotherWindow() {

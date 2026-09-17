@@ -1660,9 +1660,14 @@ class MainActivity : SkinnedActivity() {
             background = selfRippleBackground(20f)
             isClickable = true
             isFocusable = true
-            setOnClickListener {
+            setOnClickListener { source ->
+                // 来源矩形必须在点击那一刻取：紧接着这张 GitHub 面板就会收起，ⓘ 随它从窗口上
+                // 摘掉，`showTelemetryInfoDialog` 里再按 View 取位置只会拿到 null（09-10 标准
+                // 把遥测系列判成"锚点没有意义"，依据正是这一点）。抓下来的屏幕矩形照样能喂给
+                // 同一套图标锚点形变，面板因此从 ⓘ 的位置长出来。
+                val origin = modalAnchorBounds(source)
                 dismissWithAnimation(dialog, dialogContainer) {
-                    showTelemetryInfoDialog()
+                    showTelemetryInfoDialog(origin)
                 }
             }
         }
@@ -2085,13 +2090,20 @@ class MainActivity : SkinnedActivity() {
         morphAnchor: View? = null,
         anchorStyle: AnchorStyle = AnchorStyle.CONTAINER,
         onExpanded: () -> Unit = {},
-        onBackDismiss: () -> Unit = {}
-    ) = presentSizedModalDialog(dialog, container, null, morphAnchor, anchorStyle, onExpanded, onBackDismiss)
+        onBackDismiss: () -> Unit = {},
+        morphAnchorBounds: SettingsBackupMotionRect? = null
+    ) = presentSizedModalDialog(dialog, container, null, morphAnchor, anchorStyle,
+        onExpanded, onBackDismiss, morphAnchorBounds)
 
     /**
      * @param morphAnchor 传入无文字的来源图标（如工具栏的搜索/GitHub 按钮）即启用图标锚点形变：
      *   弹窗表面从该图标的位置与圆角长成整张卡片。传 null 保持原有的居中缩放入场，**默认不变**，
      *   30 个既有调用点一个都不受影响。
+     * @param morphAnchorBounds 来源控件**在另一张弹窗里**时用它：那张弹窗会先收起，来源 View
+     *   随之从窗口上摘掉，`modalAnchorBounds` 事后只会拿到 null。调用点在**点击那一刻**抓好的
+     *   屏幕矩形从这里传进来，走的仍是同一套 `IconAnchoredMotion*`，不另开动画。
+     *   仅在 `morphAnchor == null` 且为 [AnchorStyle.CONTAINER] 时生效：气泡路径要拿来源
+     *   ImageView 做图案交接，静态矩形顶不了它的位置。
      */
     // 气泡 margin 与锚点均为物理窗口坐标，LEFT 不可替换成会再镜像一次的 START。
     @Suppress("GestureBackNavigation", "RtlHardcoded")
@@ -2102,7 +2114,8 @@ class MainActivity : SkinnedActivity() {
         morphAnchor: View? = null,
         anchorStyle: AnchorStyle = AnchorStyle.CONTAINER,
         onExpanded: () -> Unit = {},
-        onBackDismiss: () -> Unit = {}
+        onBackDismiss: () -> Unit = {},
+        morphAnchorBounds: SettingsBackupMotionRect? = null
     ) {
         activeConfirmDialog?.dismiss()
         stylePreparedSkinControls(container)
@@ -2111,11 +2124,19 @@ class MainActivity : SkinnedActivity() {
         // 为空时用弹窗自己的 onBackDismiss。每次弹窗独立一份，不能提到 Activity 字段上。
         val pendingAnchoredAfterClose =
             java.util.concurrent.atomic.AtomicReference<(() -> Unit)?>(null)
+        // 静态来源矩形只服务"来源在另一张弹窗里"这一种情况：气泡要拿来源 ImageView 做图案
+        // 交接，拿不到 View 就没有气泡可言，所以这里把它挡在 CONTAINER 之外。
+        val capturedAnchorBounds = morphAnchorBounds
+            ?.takeIf { morphAnchor == null && anchorStyle == AnchorStyle.CONTAINER && it.isValid }
         // 来源矩形必须在点击那一刻取：形变开始后弹窗窗口会盖住图标，事后查位置不可靠。
+        // 实时 View 与静态矩形走同一条几何解析，动画本身没有分支。
+        fun resolveAnchorOnScreen(): SettingsBackupMotionRect? =
+            morphAnchor?.let(::modalAnchorBounds) ?: capturedAnchorBounds
         val anchorBounds = morphAnchor?.takeIf {
             it.isAttachedToWindow && it.width > 0 && it.height > 0 &&
                 (anchorStyle == AnchorStyle.BUBBLE || ValueAnimator.areAnimatorsEnabled())
         }?.let(::modalAnchorBounds)
+            ?: capturedAnchorBounds?.takeIf { ValueAnimator.areAnimatorsEnabled() }
         // 工具栏上的 27dp 小图标飞到屏幕正中会显得莫名，改成贴在图标旁边、伸出小角的气泡。
         fun placeBubble(anchor: SettingsBackupMotionRect, width: Float, height: Float) =
             BubblePlacementSpec.place(
@@ -2258,7 +2279,7 @@ class MainActivity : SkinnedActivity() {
                     MODAL_CORNER_RADIUS_DP
                 ),
                 resolveGeometry = {
-                    morphAnchor?.let(::modalAnchorBounds)?.let { currentAnchor ->
+                    resolveAnchorOnScreen()?.let { currentAnchor ->
                         resolveIconAnchoredGeometry(morphLayer, container, currentAnchor, density)
                     }
                 },
