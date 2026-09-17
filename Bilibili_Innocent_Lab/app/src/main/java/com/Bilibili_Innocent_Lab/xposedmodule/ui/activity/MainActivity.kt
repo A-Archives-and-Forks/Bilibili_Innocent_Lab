@@ -285,6 +285,8 @@ class MainActivity : SkinnedActivity() {
     private var bottomBarHiddenRules = ""
     internal var recommendVideoMinDurationSeconds = 0
     internal var recommendVideoMaxDurationSeconds = 0
+    internal var recommendVideoMinPlayCount = 0
+    internal var recommendVideoMaxPlayCount = 0
     internal var removeStoryAds = false
     internal var removeStoryLive = false
     internal var removeStoryGames = false
@@ -426,6 +428,7 @@ class MainActivity : SkinnedActivity() {
     private var mineComponentRulesSummaryView: NativeTextView? = null
     private var bottomBarRulesSummaryView: NativeTextView? = null
     internal var recommendVideoDurationSummaryView: NativeTextView? = null
+    internal var recommendVideoPlayCountSummaryView: NativeTextView? = null
     private var commentKeywordSummaryView: NativeTextView? = null
     internal var commentLevelSummaryView: NativeTextView? = null
     private var commentUserFilterSummaryView: NativeTextView? = null
@@ -1202,6 +1205,30 @@ class MainActivity : SkinnedActivity() {
     private val dialogAnchoredClosers =
         java.util.WeakHashMap<Dialog, (Boolean, (() -> Unit)?) -> Boolean>()
 
+    /**
+     * 弹窗**卡片矩形**与**可见表面**之间的差。
+     *
+     * 气泡面板的小角高度是加在 container 的 padding 上的（`applyBubbleSurface`），所以
+     * `modalAnchorBounds(container)` 拿到的矩形比真正画出来的表面**大一条**：2026-09-17
+     * 真机实测 GitHub 面板容器 top=283，而描边亮线在 y=314，正好差 31px＝9dp＝小角高。
+     *
+     * 子面板要"严丝合缝盖住父面板"就必须按可见表面对齐，否则上方会多出这条。
+     * 只有气泡面板非零；普通弹窗查不到就是全零。
+     */
+    private val dialogSurfaceInsets = java.util.WeakHashMap<Dialog, android.graphics.Rect>()
+
+    /** 弹窗画出来的那块表面在屏幕上的矩形。拿不到布局位置时返回 null。 */
+    internal fun modalSurfaceBounds(dialog: Dialog, container: View): SettingsBackupMotionRect? {
+        val bounds = modalAnchorBounds(container) ?: return null
+        val insets = dialogSurfaceInsets[dialog] ?: return bounds
+        return SettingsBackupMotionRect(
+            left = bounds.left + insets.left,
+            top = bounds.top + insets.top,
+            right = bounds.right - insets.right,
+            bottom = bounds.bottom - insets.bottom
+        ).takeIf { it.isValid }
+    }
+
     // internal：弹窗正按主题外移到同包的 Dialogs 文件（`internal fun MainActivity.showX()`），
     // 扩展函数拿不到 private 成员。下面几个 create*/present*/dismiss* 是外移弹窗的共用底座。
     internal fun dismissWithAnimation(
@@ -1411,6 +1438,33 @@ class MainActivity : SkinnedActivity() {
                 selfRippleBackground(14f)
             }
             skinActionButton(this, filled, if (filled) 20f else 14f)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { onClick() }
+        }
+    }
+
+    /**
+     * 面板右下角那颗"关闭"。
+     *
+     * GitHub 面板与**叠在它上面**的遥测说明面板必须用同一颗：两张卡片矩形已经完全重合，
+     * 按钮样式不同会让"关闭"在切换时左右跳一下——实测 `createTermsActionButton`（14f、
+     * 粗体、左右 10dp）比这颗（15f、常规、左右 20dp）窄 38px，右边缘对齐但文字对不上。
+     */
+    internal fun createPanelCloseButton(onClick: () -> Unit): NativeTextView {
+        val density = resources.displayMetrics.density
+        return NativeTextView(this).apply {
+            text = getString(R.string.dialog_close)
+            textColor = getColor(R.color.colorTextGray)
+            textSize = 15f
+            gravity = Gravity.CENTER
+            setPadding(
+                (20 * density).toInt(),
+                (11 * density).toInt(),
+                (20 * density).toInt(),
+                (11 * density).toInt()
+            )
+            background = selfRippleBackground(14f)
             isClickable = true
             isFocusable = true
             setOnClickListener { onClick() }
@@ -1661,14 +1715,17 @@ class MainActivity : SkinnedActivity() {
             isClickable = true
             isFocusable = true
             setOnClickListener { source ->
-                // 来源矩形必须在点击那一刻取：紧接着这张 GitHub 面板就会收起，ⓘ 随它从窗口上
-                // 摘掉，`showTelemetryInfoDialog` 里再按 View 取位置只会拿到 null（09-10 标准
-                // 把遥测系列判成"锚点没有意义"，依据正是这一点）。抓下来的屏幕矩形照样能喂给
-                // 同一套图标锚点形变，面板因此从 ⓘ 的位置长出来。
-                val origin = modalAnchorBounds(source)
-                dismissWithAnimation(dialog, dialogContainer) {
-                    showTelemetryInfoDialog(origin)
-                }
+                // GitHub 面板**不关**：子面板从 ⓘ 长出来，展开端正好盖住这张卡片，
+                // 收起时再露出它。两张矩形都必须在点击这一刻取——形变一开始卡片就会被
+                // 改 alpha 和 outline，事后取到的位置不是用户看到的那个。
+                showTelemetryInfoDialog(
+                    origin = modalAnchorBounds(source),
+                    // 按**可见表面**取，不是容器矩形：气泡的小角那条在 padding 里，
+                    // 拿容器矩形会让子面板上方多出 9dp。
+                    cover = modalSurfaceBounds(dialog, dialogContainer),
+                    parentDialog = dialog,
+                    parentContainer = dialogContainer
+                )
             }
         }
         // GitHub 二级页只导航，不创建开关，也不因整行点击改变遥测选择。
@@ -2091,9 +2148,10 @@ class MainActivity : SkinnedActivity() {
         anchorStyle: AnchorStyle = AnchorStyle.CONTAINER,
         onExpanded: () -> Unit = {},
         onBackDismiss: () -> Unit = {},
-        morphAnchorBounds: SettingsBackupMotionRect? = null
+        morphAnchorBounds: SettingsBackupMotionRect? = null,
+        coverBounds: SettingsBackupMotionRect? = null
     ) = presentSizedModalDialog(dialog, container, null, morphAnchor, anchorStyle,
-        onExpanded, onBackDismiss, morphAnchorBounds)
+        onExpanded, onBackDismiss, morphAnchorBounds, coverBounds)
 
     /**
      * @param morphAnchor 传入无文字的来源图标（如工具栏的搜索/GitHub 按钮）即启用图标锚点形变：
@@ -2104,6 +2162,14 @@ class MainActivity : SkinnedActivity() {
      *   屏幕矩形从这里传进来，走的仍是同一套 `IconAnchoredMotion*`，不另开动画。
      *   仅在 `morphAnchor == null` 且为 [AnchorStyle.CONTAINER] 时生效：气泡路径要拿来源
      *   ImageView 做图案交接，静态矩形顶不了它的位置。
+     * @param coverBounds **叠在父弹窗上**的子面板：把卡片摆到这张屏幕矩形（父面板卡片的位置与
+     *   尺寸）上，形变的展开端因此正好盖住父面板，父面板**不关闭**、留在下面。
+     *   传了它就意味着"这是子面板"，于是三件事一起变：不硬关当前 `activeConfirmDialog`、
+     *   关闭时把它还回去、不再叠第二层背景模糊（父面板那层已经在了）。
+     *   传进来的必须是父面板**画出来的表面**（见 [modalSurfaceBounds]），不是它的容器矩形：
+     *   气泡面板的小角高度加在 container 的 padding 上，用容器矩形会让子面板上方多出 9dp。
+     *   宽度与左上角严格对齐父面板；**高度取"父面板高度"与"内容自然高度"的较大值**——
+     *   "完全遮挡"是目的，为了对齐把内容裁掉或塞进滚动区不是。
      */
     // 气泡 margin 与锚点均为物理窗口坐标，LEFT 不可替换成会再镜像一次的 START。
     @Suppress("GestureBackNavigation", "RtlHardcoded")
@@ -2115,9 +2181,14 @@ class MainActivity : SkinnedActivity() {
         anchorStyle: AnchorStyle = AnchorStyle.CONTAINER,
         onExpanded: () -> Unit = {},
         onBackDismiss: () -> Unit = {},
-        morphAnchorBounds: SettingsBackupMotionRect? = null
+        morphAnchorBounds: SettingsBackupMotionRect? = null,
+        coverBounds: SettingsBackupMotionRect? = null
     ) {
-        activeConfirmDialog?.dismiss()
+        // 子面板要盖在父面板上，父面板就不能被硬关；关闭时再把它还回 activeConfirmDialog，
+        // 否则更新检查那几处 `activeConfirmDialog?.isShowing` 会以为没有弹窗开着。
+        val cover = coverBounds?.takeIf { it.isValid && anchorStyle == AnchorStyle.CONTAINER }
+        val coveredParent = if (cover != null) activeConfirmDialog?.takeIf { it.isShowing } else null
+        if (cover == null) activeConfirmDialog?.dismiss()
         stylePreparedSkinControls(container)
         val density = resources.displayMetrics.density
         // 由 dismissWithAnimation 传进来的一次性收尾回调（例如"关闭后打开链接"）；
@@ -2177,6 +2248,15 @@ class MainActivity : SkinnedActivity() {
         }
         if (bubblePlacement != null) {
             applyBubbleSurface(bubblePlacement)
+            // 小角那条只在 container 的 padding 里，不在画出来的表面里；记下来，
+            // 子面板要盖住本面板时才有办法按可见表面对齐（见 modalSurfaceBounds）。
+            val tailPadding = (BUBBLE_TAIL_HEIGHT_DP * density).toInt()
+            dialogSurfaceInsets[dialog] = android.graphics.Rect(
+                0,
+                if (bubblePlacement.tailEdge == BubbleTailEdge.TOP) tailPadding else 0,
+                0,
+                if (bubblePlacement.tailEdge == BubbleTailEdge.BOTTOM) tailPadding else 0
+            )
             container.scaleX = 1f
             container.scaleY = 1f
             container.elevation = 0f
@@ -2201,6 +2281,13 @@ class MainActivity : SkinnedActivity() {
                     leftMargin = bubblePlacement.left.toInt()
                     topMargin = bubblePlacement.top.toInt()
                 }
+            } else if (cover != null) {
+                // 几何来自物理屏幕坐标，和气泡一样不能在 RTL 下再镜像一次；
+                // 真正的 margin 要等 root 拿到屏幕位置才算得准，见 applyCoverPlacement()。
+                NativeFrameLayout.LayoutParams(
+                    cover.width.toInt(),
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { gravity = Gravity.TOP or Gravity.LEFT }
             } else {
                 NativeFrameLayout.LayoutParams(
                     preferredWidth ?: ViewGroup.LayoutParams.WRAP_CONTENT,
@@ -2229,6 +2316,35 @@ class MainActivity : SkinnedActivity() {
                 addView(container, cardParams)
             }
         }
+        // 子面板贴到父面板矩形上。两张 Dialog 的窗口原点不保证相同（状态栏、adjustPan），
+        // 所以每次都拿 root 的屏幕位置换算，不假设 0。
+        val coverLocation = IntArray(2)
+        fun applyCoverPlacement(): Boolean {
+            val target = cover ?: return false
+            if (root.width <= 0 || root.height <= 0) return false
+            root.getLocationOnScreen(coverLocation)
+            val params = container.layoutParams as? NativeFrameLayout.LayoutParams ?: return false
+            val left = (target.left - coverLocation[0]).toInt()
+            val top = (target.top - coverLocation[1]).toInt()
+            val width = target.width.toInt()
+            // 高度必须**算出来写死**，不能用 WRAP_CONTENT + minimumHeight：后者在
+            // FrameLayout 里会被剩余空间撑到窗口底部（2026-09-17 实测卡片落到
+            // [278,314][1398,3078]，而父面板底边是 2337）。
+            // 先按目标宽度量一次自然高度：内容比父面板矮就取父面板高度（完全覆盖，
+            // 空档由关闭行上方的弹性占位吸收），更高就取内容高度（不裁内容）。
+            container.measure(
+                View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+            )
+            val height = maxOf(target.height.toInt(), container.measuredHeight)
+            var changed = false
+            if (params.width != width) { params.width = width; changed = true }
+            if (params.height != height) { params.height = height; changed = true }
+            if (params.leftMargin != left) { params.leftMargin = left; changed = true }
+            if (params.topMargin != top) { params.topMargin = top; changed = true }
+            if (changed) container.requestLayout()
+            return changed
+        }
         var currentBubblePlacement = bubblePlacement
         var bubbleAnchor = anchorBounds
         fun notifyExpanded() {
@@ -2236,7 +2352,17 @@ class MainActivity : SkinnedActivity() {
         }
         // 背景浅毛玻璃：跟着弹窗自己的进度渐进，让面板与背景分层。
         // 用户开关 + Material You 美学 + API 31+ + 系统允许跨窗口模糊，四道门都在工厂里判。
-        val backdropBlur = ModalBackdropBlur.createOrNull(
+        // 子面板不再叠一层：父面板那层还在，两层 blur-behind 会把底页糊到发灰，
+        // 而且会把我们特意留在下面的父面板一起糊掉。
+        // 被盖住的父面板：形变末段让它整窗淡出，终态只剩子面板那一条描边。
+        // 两张卡片矩形完全重合时，两条半透明描边会叠加成更亮的一条（实测左边缘 87 → 103），
+        // 这一跳发生在最后一帧，就是"末尾边缘抖动"。
+        //
+        // **必须淡整个 decorView，不能只淡内容容器**：气泡面板的表面（连同描边）是
+        // `BubblePanelLayer` 画的，容器自己 `background = null`，淡容器只会让文字变淡、
+        // 描边纹丝不动——这条是实测撞出来的，改回去就白修了。
+        val coveredContent = if (cover != null) coveredParent?.window?.decorView else null
+        val backdropBlur = if (cover != null) null else ModalBackdropBlur.createOrNull(
             window = dialog.window,
             userEnabled = ModalBackdropBlurStore.read(this),
             materialYouSkin = isMaterialYouSkinEffective,
@@ -2245,7 +2371,10 @@ class MainActivity : SkinnedActivity() {
         val bubbleController = if (bubbleLayer != null) {
             BubbleMotionController(
                 layer = bubbleLayer,
-                onFrame = { progress -> backdropBlur?.apply(progress) },
+                onFrame = { progress ->
+                    backdropBlur?.apply(progress)
+                    coveredContent?.alpha = IconAnchoredMotionSpec.coveredParentAlpha(progress)
+                },
                 onExpanded = ::notifyExpanded,
                 onClosed = {
                     dialog.dismiss()
@@ -2284,7 +2413,10 @@ class MainActivity : SkinnedActivity() {
                     }
                 },
                 titleMotion = titleMotion,
-                onFrame = { progress -> backdropBlur?.apply(progress) },
+                onFrame = { progress ->
+                    backdropBlur?.apply(progress)
+                    coveredContent?.alpha = IconAnchoredMotionSpec.coveredParentAlpha(progress)
+                },
                 onExpanded = ::notifyExpanded,
                 onClosed = {
                     dialog.dismiss()
@@ -2537,7 +2669,15 @@ class MainActivity : SkinnedActivity() {
                 root.viewTreeObserver.removeOnGlobalLayoutListener(bubbleLayoutListener)
             }
             dialogAnchoredClosers.remove(dialog)
-            if (activeConfirmDialog === dialog) activeConfirmDialog = null
+            dialogSurfaceInsets.remove(dialog)
+            // 硬关会把形变停在半路，父面板不能留着半透明的 alpha：它马上就要重新露出来。
+            coveredContent?.alpha = 1f
+            // 子面板收起后父面板重新露出来，它必须变回"当前弹窗"：这个字段是更新检查
+            // 与激活卡那几处 `activeConfirmDialog?.isShowing` 的唯一依据，留空会让它们
+            // 以为没有弹窗开着，从而在父面板脸上再弹一个。
+            if (activeConfirmDialog === dialog) {
+                activeConfirmDialog = coveredParent?.takeIf { it.isShowing }
+            }
             val callback = predictiveBackCallback
             // 注销要冲着**当时注册成功的那个** dispatcher；窗口已 detach 时重新向
             // dialog 取一次，可能拿到换过的对象、也可能直接抛。取的动作本身在
@@ -2585,6 +2725,11 @@ class MainActivity : SkinnedActivity() {
             morphLayer.viewTreeObserver.addOnPreDrawListener(
                 object : android.view.ViewTreeObserver.OnPreDrawListener {
                     override fun onPreDraw(): Boolean {
+                        // 先把卡片摆到父面板矩形上再压首帧：位置还没定就 prepareFirstFrame，
+                        // 展开端会按旧的居中矩形算，形变会往错的地方长。
+                        if (applyCoverPlacement() || (cover != null && container.isLayoutRequested)) {
+                            return false
+                        }
                         morphLayer.viewTreeObserver.removeOnPreDrawListener(this)
                         if (!dialog.isShowing || morphController.isClosing) return true
                         if (!morphController.prepareFirstFrame()) {
@@ -2835,6 +2980,20 @@ class MainActivity : SkinnedActivity() {
         } else {
             "${totalSeconds / 60}:$paddedSeconds"
         }
+    }
+
+    internal fun formatPlayCount(count: Int): String {
+        if (count >= 100_000_000) {
+            val whole = count / 100_000_000
+            val tenths = (count % 100_000_000) / 10_000_000
+            return if (tenths == 0) "${whole}亿" else "${whole}.${tenths}亿"
+        }
+        if (count >= 10_000) {
+            val whole = count / 10_000
+            val tenths = (count % 10_000) / 1_000
+            return if (tenths == 0) "${whole}万" else "${whole}.${tenths}万"
+        }
+        return count.toString()
     }
 
     internal fun openExternalUrl(url: String) {
@@ -3719,6 +3878,7 @@ class MainActivity : SkinnedActivity() {
         mineComponentRulesSummaryView = null
         bottomBarRulesSummaryView = null
         recommendVideoDurationSummaryView = null
+        recommendVideoPlayCountSummaryView = null
         commentKeywordSummaryView = null
         commentLevelSummaryView = null
         commentUserFilterSummaryView = null
@@ -3849,6 +4009,12 @@ class MainActivity : SkinnedActivity() {
                 .coerceAtLeast(0)
         recommendVideoMaxDurationSeconds =
             uiSettings.int(FeaturePreferences.RECOMMEND_VIDEO_MAX_DURATION_SECONDS)
+                .coerceAtLeast(0)
+        recommendVideoMinPlayCount =
+            uiSettings.int(FeaturePreferences.RECOMMEND_VIDEO_MIN_PLAY_COUNT)
+                .coerceAtLeast(0)
+        recommendVideoMaxPlayCount =
+            uiSettings.int(FeaturePreferences.RECOMMEND_VIDEO_MAX_PLAY_COUNT)
                 .coerceAtLeast(0)
         removeStoryAds = uiSettings.bool(FeaturePreferences.REMOVE_STORY_ADS)
         removeStoryLive = uiSettings.bool(FeaturePreferences.REMOVE_STORY_LIVE)
@@ -6006,6 +6172,38 @@ class MainActivity : SkinnedActivity() {
             alpha = 0.6f
             setLineSpacing(6f, 1f)
             text = stringResource(R.string.recommend_video_duration_tip)
+            textColor = colorResource(R.color.colorTextDark)
+            textSize = 12f
+        }
+        TextView(
+            lparams = LayoutParams(widthMatchParent = true) {
+                topMargin = 12.dp
+            }
+        ) {
+            recommendVideoPlayCountSummaryView = this
+            text = stringResource(R.string.recommend_video_play_count_range) +
+                "\n" + recommendVideoPlayCountSummary()
+            textColor = colorResource(R.color.colorTextGray)
+            textSize = 15f
+            maxLines = 3
+            ellipsize = TextUtils.TruncateAt.END
+            setLineSpacing(5f, 1f)
+            setPadding(12.dp, 10.dp, 12.dp, 10.dp)
+            background = selfRippleBackground(10f)
+            isClickable = true
+            isFocusable = true
+            settingsDestinations.bind(SettingsCatalog.ID_RECOMMEND_VIDEO_MIN_PLAY_COUNT, this)
+            settingsDestinations.bind(SettingsCatalog.ID_RECOMMEND_VIDEO_MAX_PLAY_COUNT, this)
+            setOnClickListener {
+                showRecommendVideoPlayCountRangeDialog(it)
+            }
+        }
+        TextView(
+            lparams = LayoutParams(widthMatchParent = true)
+        ) {
+            alpha = 0.6f
+            setLineSpacing(6f, 1f)
+            text = stringResource(R.string.recommend_video_play_count_tip)
             textColor = colorResource(R.color.colorTextDark)
             textSize = 12f
         }

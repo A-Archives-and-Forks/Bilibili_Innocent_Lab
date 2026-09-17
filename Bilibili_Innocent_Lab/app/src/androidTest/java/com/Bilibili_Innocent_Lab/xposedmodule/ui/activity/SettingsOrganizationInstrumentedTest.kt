@@ -273,7 +273,8 @@ class SettingsOrganizationInstrumentedTest {
                     R.string.hide_home_game_menu, R.string.hide_dynamic_city_tab,
                     R.string.keep_mine_vip_space, R.string.hide_pgc_auto_activity_popup,
                     R.string.video_relate_filter_settings, R.string.comment_keyword_filter,
-                    R.string.block_app_update, R.string.recommend_video_duration_range
+                    R.string.block_app_update, R.string.recommend_video_duration_range,
+                    R.string.recommend_video_play_count_range
                 ).forEach { assertTrue(ancestors(label(activity, it)).any { parent -> parent === purification }) }
                 listOf(
                     R.string.free_copy_enable, R.string.free_copy_desc_enable,

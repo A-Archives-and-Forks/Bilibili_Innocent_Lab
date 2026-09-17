@@ -44,7 +44,7 @@ internal class ActivitySkinSession private constructor(
     private val liquidOwner: LiquidRenderSessionOwner?,
     private val liquidRenderer: LiquidActivityRenderer?,
     private val initialLiquidFailure: Boolean
-) : AutoCloseable {
+) : AutoCloseable, ModuleMemoryPressureListener {
 
     var effectiveSkin: SkinId = effectiveSkin
         private set
@@ -158,6 +158,11 @@ internal class ActivitySkinSession private constructor(
     }
 
     @MainThread
+    override fun onReleaseGraphics() {
+        onLowMemory()
+    }
+
+    @MainThread
     private fun confirmRendererHealthy() {
         if (isClosed || healthConfirmed || rendererFailureHandled) return
         val owner = liquidOwner ?: return handleRendererFailure()
@@ -214,6 +219,7 @@ internal class ActivitySkinSession private constructor(
     override fun close() {
         if (isClosed) return
         isClosed = true
+        ModuleMemoryPressureHub.removeListener(this)
         onFailure = null
         failureRoot = null
         liquidRenderer?.close()
@@ -249,7 +255,7 @@ internal class ActivitySkinSession private constructor(
                 liquidOwner = owner.takeIf { renderer != null },
                 liquidRenderer = renderer,
                 initialLiquidFailure = initializationFailed
-            )
+            ).also(ModuleMemoryPressureHub::addListener)
         }
     }
 }

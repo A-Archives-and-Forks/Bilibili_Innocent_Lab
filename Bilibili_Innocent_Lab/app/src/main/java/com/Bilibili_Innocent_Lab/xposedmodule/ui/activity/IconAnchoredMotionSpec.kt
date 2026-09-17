@@ -217,6 +217,23 @@ internal object IconAnchoredMotionSpec {
     internal fun strokeAlpha(expansion: Float): Float =
         smoothStep(STROKE_EDGE_START, 1f, expansion.coerceIn(0f, 1f))
 
+    /**
+     * 被盖住的父面板的淡出起点。
+     *
+     * 子面板与父面板的卡片矩形完全重合时，两张卡片各画一条**半透明**描边，叠在一起比单独
+     * 任何一张都亮：2026-09-17 真机实测同一条左边缘，父面板独自稳定是 87，子面板落位后变成
+     * **103**，而且这一跳发生在最后一帧——这就是"末尾边缘抖动"。
+     *
+     * 让父面板在最后这段里淡出，终态就只剩一条描边（回到 87），跳变摊进一段行程而不是一帧。
+     * 起点取得很晚是有原因的：到 0.90 时子面板几何上已经几乎盖满父面板，淡出只影响边上
+     * 很窄一圈；再早父面板的正文会当着用户的面褪色。
+     */
+    const val COVERED_PARENT_FADE_START = 0.90f
+
+    /** 被盖住的父面板在给定展开进度下的可见度。0＝完全让位给子面板。 */
+    internal fun coveredParentAlpha(expansion: Float): Float =
+        1f - smoothStep(COVERED_PARENT_FADE_START, 1f, expansion.coerceIn(0f, 1f))
+
     internal fun smoothStep(edgeStart: Float, edgeEnd: Float, value: Float): Float {
         if (edgeStart >= edgeEnd) return if (value < edgeStart) 0f else 1f
         val fraction = ((value - edgeStart) / (edgeEnd - edgeStart)).coerceIn(0f, 1f)

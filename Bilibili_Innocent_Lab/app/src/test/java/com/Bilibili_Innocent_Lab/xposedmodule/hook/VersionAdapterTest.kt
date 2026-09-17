@@ -1219,6 +1219,23 @@ class VersionAdapterTest {
         assertTrue(points?.durationChains.orEmpty().all {
             it.durationGetter.methodName == "getDuration"
         })
+        assertEquals(
+            mapOf(
+                "getAv" to "com.bapis.bilibili.app.viewunite.common.RelateAVCard",
+                "getAiCard" to "com.bapis.bilibili.app.viewunite.common.RelatedAICard"
+            ),
+            points?.playCountChains?.associate {
+                it.itemGetter.methodName to it.statGetter.className
+            }
+        )
+        assertTrue(points?.playCountChains.orEmpty().none {
+            it.itemGetter.methodName == "getHistoryAv"
+        })
+        assertTrue(points?.playCountChains.orEmpty().all {
+            it.statGetter.methodName == "getStat" &&
+                it.vtGetter.methodName == "getVt" &&
+                it.valueGetter.methodName == "getValue"
+        })
         assertEquals(8, points?.reasonChains?.size)
         assertEquals(
             setOf(
@@ -1503,6 +1520,25 @@ class VersionAdapterTest {
         val degraded = VersionAdapter.CommentPurifyPoints.fromJson(json)
         assertEquals(emptyList<VersionAdapter.HookPoint>(), degraded.urlSchemaGetters)
         assertEquals(full.urlMapGetters, degraded.urlMapGetters)
+    }
+
+    @Test
+    fun `a cached video relate payload without play count chains degrades instead of failing`() {
+        val located = requireNotNull(
+            VersionAdapter.locateVideoRelate(requireNotNull(javaClass.classLoader))
+        )
+        assertTrue(located.playCountChains.isNotEmpty())
+        val json = located.toJson()
+        assertEquals(
+            located.playCountChains,
+            VersionAdapter.VideoRelatePoints.fromJson(json).playCountChains
+        )
+
+        json.remove("play_count_chains")
+        val degraded = VersionAdapter.VideoRelatePoints.fromJson(json)
+        assertEquals(emptyList<VersionAdapter.PlayCountMethodChain>(), degraded.playCountChains)
+        assertEquals(located.durationChains, degraded.durationChains)
+        assertEquals(located.responseItemGetters, degraded.responseItemGetters)
     }
 
     @Test

@@ -177,6 +177,17 @@
     <string name="recommend_video_duration_invalid_number">Enter a whole number from 1 to 2,147,483,647, or leave the field blank.</string>
     <string name="recommend_video_duration_invalid_range">The maximum duration cannot be shorter than the minimum duration.</string>
     <string name="recommend_video_duration_tip">Videos shorter than the minimum or longer than the maximum are removed from Home recommendations and the recommendations below video details. A blank field leaves that boundary unrestricted. Restart Bilibili to apply.</string>
+    <string name="recommend_video_play_count_range">Filter recommended videos by play count</string>
+    <string name="recommend_video_play_count_range_empty">No play-count limits configured; tap to edit</string>
+    <string name="recommend_video_play_count_min_only">Minimum: %1$s</string>
+    <string name="recommend_video_play_count_max_only">Maximum: %1$s</string>
+    <string name="recommend_video_play_count_both">Range: %1$s – %2$s</string>
+    <string name="recommend_video_min_play_count">Minimum recommended video play count</string>
+    <string name="recommend_video_max_play_count">Maximum recommended video play count</string>
+    <string name="recommend_video_play_count_input_hint">Leave blank for no limit</string>
+    <string name="recommend_video_play_count_invalid_number">Enter a whole number from 1 to 2,147,483,647, or leave the field blank.</string>
+    <string name="recommend_video_play_count_invalid_range">The maximum play count cannot be lower than the minimum play count.</string>
+    <string name="recommend_video_play_count_tip">Videos below the minimum or above the maximum play count are removed from Home recommendations and the recommendations below video details. Unknown, unreadable, or live cards are kept. A blank field leaves that boundary unrestricted. Restart Bilibili to apply.</string>
     <string name="mine_page_settings">Mine page</string>
     <string name="hide_mine_vip">Hide the VIP card</string>
     <string name="hide_mine_vip_tip">When enabled, hides the VIP card on the Mine page. Other entries remain available. Restart Bilibili to apply.</string>
@@ -868,6 +879,7 @@
     <string name="diagnostics_feature_install_partial">Partially installed; some required paths are unavailable</string>
     <string name="diagnostics_feature_install_unknown">Independent capability evidence unavailable</string>
     <string name="diagnostics_capability_duration">Video duration filter</string>
+    <string name="diagnostics_capability_play_count">Video play-count filter</string>
     <string name="diag_cap_player_interactive_legacy_follow">Legacy player follow guide</string>
     <string name="diag_cap_player_interactive_legacy_commands">Legacy player command overlays</string>
     <string name="diag_cap_player_interactive_legacy_contract">Legacy player contract card</string>
@@ -923,6 +935,7 @@
     <string name="highlights_component_pool_pick">Component-library blocking is now a checklist: scan once, then tick the pools you want to keep off the device.</string>
     <string name="highlights_component_pool_block_all">If the scan finds no pools, turn on Block everything to refuse every component-library download.</string>
     <string name="highlights_recommendation_auto_confirm">Tags and uploaders picked in the Bilibili feedback panel can now go into the blocklist on their own, without confirming each one in Manage recommendation blocks.</string>
+    <string name="highlights_recommend_play_count">Filter Home and related-video recommendations by play count. Unknown, unreadable, or live cards are kept.</string>
     <string name="component_snapshot_cached_notice">Showing the last saved scan. The current Bilibili state could not be confirmed.</string>
     <string name="hide_player_popup_promotion">Hide player popup promotions</string>
     <string name="hide_player_popup_promotion_tip">Hide common floating promotion cards in the player, including mini program promotions. Other interactive components and regular danmaku are preserved.</string>

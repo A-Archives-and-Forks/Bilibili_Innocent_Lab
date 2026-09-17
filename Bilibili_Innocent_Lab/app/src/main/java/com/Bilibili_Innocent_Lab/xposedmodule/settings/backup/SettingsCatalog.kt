@@ -21,7 +21,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.settings.appearance.ModalBackdropB
 internal object SettingsCatalog {
     const val PRODUCT_ID = "bilibili-innocent-lab.settings"
     const val SCOPE_ID = "core-user-settings"
-    const val CATALOG_VERSION = 26
+    const val CATALOG_VERSION = 27
     const val ID_PLAYER_DEFAULT_SPEED = "player.default_speed.percent"
     const val ID_PLAYER_LONG_PRESS_SPEED = "player.long_press_speed.percent"
     const val ID_FREE_COPY_COMMENT = "free_copy.comment.enabled"
@@ -30,6 +30,10 @@ internal object SettingsCatalog {
         "recommend.video_duration.minimum_seconds"
     const val ID_RECOMMEND_VIDEO_MAX_DURATION =
         "recommend.video_duration.maximum_seconds"
+    const val ID_RECOMMEND_VIDEO_MIN_PLAY_COUNT =
+        "recommend.video_play_count.minimum"
+    const val ID_RECOMMEND_VIDEO_MAX_PLAY_COUNT =
+        "recommend.video_play_count.maximum"
     const val ID_DANMAKU_WEIGHT_MINIMUM = "player.danmaku.weight_filter.minimum"
     const val ID_MATERIAL_COLOR_SPEC = "module_ui.material_color_spec"
 
@@ -445,6 +449,22 @@ internal object SettingsCatalog {
             introducedCatalogVersion = 2
         ),
         integer(
+            ID_RECOMMEND_VIDEO_MIN_PLAY_COUNT,
+            FeaturePreferences.RECOMMEND_VIDEO_MIN_PLAY_COUNT,
+            R.string.recommend_video_min_play_count,
+            default = 0,
+            range = 0..Int.MAX_VALUE,
+            introducedCatalogVersion = 27
+        ),
+        integer(
+            ID_RECOMMEND_VIDEO_MAX_PLAY_COUNT,
+            FeaturePreferences.RECOMMEND_VIDEO_MAX_PLAY_COUNT,
+            R.string.recommend_video_max_play_count,
+            default = 0,
+            range = 0..Int.MAX_VALUE,
+            introducedCatalogVersion = 27
+        ),
+        integer(
             "player.default_quality.qn",
             FeaturePreferences.PLAYER_DEFAULT_QUALITY_QN,
             R.string.player_default_quality,
@@ -662,7 +682,7 @@ internal object SettingsCatalog {
     val byStorageKey: Map<String, SettingSpec> = specs.associateBy(SettingSpec::storageKey)
 
     init {
-        check(specs.size == 145) { "Expected 145 catalog settings, found ${specs.size}" }
+        check(specs.size == 147) { "Expected 147 catalog settings, found ${specs.size}" }
         check(byId.size == specs.size) { "Duplicate logical setting id" }
         check(specs.map(SettingSpec::storageKey).distinct().size == specs.size) {
             "Duplicate settings storage key"

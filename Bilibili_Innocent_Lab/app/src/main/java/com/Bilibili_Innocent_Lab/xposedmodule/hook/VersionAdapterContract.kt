@@ -26,7 +26,16 @@ internal object VersionAdapterContract {
      * 但必须抬——快路径指纹含 rule，不抬的话已经缓存过的设备永远拿不到新定位点，
      * 第二道防线会静默缺席。
      */
-    const val RULE_VERSION = 61
+    /**
+     * 61 → 62（2026-09-17，按播放量过滤推荐）：
+     * `VideoRelatePoints` **新增可选 `play_count_chains` 键**，定位
+     * `RelateAVCard/RelatedAICard#getStat → Stat#getVt → StatInfo#getValue`。
+     * 不包含 `getHistoryAv`（历史卡没有播放量）。JSON 只是新增键、老缓存缺它时
+     * 降级成空列表，所以只抬 rule、不抬 schema。必须抬——否则已缓存设备永远
+     * 拿不到详情页播放量链，该维度会静默变成"从不命中"。
+     * 首页封面文案走运行期 Class 缓存，不进适配 JSON。
+     */
+    const val RULE_VERSION = 62
 
     /**
      * 51 → 52（2026-09-11，9.11.0(9110400) 适配）：

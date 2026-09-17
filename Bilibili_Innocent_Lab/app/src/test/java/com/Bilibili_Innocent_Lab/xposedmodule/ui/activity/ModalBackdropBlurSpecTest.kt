@@ -147,9 +147,11 @@ class ModalBackdropBlurSpecTest {
         val main = source("MainActivity")
         assertTrue(main.contains("materialYouSkin = isMaterialYouSkinEffective"))
         // 两条形变时钟都要驱动，无锚点弹窗借自己的入场进度。
+        // 钉的是"两条时钟都推了模糊"，不是那行 lambda 写成一行还是多行——
+        // 覆盖式子面板要在同一个 onFrame 里顺带淡出父面板，那行已经不是单行了。
         assertEquals(
             2,
-            Regex("onFrame = \\{ progress -> backdropBlur\\?\\.apply\\(progress\\) \\}")
+            Regex("onFrame = \\{ progress ->[\\s\\S]{0,160}?backdropBlur\\?\\.apply\\(progress\\)")
                 .findAll(main).count()
         )
         assertTrue(main.contains("setUpdateListener { backdropBlur?.apply(container.alpha) }"))

@@ -235,6 +235,35 @@ class SettingsImportPlannerTest {
     }
 
     @Test
+    fun `reversed imported play count range is visible and never written`() {
+        val minSpec = requireNotNull(
+            SettingsCatalog.byId[SettingsCatalog.ID_RECOMMEND_VIDEO_MIN_PLAY_COUNT]
+        )
+        val maxSpec = requireNotNull(
+            SettingsCatalog.byId[SettingsCatalog.ID_RECOMMEND_VIDEO_MAX_PLAY_COUNT]
+        )
+        val catalog = listOf(minSpec, maxSpec)
+        val current = snapshot(
+            minSpec to StoredSetting(explicit = true, SettingValue.IntValue(1_000)),
+            maxSpec to StoredSetting(explicit = true, SettingValue.IntValue(10_000))
+        )
+        val source = document(
+            catalogVersion = 27,
+            records = listOf(
+                record(minSpec, explicit = true, SettingValue.IntValue(20_000)),
+                record(maxSpec, explicit = true, SettingValue.IntValue(5_000))
+            )
+        )
+
+        val plan = SettingsImportPlanner(catalog, 27).plan(source, current)
+
+        assertEquals(2, plan.entries.size)
+        assertTrue(plan.entries.all { it.status == ImportStatus.INVALID_VALUE })
+        assertTrue(plan.entries.none { it.willWrite })
+        assertFalse(plan.canApply)
+    }
+
+    @Test
     fun `single imported duration boundary cannot conflict with the kept current boundary`() {
         val minSpec = requireNotNull(
             SettingsCatalog.byId[SettingsCatalog.ID_RECOMMEND_VIDEO_MIN_DURATION]

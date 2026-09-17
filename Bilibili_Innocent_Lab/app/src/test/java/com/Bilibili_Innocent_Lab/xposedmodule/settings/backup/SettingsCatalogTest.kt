@@ -130,11 +130,11 @@ class SettingsCatalogTest {
     }
 
     @Test
-    fun `catalog is a unique allowlist with 145 settings`() {
-        assertEquals(145, SettingsCatalog.specs.size)
-        assertEquals(145, SettingsCatalog.specs.map { it.id }.distinct().size)
-        assertEquals(145, SettingsCatalog.specs.map { it.storageKey }.distinct().size)
-        assertEquals(143, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.AUTOMATIC })
+    fun `catalog is a unique allowlist with 147 settings`() {
+        assertEquals(147, SettingsCatalog.specs.size)
+        assertEquals(147, SettingsCatalog.specs.map { it.id }.distinct().size)
+        assertEquals(147, SettingsCatalog.specs.map { it.storageKey }.distinct().size)
+        assertEquals(145, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.AUTOMATIC })
         assertEquals(2, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.MANUAL })
         assertTrue(SettingsCatalog.specs.all { it.accepts(it.defaultValue) })
         assertTrue(SettingsCatalog.specs.all { it.id.matches(Regex("[a-z0-9][a-z0-9._-]{0,127}")) })
@@ -365,7 +365,7 @@ class SettingsCatalogTest {
         val expected = requireNotNull(javaClass.classLoader?.getResourceAsStream("settings-backup/catalog-v13.txt"))
             .bufferedReader().useLines { it.filter(String::isNotBlank).toList() }
         assertEquals(expected, SettingsCatalog.specs.filter { it.introducedCatalogVersion <= 13 }.map { it.id }.sorted())
-        assertEquals(26, SettingsCatalog.CATALOG_VERSION)
+        assertEquals(27, SettingsCatalog.CATALOG_VERSION)
         val added = SettingsCatalog.specs.filter { it.introducedCatalogVersion == 13 }
         assertEquals(6, added.size)
         assertTrue(added.all { it.restorePolicy == RestorePolicy.AUTOMATIC && ImportEffect.RESTART_BILIBILI in it.effects })
@@ -454,9 +454,35 @@ class SettingsCatalogTest {
     }
 
     @Test
+    fun `catalog v27 adds the shared play count range pair`() {
+        val expected = requireNotNull(
+            javaClass.classLoader?.getResourceAsStream("settings-backup/catalog-v27.txt")
+        ).bufferedReader().useLines { it.filter(String::isNotBlank).toList() }
+        assertEquals(expected, SettingsCatalog.specs.filter { it.introducedCatalogVersion <= 27 }.map { it.id }.sorted())
+        val added = SettingsCatalog.specs.filter { it.introducedCatalogVersion == 27 }
+        assertEquals(
+            listOf(
+                SettingsCatalog.ID_RECOMMEND_VIDEO_MAX_PLAY_COUNT,
+                SettingsCatalog.ID_RECOMMEND_VIDEO_MIN_PLAY_COUNT
+            ),
+            added.map { it.id }.sorted()
+        )
+        assertEquals(
+            listOf("recommend_video_max_play_count", "recommend_video_min_play_count"),
+            added.map { it.storageKey }.sorted()
+        )
+        added.forEach {
+            assertEquals(SettingValueType.INTEGER, it.type)
+            assertEquals(SettingValue.IntValue(0), it.defaultValue)
+            assertEquals(RestorePolicy.AUTOMATIC, it.restorePolicy)
+            assertTrue(ImportEffect.RESTART_BILIBILI in it.effects)
+        }
+    }
+
+    @Test
     fun `catalog types and manual roaming boundary are explicit`() {
         assertEquals(111, SettingsCatalog.specs.count { it.type == SettingValueType.BOOLEAN })
-        assertEquals(9, SettingsCatalog.specs.count { it.type == SettingValueType.INTEGER })
+        assertEquals(11, SettingsCatalog.specs.count { it.type == SettingValueType.INTEGER })
         assertEquals(25, SettingsCatalog.specs.count { it.type == SettingValueType.STRING })
 
         val roaming = requireNotNull(SettingsCatalog.byId["compat.roaming.enabled"])
@@ -506,6 +532,18 @@ class SettingsCatalogTest {
             assertTrue(duration.accepts(SettingValue.IntValue(0)))
             assertTrue(duration.accepts(SettingValue.IntValue(Int.MAX_VALUE)))
             assertFalse(duration.accepts(SettingValue.IntValue(-1)))
+        }
+
+        listOf(
+            SettingsCatalog.ID_RECOMMEND_VIDEO_MIN_PLAY_COUNT,
+            SettingsCatalog.ID_RECOMMEND_VIDEO_MAX_PLAY_COUNT
+        ).forEach { id ->
+            val playCount = requireNotNull(SettingsCatalog.byId[id])
+            assertEquals(27, playCount.introducedCatalogVersion)
+            assertEquals(SettingValue.IntValue(0), playCount.defaultValue)
+            assertTrue(playCount.accepts(SettingValue.IntValue(0)))
+            assertTrue(playCount.accepts(SettingValue.IntValue(Int.MAX_VALUE)))
+            assertFalse(playCount.accepts(SettingValue.IntValue(-1)))
         }
 
         val logLevel = requireNotNull(SettingsCatalog.byId["diagnostics.logging.level"])

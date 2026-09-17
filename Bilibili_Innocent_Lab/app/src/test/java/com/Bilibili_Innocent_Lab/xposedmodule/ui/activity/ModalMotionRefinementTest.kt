@@ -119,6 +119,49 @@ class ModalMotionRefinementTest {
         assertEquals(1, Regex("NavigationMotionPolicy.remainingDuration\\(").findAll(controller).count())
     }
 
+    @Test fun theMorphLayerNeverCastsAShadowTheRestingCardCannotInherit() {
+        // 2026-09-17 真机实测：稳定态卡片**根本不投影**——底边外 0..60px 亮度恒为 70，
+        // 与背景完全一致（它的背景 drawable 不提供 outline）。而承载层有自绘 outline，
+        // 一旦给它 elevation，形变期间会投出一片阴影，settleExpanded 交还给卡片时无影可接，
+        // 现场就是"阴影闪一下"。这条用例钉住"别再想当然地给承载层补阴影"。
+        val controller = source("IconAnchoredMotionController")
+        assertFalse(controller.contains("layer.elevation ="))
+        // 卡片自己的 elevation 仍然要在形变期间让位、结束时还回去，这部分没变。
+        assertTrue(controller.contains("content.elevation = 0f"))
+        val settle = controller.substringAfter("private fun settleExpanded()").substringBefore("fun beginPredictiveBack")
+        assertTrue(settle.contains("content.elevation = contentElevation"))
+    }
+
+    @Test fun theCoveredParentFadesOutLateSoTwoStrokesNeverStackAtTheEnd() {
+        // 两张卡片矩形完全重合时各画一条半透明描边，叠加后比单独任何一张都亮：
+        // 真机实测同一条左边缘，父面板独自稳定 87，子面板落位后 103，且这一跳在最后一帧。
+        assertEquals(0f, IconAnchoredMotionSpec.coveredParentAlpha(1f), 0f)
+        assertEquals(1f, IconAnchoredMotionSpec.coveredParentAlpha(0f), 0f)
+        // 起点必须够晚：早了父面板的正文会当着用户的面褪色。
+        assertTrue(IconAnchoredMotionSpec.COVERED_PARENT_FADE_START >= 0.85f)
+        assertEquals(1f, IconAnchoredMotionSpec.coveredParentAlpha(
+            IconAnchoredMotionSpec.COVERED_PARENT_FADE_START), 0f)
+        // 单调不回头，否则父面板会在末段闪一下。
+        var previous = 1f
+        for (step in 0..1000) {
+            val value = IconAnchoredMotionSpec.coveredParentAlpha(step / 1000f)
+            assertTrue(value in 0f..1f)
+            assertTrue(value <= previous + 1e-6f)
+            previous = value
+        }
+        val present = SettingsUiSource.function("presentSizedModalDialog")
+        // 只有覆盖场景才淡父面板；普通弹窗没有父面板可淡。
+        assertTrue(present.contains("if (cover != null) coveredParent?.window?.decorView else null"))
+        // **必须是 decorView**：气泡面板的表面连同描边是 BubblePanelLayer 画的，容器自己
+        // background = null，淡容器只会让文字变淡、描边纹丝不动（实测 103 没有回到 87）。
+        assertFalse(present.contains("coveredParent?.window?.decorView?.findViewById"))
+        // 入场与退场两条 onFrame 都要驱动它，否则收起时父面板不会淡回来。
+        assertEquals(2, Regex("coveredContent\\?\\.alpha = IconAnchoredMotionSpec\\.coveredParentAlpha")
+            .findAll(present).count())
+        // 硬关会停在半路，父面板不能留着半透明的 alpha。
+        assertTrue(present.contains("coveredContent?.alpha = 1f"))
+    }
+
     @Test fun reversalKeepsEntryShapeUntilStableEndpoint() {
         val controller = source("BubbleMotionController")
         val close = controller.substringAfter("fun requestClose(").substringBefore("fun handleWindowSizeChange")

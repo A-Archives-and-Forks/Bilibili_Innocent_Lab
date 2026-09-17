@@ -136,23 +136,9 @@ internal fun MainActivity.showGitHubMenuDialog(anchor: View? = null) {
         orientation = NativeLinearLayout.HORIZONTAL
         gravity = Gravity.END or Gravity.CENTER_VERTICAL
     }
+    // 与叠在本面板上的遥测说明面板共用同一颗，否则两张卡片重合时"关闭"会左右跳。
     buttonRow.addView(
-        NativeTextView(this).apply {
-            text = getString(R.string.dialog_close)
-            textColor = getColor(R.color.colorTextGray)
-            textSize = 15f
-            gravity = Gravity.CENTER
-            setPadding(
-                (20 * density).toInt(),
-                (11 * density).toInt(),
-                (20 * density).toInt(),
-                (11 * density).toInt()
-            )
-            background = selfRippleBackground(14f)
-            isClickable = true
-            isFocusable = true
-            setOnClickListener { dismissWithAnimation(dialog, container) {} }
-        }
+        createPanelCloseButton { dismissWithAnimation(dialog, container) {} }
     )
     container.addView(
         buttonRow,

@@ -200,6 +200,17 @@
     <string name="recommend_video_duration_invalid_number">请输入 1 至 2,147,483,647 的整数，或将输入框留空。</string>
     <string name="recommend_video_duration_invalid_range">最长时长不能短于最短时长。</string>
     <string name="recommend_video_duration_tip">低于最短时长或高于最长时长的视频，将从首页推荐和视频详情页底部推荐中移除；任一项留空表示不限制该边界。重启哔哩哔哩后生效。</string>
+    <string name="recommend_video_play_count_range">按播放量过滤推荐</string>
+    <string name="recommend_video_play_count_range_empty">当前未限制播放量，点击编辑</string>
+    <string name="recommend_video_play_count_min_only">最低：%1$s</string>
+    <string name="recommend_video_play_count_max_only">最高：%1$s</string>
+    <string name="recommend_video_play_count_both">范围：%1$s ～ %2$s</string>
+    <string name="recommend_video_min_play_count">推荐视频最低播放量</string>
+    <string name="recommend_video_max_play_count">推荐视频最高播放量</string>
+    <string name="recommend_video_play_count_input_hint">留空表示不限制</string>
+    <string name="recommend_video_play_count_invalid_number">请输入 1 至 2,147,483,647 的整数，或将输入框留空。</string>
+    <string name="recommend_video_play_count_invalid_range">最高播放量不能低于最低播放量。</string>
+    <string name="recommend_video_play_count_tip">播放量低于下限或高于上限的投稿，将从首页推荐和视频详情页底部推荐中移除；读不到播放量、直播或解析失败的卡片一律保留。任一项留空表示不限制该边界。重启哔哩哔哩后生效。</string>
     <string name="mine_page_settings">“我的”页</string>
     <string name="hide_mine_vip">隐藏大会员卡片</string>
     <string name="hide_mine_vip_tip">开启后，隐藏“我的”页大会员卡片，其他入口不受影响。重启哔哩哔哩后生效。</string>
@@ -868,6 +879,7 @@
     <string name="diagnostics_feature_install_partial">部分安装，存在缺失或失败的覆盖路径</string>
     <string name="diagnostics_feature_install_unknown">尚无独立的子能力证据</string>
     <string name="diagnostics_capability_duration">视频时长筛选</string>
+    <string name="diagnostics_capability_play_count">播放量筛选</string>
     <string name="diag_cap_player_interactive_legacy_follow">旧版播放器关注引导</string>
     <string name="diag_cap_player_interactive_legacy_commands">旧版播放器指令弹幕</string>
     <string name="diag_cap_player_interactive_legacy_contract">旧版播放器契约卡</string>
@@ -923,6 +935,7 @@
     <string name="highlights_component_pool_pick">组件库拦截改成勾选面板：扫描一次，勾中哪些资源池就拦哪些，不再一刀切。</string>
     <string name="highlights_component_pool_block_all">扫描不到资源池时，可打开「全量禁止」，拒收所有组件库下载。</string>
     <string name="highlights_recommendation_auto_confirm">在哔哩哔哩反馈面板里点过的标签和 UP 主可以自动进入屏蔽名单，不必再去「管理推荐屏蔽」逐条确认。</string>
+    <string name="highlights_recommend_play_count">按播放量过滤首页推荐和视频详情页底部推荐。读不到播放量、直播或解析失败的卡片一律保留。</string>
     <string name="component_snapshot_cached_notice">正在显示上次保存的扫描结果，尚未确认哔哩哔哩当前状态。</string>
     <string name="hide_player_popup_promotion">隐藏播放器弹窗推广</string>
     <string name="hide_player_popup_promotion_tip">隐藏播放器内的小程序等通用悬浮推广卡片，保留其他互动组件和普通弹幕。</string>

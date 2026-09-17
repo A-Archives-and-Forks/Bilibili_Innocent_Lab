@@ -802,6 +802,41 @@ object VersionAdapter {
         }
     }
 
+    /**
+     * 详情页推荐项的播放量链：`getAv`/`getAiCard` → `getStat` → `getVt` → `getValue`。
+     *
+     * 不包含 `getHistoryAv`。四步缺一即整条丢弃。老缓存没有 `play_count_chains`
+     * 时按空表降级，对应维度不生效。
+     */
+    data class PlayCountMethodChain(
+        val itemGetter: HookPoint,
+        val statGetter: HookPoint,
+        val vtGetter: HookPoint,
+        val valueGetter: HookPoint
+    ) {
+        fun toJson(): JSONObject = JSONObject().apply {
+            put("item", itemGetter.toJson())
+            put("stat", statGetter.toJson())
+            put("vt", vtGetter.toJson())
+            put("value", valueGetter.toJson())
+        }
+
+        companion object {
+            fun fromJson(o: JSONObject): PlayCountMethodChain? {
+                val item = o.optJSONObject("item") ?: return null
+                val stat = o.optJSONObject("stat") ?: return null
+                val vt = o.optJSONObject("vt") ?: return null
+                val value = o.optJSONObject("value") ?: return null
+                return PlayCountMethodChain(
+                    itemGetter = HookPoint.fromJson(item),
+                    statGetter = HookPoint.fromJson(stat),
+                    vtGetter = HookPoint.fromJson(vt),
+                    valueGetter = HookPoint.fromJson(value)
+                )
+            }
+        }
+    }
+
     /** 相关推荐卡片嵌套对象中的来源类型读取链。 */
     data class SourceTypeMethodChain(
         val itemGetter: HookPoint,
@@ -894,6 +929,7 @@ object VersionAdapter {
         val relateCardTypeValueGetters: List<HookPoint>,
         val directDurationGetters: List<HookPoint>,
         val durationChains: List<DurationMethodChain>,
+        val playCountChains: List<PlayCountMethodChain> = emptyList(),
         val reasonChains: List<ReasonMethodChain> = emptyList(),
         val commercialEvidenceChains: List<BooleanMethodChain> = emptyList(),
         /**
@@ -935,6 +971,10 @@ object VersionAdapter {
             put(
                 "duration_chains",
                 JSONArray().apply { durationChains.forEach { put(it.toJson()) } }
+            )
+            put(
+                "play_count_chains",
+                JSONArray().apply { playCountChains.forEach { put(it.toJson()) } }
             )
             put(
                 "reason_chains",
@@ -984,6 +1024,11 @@ object VersionAdapter {
                 durationChains = o.optJSONArray("duration_chains")?.let { values ->
                     (0 until values.length()).map {
                         DurationMethodChain.fromJson(values.getJSONObject(it))
+                    }
+                }.orEmpty(),
+                playCountChains = o.optJSONArray("play_count_chains")?.let { values ->
+                    (0 until values.length()).mapNotNull {
+                        PlayCountMethodChain.fromJson(values.getJSONObject(it))
                     }
                 }.orEmpty(),
                 reasonChains = o.getJSONArray("reason_chains").let { values ->
@@ -5028,6 +5073,48 @@ object VersionAdapter {
                     }
             }
             .distinctBy { it.itemGetter.label() + "->" + it.durationGetter.label() }
+        fun uniquePublicGetter(
+            owner: Class<*>,
+            name: String,
+            accept: (Method) -> Boolean
+        ): Method? = KavaMemberLookup.methods(
+            owner,
+            includeSuperclasses = true,
+            makeAccessible = true
+        ) { method ->
+            method.name == name && method.parameterCount == 0 &&
+                method.isPublic && !method.isStatic && accept(method)
+        }.distinctBy(Method::toGenericString).singleOrNull()
+        fun isNestedObjectMethod(method: Method): Boolean =
+            !method.returnType.isPrimitive && method.returnType != Void.TYPE
+        val playCountChains = listOf("getAv", "getAiCard")
+            .flatMap(::itemMethods)
+            .mapNotNull { itemGetter ->
+                val statGetter = uniquePublicGetter(
+                    itemGetter.returnType,
+                    "getStat",
+                    ::isNestedObjectMethod
+                ) ?: return@mapNotNull null
+                val vtGetter = uniquePublicGetter(
+                    statGetter.returnType,
+                    "getVt",
+                    ::isNestedObjectMethod
+                ) ?: return@mapNotNull null
+                val valueGetter = uniquePublicGetter(
+                    vtGetter.returnType,
+                    "getValue"
+                ) { method -> isIntegralMethod(method) } ?: return@mapNotNull null
+                PlayCountMethodChain(
+                    itemGetter = itemGetter.toHookPoint(),
+                    statGetter = statGetter.toHookPoint(),
+                    vtGetter = vtGetter.toHookPoint(),
+                    valueGetter = valueGetter.toHookPoint()
+                )
+            }
+            .distinctBy { chain ->
+                chain.itemGetter.label() + "->" + chain.statGetter.label() + "->" +
+                    chain.vtGetter.label() + "->" + chain.valueGetter.label()
+            }
         val directReasonChains = listOf(
             "getRcmdReason",
             "getRcmdReasonExtra",
@@ -5123,6 +5210,7 @@ object VersionAdapter {
             relateCardTypeValueGetters = relateTypeValues,
             directDurationGetters = directDurations,
             durationChains = durationChains,
+            playCountChains = playCountChains,
             reasonChains = reasonChains,
             commercialEvidenceChains = commercialEvidenceChains,
             authorNameChains = authorNameChains,

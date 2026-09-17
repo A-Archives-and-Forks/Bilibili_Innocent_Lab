@@ -23,10 +23,13 @@ internal class VideoRelateFilterFeatureInstaller(
     /** 标签黑名单（分区标签，整串相等）。 */
     rawBlockedTags: String = "",
     private val sectionPickEnabled: Boolean = false,
-    rawPickedTagIds: String = ""
+    rawPickedTagIds: String = "",
+    minPlayCount: Int = 0,
+    maxPlayCount: Int = 0
 ) : FeatureInstaller {
 
     private val durationRange = VideoDurationRange(minDurationSeconds, maxDurationSeconds)
+    private val playCountRange = VideoPlayCountRange(minPlayCount, maxPlayCount)
     private val customReasonKeywords = if (matchingEnhancementEnabled && reasonFilterEnabled) {
         VideoRelateReasonMatcher.parseCustom(rawReasonKeywords)
     } else {
@@ -47,6 +50,7 @@ internal class VideoRelateFilterFeatureInstaller(
         if (matchingEnhancementEnabled && strongModeEnabled) add("video_related_strong_mode_enabled")
         if (customReasonKeywords.isNotEmpty()) add("video_related_reason_filter_enabled")
         if (durationRange.isEnabled) add("video_related_duration_filter")
+        if (playCountRange.isEnabled) add("video_related_play_count_filter")
         if (blockedAuthors.isNotEmpty()) add("video_related_author_block")
         if (blockedTags.isNotEmpty()) add("video_related_tag_block")
     }
@@ -72,14 +76,22 @@ internal class VideoRelateFilterFeatureInstaller(
                     "min=${durationRange.minSeconds},max=${durationRange.maxSeconds}"
             )
         }
+        if (playCountRange.isConfigured && !playCountRange.isValid) {
+            environment.logError(
+                "video_relate_play_count_invalid",
+                "[BIL] 推荐视频播放量范围无效，已保守放行: " +
+                    "min=${playCountRange.minimum},max=${playCountRange.maximum}"
+            )
+        }
         // 作者/标签名单也算"开着"，否则只设名单不勾类型时整个功能会被判 disabled。
-        if (normalizedHidden.isEmpty() && !durationRange.isEnabled && !reasonFilteringActive &&
+        if (normalizedHidden.isEmpty() && !durationRange.isEnabled && !playCountRange.isEnabled &&
+            !reasonFilteringActive &&
             blockedAuthors.isEmpty() && blockedTags.isEmpty() && !sectionPickEnabled && pickedTagIds.isEmpty()
         ) {
-            val reason = if (durationRange.isConfigured && !durationRange.isValid) {
-                "invalid-duration-range"
-            } else {
-                "disabled"
+            val reason = when {
+                durationRange.isConfigured && !durationRange.isValid -> "invalid-duration-range"
+                playCountRange.isConfigured && !playCountRange.isValid -> "invalid-play-count-range"
+                else -> "disabled"
             }
             environment.reportStatus(CHANNEL_STATUS, reason)
             return FeatureInstallResult.Skipped(reason)
@@ -148,6 +160,7 @@ internal class VideoRelateFilterFeatureInstaller(
             sourceTypeEvidence.isNotEmpty() || sourceTypeChainEvidence.isNotEmpty() ||
             relateTypeValueEvidence.isNotEmpty()
         val durationPaths = resolveDurationPaths(environment, adapted)
+        val playCountPaths = resolvePlayCountPaths(environment, adapted)
         val reasonPaths = resolveReasonPaths(environment, adapted, reasonFilteringActive)
         // 作者名与 mid 合成同一组链：两者都按字符串比，用户填名或填 mid 都能命中。
         val authorPaths = resolveChainPaths(
@@ -176,13 +189,27 @@ internal class VideoRelateFilterFeatureInstaller(
             )
         }
         if (durationRange.isEnabled && durationPaths.isEmpty()) {
-            if (!strongModeActive && !hasTypeEvidence && reasonPaths.isEmpty()) {
+            if (!strongModeActive && !hasTypeEvidence && reasonPaths.isEmpty() &&
+                playCountPaths.isEmpty() && blockedAuthors.isEmpty() && blockedTags.isEmpty()
+            ) {
                 return missing(environment, "missing-duration-accessor")
             }
             partialReasons += "missing-duration-accessor"
             environment.logError(
                 "video_relate_duration_missing",
                 "[BIL] 详情页推荐时长读取适配不完整，现有类型过滤继续生效"
+            )
+        }
+        if (playCountRange.isEnabled && playCountPaths.isEmpty()) {
+            if (!strongModeActive && !hasTypeEvidence && durationPaths.isEmpty() &&
+                reasonPaths.isEmpty() && blockedAuthors.isEmpty() && blockedTags.isEmpty()
+            ) {
+                return missing(environment, "missing-play-count-accessor")
+            }
+            partialReasons += "missing-play-count-accessor"
+            environment.logError(
+                "video_relate_play_count_missing",
+                "[BIL] 详情页推荐播放量读取适配不完整，现有过滤继续生效"
             )
         }
         if (reasonFilteringActive && reasonPaths.isEmpty()) {
@@ -269,6 +296,9 @@ internal class VideoRelateFilterFeatureInstaller(
                 )) return@filter true
             if (durationRange.shouldRemove(
                     VideoDurationReader.fromMethods(item, durationPaths)
+                )) return@filter true
+            if (playCountRange.shouldRemove(
+                    VideoPlayCountReader.fromMethods(item, playCountPaths)
                 )) return@filter true
             if (strongModeActive && VideoRelateBooleanEvidenceReader
                     .hasPositiveEvidence(item, commercialEvidencePaths)
@@ -404,6 +434,7 @@ internal class VideoRelateFilterFeatureInstaller(
         for (capability in capabilityIds) {
             val usable = when (capability) {
                 "video_related_duration_filter" -> durationPaths.isNotEmpty()
+                "video_related_play_count_filter" -> playCountPaths.isNotEmpty()
                 "video_related_reason_filter_enabled" -> reasonPaths.isNotEmpty()
                 "video_related_matching_enhancement_enabled" ->
                     (promotionReasonEnhancementActive && reasonPaths.isNotEmpty()) ||
@@ -430,6 +461,7 @@ internal class VideoRelateFilterFeatureInstaller(
             "video_relate_ok",
             "[BIL] 视频相关推荐过滤已安装，types=$normalizedHidden," +
                 "duration=${durationRange.isEnabled}," +
+                "playCount=${playCountRange.isEnabled}," +
                 "reasonEnhancement=$promotionReasonEnhancementActive," +
                 "strongMode=$strongModeActive," +
                 "responseWriteback=${responseListFields.count { it != null }}," +
@@ -593,6 +625,25 @@ internal class VideoRelateFilterFeatureInstaller(
             itemGetter to durationGetter
         }
         return VideoDurationReader.buildMethodPaths(direct, chains)
+    }
+
+    private fun resolvePlayCountPaths(
+        environment: HookEnvironment,
+        points: VersionAdapter.VideoRelatePoints
+    ): List<VideoPlayCountMethodPath> {
+        if (!playCountRange.isEnabled) return emptyList()
+        val chains = points.playCountChains.mapIndexedNotNull { index, chain ->
+            val itemGetter = resolve(environment, "play_count.item.$index", chain.itemGetter)
+                ?: return@mapIndexedNotNull null
+            val statGetter = resolve(environment, "play_count.stat.$index", chain.statGetter)
+                ?: return@mapIndexedNotNull null
+            val vtGetter = resolve(environment, "play_count.vt.$index", chain.vtGetter)
+                ?: return@mapIndexedNotNull null
+            val valueGetter = resolve(environment, "play_count.value.$index", chain.valueGetter)
+                ?: return@mapIndexedNotNull null
+            listOf(itemGetter, statGetter, vtGetter, valueGetter)
+        }
+        return VideoPlayCountReader.buildMethodPaths(chains)
     }
 
     private fun resolveReasonPaths(

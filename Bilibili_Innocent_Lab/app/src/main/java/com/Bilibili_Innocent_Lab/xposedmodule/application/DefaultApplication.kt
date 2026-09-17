@@ -7,12 +7,21 @@ import com.Bilibili_Innocent_Lab.xposedmodule.settings.prefs
 import com.Bilibili_Innocent_Lab.xposedmodule.settings.backup.SettingsImportApplier
 import com.Bilibili_Innocent_Lab.xposedmodule.settings.backup.ModuleSettingsStore
 import com.Bilibili_Innocent_Lab.xposedmodule.settings.terms.UserTermsAuthorizationCoordinator
+import com.Bilibili_Innocent_Lab.xposedmodule.runtime.FairRunningMemoryCoordinator
 import com.Bilibili_Innocent_Lab.xposedmodule.runtime.noroot.NoRootUpgradeRecoveryCoordinator
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.runtime.ModuleMemoryPressureHub
 
 class DefaultApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+        // 公平内存必须在条款早退之前登记：条款页同样可能被系统 TRIM/KILL。
+        // 只服务本进程；不要搬到 HookEntry / 宿主 Application。
+        FairRunningMemoryCoordinator.initialize(
+            context = this,
+            onTrim = { ModuleMemoryPressureHub.releaseGraphics() },
+            onPersist = { ModuleMemoryPressureHub.persistForImminentKill() }
+        )
         /**
          * 跟随系统夜间模式
          * Follow system night mode

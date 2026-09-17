@@ -200,6 +200,17 @@
     <string name="recommend_video_duration_invalid_number">請輸入 1 至 2,147,483,647 的整數，或將輸入框留空。</string>
     <string name="recommend_video_duration_invalid_range">最長時長不可短於最短時長。</string>
     <string name="recommend_video_duration_tip">短於最短時長或長於最長時長的影片，將從首頁推薦及影片詳細頁下方的推薦中移除；任一欄位留空表示不限制該邊界。重新啟動 Bilibili 後生效。</string>
+    <string name="recommend_video_play_count_range">依播放次數過濾推薦</string>
+    <string name="recommend_video_play_count_range_empty">目前未限制播放次數，點按即可編輯</string>
+    <string name="recommend_video_play_count_min_only">最低：%1$s</string>
+    <string name="recommend_video_play_count_max_only">最高：%1$s</string>
+    <string name="recommend_video_play_count_both">範圍：%1$s ～ %2$s</string>
+    <string name="recommend_video_min_play_count">推薦影片最低播放次數</string>
+    <string name="recommend_video_max_play_count">推薦影片最高播放次數</string>
+    <string name="recommend_video_play_count_input_hint">留空表示不限制</string>
+    <string name="recommend_video_play_count_invalid_number">請輸入 1 至 2,147,483,647 的整數，或將輸入框留空。</string>
+    <string name="recommend_video_play_count_invalid_range">最高播放次數不可低於最低播放次數。</string>
+    <string name="recommend_video_play_count_tip">播放次數低於下限或高於上限的投稿，將從首頁推薦及影片詳細頁下方的推薦中移除；讀不到播放次數、直播或解析失敗的卡片一律保留。任一欄位留空表示不限制該邊界。重新啟動 Bilibili 後生效。</string>
     <string name="mine_page_settings">「我的」頁面</string>
     <string name="hide_mine_vip">隱藏大會員卡片</string>
     <string name="hide_mine_vip_tip">啟用後，隱藏「我的」頁面中的大會員卡片，其他入口不受影響。重新啟動 Bilibili 後生效。</string>
@@ -868,6 +879,7 @@
     <string name="diagnostics_feature_install_partial">部分安裝，存在缺失或失敗的覆蓋路徑</string>
     <string name="diagnostics_feature_install_unknown">尚無獨立的子能力證據</string>
     <string name="diagnostics_capability_duration">影片時長篩選</string>
+    <string name="diagnostics_capability_play_count">播放次數篩選</string>
     <string name="diag_cap_player_interactive_legacy_follow">舊版播放器關注引導</string>
     <string name="diag_cap_player_interactive_legacy_commands">舊版播放器指令彈幕</string>
     <string name="diag_cap_player_interactive_legacy_contract">舊版播放器契約卡</string>
@@ -923,6 +935,7 @@
     <string name="highlights_component_pool_pick">元件庫攔截改成勾選面板：掃描一次，勾中哪些資源池就攔哪些，不再一刀切。</string>
     <string name="highlights_component_pool_block_all">掃描不到資源池時，可開啟「全量禁止」，拒收所有元件庫下載。</string>
     <string name="highlights_recommendation_auto_confirm">在嗶哩嗶哩回饋面板裡點過的標籤和 UP 主可以自動進入封鎖名單，不必再去「管理推薦封鎖」逐條確認。</string>
+    <string name="highlights_recommend_play_count">依播放次數過濾首頁推薦及影片詳細頁下方推薦。讀不到播放次數、直播或解析失敗的卡片一律保留。</string>
     <string name="component_snapshot_cached_notice">正在顯示上次儲存的掃描結果，尚未確認嗶哩嗶哩目前狀態。</string>
     <string name="hide_player_popup_promotion">隱藏播放器彈窗推廣</string>
     <string name="hide_player_popup_promotion_tip">隱藏播放器內的小程式等通用懸浮推廣卡片，保留其他互動元件和一般彈幕。</string>

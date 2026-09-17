@@ -1,6 +1,7 @@
 package com.Bilibili_Innocent_Lab.xposedmodule.ui.activity
 
 import java.io.File
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -40,22 +41,69 @@ class TelemetryMenuStructureTest {
     }
 
     @Test
-    fun `the info panel grows from the exclamation mark instead of the screen centre`() {
+    fun `the info panel grows from the exclamation mark and covers the GitHub panel in place`() {
         val row = SettingsUiSource.function("createTelemetryMenuRow")
         val click = row.substringAfter("contentDescription = getString(R.string.telemetry_info_button)")
             .substringBefore("// GitHub 二级页只导航")
-        // 顺序是这条用例的全部意义：GitHub 面板一收起，ⓘ 就从窗口上摘掉了，
-        // 之后再取位置只会拿到 null，面板会静默退回居中缩放入场。
-        val captured = click.indexOf("val origin = modalAnchorBounds(source)")
-        val dismissed = click.indexOf("dismissWithAnimation(dialog, dialogContainer)")
-        assertTrue(captured >= 0)
-        assertTrue(dismissed >= 0)
-        assertTrue("来源矩形必须在收起之前抓", captured < dismissed)
-        assertTrue(click.contains("showTelemetryInfoDialog(origin)"))
+        // 折叠端是 ⓘ、展开端是 GitHub 卡片，两张矩形都必须在点击这一刻取：
+        // 形变一开始卡片就会被改 alpha 与 outline，事后取到的不是用户看到的位置。
+        assertTrue(click.contains("origin = modalAnchorBounds(source)"))
+        // 展开端按父面板**画出来的表面**取；用容器矩形会把气泡小角那 9dp 也算进去。
+        assertTrue(click.contains("cover = modalSurfaceBounds(dialog, dialogContainer)"))
+        assertFalse(click.contains("cover = modalAnchorBounds("))
+        // GitHub 面板**不再关闭**——它要留在下面被盖住。
+        assertFalse("子面板要叠在父面板上，不能再先收起父面板",
+            click.contains("dismissWithAnimation(dialog, dialogContainer)"))
+        assertTrue(click.contains("parentDialog = dialog"))
 
         val detail = SettingsUiSource.function("showTelemetryInfoDialog")
+        assertTrue(detail.contains("morphAnchorBounds = origin, coverBounds = cover"))
+        // 四个参数都有默认值：从遥测说明返回那条路径仍是原来的居中缩放入场。
         assertTrue(detail.contains("origin: SettingsBackupMotionRect? = null"))
-        assertTrue(detail.contains("presentModalDialog(dialog, container, morphAnchorBounds = origin)"))
+        assertTrue(detail.contains("cover: SettingsBackupMotionRect? = null"))
+    }
+
+    @Test
+    fun `rows that open a further dialog retire the covered parent themselves`() {
+        val detail = SettingsUiSource.function("showTelemetryInfoDialog")
+        // 新弹窗的 present 开头会硬关当前弹窗；不提前让父面板走自己的退场动画，
+        // 用户就会看到 GitHub 面板"啪"地消失。三个会开新弹窗的入口都要提前收它。
+        // 排除 `fun closeCoveredParent()` 那行声明，只数真正的调用点。
+        assertEquals(3, Regex("(?<!fun )closeCoveredParent\\(\\)").findAll(detail).count())
+        for (marker in listOf("telemetry_explanation_action", "telemetry_preview_action", "telemetry_purge_action")) {
+            val handler = detail.substringAfter(marker).substringBefore("createGitHubMenuRow")
+            assertTrue(marker, handler.contains("closeCoveredParent()"))
+        }
+        // 关闭按钮与手动上传**不**收父面板：它们不开新弹窗，收起后本来就该露出 GitHub 面板。
+        val close = detail.substringAfter("createPanelCloseButton").substringBefore("presentModalDialog")
+        assertFalse(close.contains("closeCoveredParent()"))
+        // 两张卡片矩形完全重合，"关闭"必须是同一颗按钮，否则切换时会左右跳。
+        assertTrue(SettingsUiSource.function("showGitHubMenuDialog").contains("createPanelCloseButton"))
+    }
+
+    @Test
+    fun `a covered child panel keeps the parent alive and does not stack a second blur`() {
+        val present = SettingsUiSource.function("presentSizedModalDialog")
+        // 父面板不能被硬关，否则"盖住"无从谈起。
+        assertTrue(present.contains("if (cover == null) activeConfirmDialog?.dismiss()"))
+        // 子面板收起后父面板要变回"当前弹窗"，否则更新检查会在它脸上再弹一个。
+        assertTrue(present.contains("activeConfirmDialog = coveredParent?.takeIf { it.isShowing }"))
+        // 两层 blur-behind 会把底页糊到发灰，还会糊掉特意留在下面的父面板。
+        assertTrue(present.contains("if (cover != null) null else ModalBackdropBlur.createOrNull("))
+        // 位置没定就压首帧，展开端会按旧的居中矩形算，形变往错的地方长。
+        val preDraw = present.substringAfter("if (morphController != null && morphLayer != null)")
+        assertTrue(preDraw.indexOf("applyCoverPlacement()") < preDraw.indexOf("prepareFirstFrame()"))
+        // 高度必须算出来写死。WRAP_CONTENT + minimumHeight 会被 FrameLayout 的剩余空间
+        // 撑到窗口底部（实测 [278,314][1398,3078]，父面板底边其实是 2337）。
+        assertFalse("minimumHeight 撑不住，别再退回去", present.contains("container.minimumHeight ="))
+        assertTrue(present.contains("maxOf(target.height.toInt(), container.measuredHeight)"))
+        assertTrue(present.contains("View.MeasureSpec.UNSPECIFIED"))
+        // 按可见表面对齐，不是容器矩形：气泡的小角在 padding 里，会多出 9dp。
+        val row = SettingsUiSource.function("createTelemetryMenuRow")
+        assertTrue(row.contains("cover = modalSurfaceBounds(dialog, dialogContainer)"))
+        val surface = SettingsUiSource.function("modalSurfaceBounds")
+        assertTrue(surface.contains("bounds.top + insets.top"))
+        assertTrue(surface.contains("bounds.bottom - insets.bottom"))
     }
 
     @Test

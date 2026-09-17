@@ -23,6 +23,21 @@ class VideoRelateFilterFeatureInstallerTest {
             (records.last { it.id == "video_related_duration_filter" }.result as FeatureInstallResult.Skipped).reasonCode)
     }
 
+    @Test
+    fun normalizedTypeAndMissingPlayCountPublishSeparateCapabilityOutcomes() {
+        val points = requireNotNull(VersionAdapter.locateVideoRelate(requireNotNull(javaClass.classLoader)))
+            .copy(playCountChains = emptyList())
+        val records = mutableListOf<FeatureInstallRecord>()
+        val env = environment(mutableListOf()).copy(installationEvidence = { records += it })
+        FeatureInstallCoordinator(env).installAll(listOf(VideoRelateFilterFeatureInstaller(
+            hiddenTypes = setOf("game"), minDurationSeconds = 0, maxDurationSeconds = 0,
+            minPlayCount = 10_000, maxPlayCount = 0, points = points
+        )))
+        assertTrue(records.last { it.id == "video_related_game_removed" }.result is FeatureInstallResult.Installed)
+        assertEquals(FeatureSkipReason.MISSING_HOST_STRUCTURE,
+            (records.last { it.id == "video_related_play_count_filter" }.result as FeatureInstallResult.Skipped).reasonCode)
+    }
+
 
     private fun hookCount(points: VersionAdapter.VideoRelatePoints): Int =
         points.responseItemGetters.size + if (points.detailRelateService != null) 1 else 0
@@ -231,6 +246,51 @@ class VideoRelateFilterFeatureInstallerTest {
         )
         assertEquals(listOf("video_relate_filter_status" to "success"), durationStatuses)
         assertEquals(listOf("video_relate_filter_status" to "disabled"), disabledStatuses)
+    }
+
+    @Test
+    fun `play-count-only configuration installs while an empty range stays hook free`() {
+        val playCountStatuses = mutableListOf<Pair<String, String>>()
+        val points = requireNotNull(
+            VersionAdapter.locateVideoRelate(requireNotNull(javaClass.classLoader))
+        )
+
+        assertEquals(
+            FeatureInstallResult.Installed(hookCount(points)),
+            VideoRelateFilterFeatureInstaller(
+                hiddenTypes = emptySet(),
+                minDurationSeconds = 0,
+                maxDurationSeconds = 0,
+                minPlayCount = 10_000,
+                maxPlayCount = 0,
+                points = points
+            ).install(environment(playCountStatuses))
+        )
+        assertEquals(listOf("video_relate_filter_status" to "success"), playCountStatuses)
+    }
+
+    @Test
+    fun `missing play count paths do not disable an existing type filter`() {
+        val statuses = mutableListOf<Pair<String, String>>()
+        val points = requireNotNull(
+            VersionAdapter.locateVideoRelate(requireNotNull(javaClass.classLoader))
+        ).copy(playCountChains = emptyList())
+
+        assertEquals(
+            FeatureInstallResult.Installed(hookCount(points), complete = false),
+            VideoRelateFilterFeatureInstaller(
+                hiddenTypes = setOf("game"),
+                minDurationSeconds = 0,
+                maxDurationSeconds = 0,
+                minPlayCount = 10_000,
+                maxPlayCount = 0,
+                points = points
+            ).install(environment(statuses))
+        )
+        assertEquals(
+            listOf("video_relate_filter_status" to "partial:missing-play-count-accessor"),
+            statuses
+        )
     }
 
     @Test

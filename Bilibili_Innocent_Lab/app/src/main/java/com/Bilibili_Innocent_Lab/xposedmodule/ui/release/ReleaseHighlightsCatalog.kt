@@ -106,6 +106,12 @@ internal object ReleaseHighlightsCatalog {
         ReleaseHighlight("recommend-feedback-auto-confirm", HighlightKind.NEW,
             R.string.highlights_recommendation_auto_confirm,
             HighlightDestination("home.recommend.feedback_auto_confirm")),
+        ReleaseHighlight("recommend-play-count-min", HighlightKind.NEW,
+            R.string.highlights_recommend_play_count,
+            HighlightDestination(SettingsCatalog.ID_RECOMMEND_VIDEO_MIN_PLAY_COUNT)),
+        ReleaseHighlight("recommend-play-count-max", HighlightKind.NEW,
+            R.string.highlights_recommend_play_count,
+            HighlightDestination(SettingsCatalog.ID_RECOMMEND_VIDEO_MAX_PLAY_COUNT)),
         ReleaseHighlight("independent-adaptation", HighlightKind.FIXED, R.string.highlights_stability,
             standaloneTitleRes = R.string.highlights_stability_title)
     )))

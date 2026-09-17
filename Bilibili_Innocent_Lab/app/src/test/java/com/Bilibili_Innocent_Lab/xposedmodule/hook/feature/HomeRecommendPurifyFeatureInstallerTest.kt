@@ -43,6 +43,20 @@ class HomeRecommendPurifyFeatureInstallerTest {
             (records.last { it.id == "home_recommend_duration_filter" }.result as FeatureInstallResult.Skipped).reasonCode)
     }
 
+    @Test
+    fun missingPlayCountGateHasItsOwnFailureWithoutDowngradingTheWorkingAdFilter() {
+        val points = requireNotNull(VersionAdapter.locateHomeRecommendFeed(requireNotNull(javaClass.classLoader)))
+            .copy(playerArgsGetter = null, playerArgsDurationField = null)
+        val records = mutableListOf<FeatureInstallRecord>()
+        val env = environment(mutableListOf()).copy(installationEvidence = { records += it })
+        FeatureInstallCoordinator(env).installAll(listOf(installer(
+            minSeconds = 0, maxSeconds = 0, minPlayCount = 10_000, maxPlayCount = 0, removeAds = true, points = points
+        )))
+        assertEquals(true, (records.last { it.id == "home_recommend_ads_removed" }.result as FeatureInstallResult.Installed).complete)
+        assertEquals(FeatureSkipReason.MISSING_HOST_STRUCTURE,
+            (records.last { it.id == "home_recommend_play_count_filter" }.result as FeatureInstallResult.Skipped).reasonCode)
+    }
+
 
     private fun environment(statuses: MutableList<Pair<String, String>>) = HookEnvironment(
         processName = "tv.danmaku.bili",
@@ -57,6 +71,8 @@ class HomeRecommendPurifyFeatureInstallerTest {
     private fun installer(
         minSeconds: Int,
         maxSeconds: Int,
+        minPlayCount: Int = 0,
+        maxPlayCount: Int = 0,
         removeAds: Boolean = false,
         removeCmV2: Boolean = false,
         removeBanner: Boolean = false,
@@ -77,6 +93,8 @@ class HomeRecommendPurifyFeatureInstallerTest {
         removeLarge = false,
         minDurationSeconds = minSeconds,
         maxDurationSeconds = maxSeconds,
+        minPlayCount = minPlayCount,
+        maxPlayCount = maxPlayCount,
         points = points,
         sectionPickEnabled = sectionPickEnabled
     )
@@ -483,12 +501,12 @@ class HomeRecommendPurifyFeatureInstallerTest {
                 argsMethod("getUpName"),
                 argsMethod("getUpId")
             )
-        val constructor = accessorsClass.declaredConstructors.single { it.parameterCount == 14 }
+        val constructor = accessorsClass.declaredConstructors.single { it.parameterCount == 15 }
             .apply { isAccessible = true }
-        val values = arrayOfNulls<Any>(14)
+        val values = arrayOfNulls<Any>(15)
         values[0] = holderGetter.apply { isAccessible = true }
-        values[12] = tid
-        values[13] = author
+        values[13] = tid
+        values[14] = author
         return constructor.newInstance(*values)
     }
 

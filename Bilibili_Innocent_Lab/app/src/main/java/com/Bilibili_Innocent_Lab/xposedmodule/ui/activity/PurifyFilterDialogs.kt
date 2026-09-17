@@ -1037,6 +1037,229 @@ internal fun MainActivity.showRecommendVideoDurationRangeDialog(anchor: View? = 
     presentModalDialog(dialog, container, anchor)
 }
 
+internal fun MainActivity.showRecommendVideoPlayCountRangeDialog(anchor: View? = null) {
+    val density = resources.displayMetrics.density
+    val dialog = Dialog(this)
+    val container = createModalContainer()
+
+    container.addView(
+        NativeTextView(this).apply {
+            text = getString(R.string.recommend_video_play_count_range)
+            textColor = getColor(R.color.colorTextDark)
+            textSize = 17f
+            setLineSpacing(4 * density, 1f)
+        },
+        NativeLinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        )
+    )
+
+    fun addPlayCountEditor(
+        @StringRes labelRes: Int,
+        initialValue: Int
+    ): NativeEditText {
+        val editorId = View.generateViewId()
+        container.addView(
+            NativeTextView(this).apply {
+                text = getString(labelRes)
+                textColor = getColor(R.color.colorTextGray)
+                textSize = 13f
+                labelFor = editorId
+            },
+            NativeLinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = (14 * density).toInt() }
+        )
+        return NativeEditText(this).apply {
+            id = editorId
+            setText(initialValue.takeIf { it > 0 }?.toString().orEmpty())
+            setSelection(text.length)
+            hint = getString(R.string.recommend_video_play_count_input_hint)
+            textColor = getColor(R.color.colorTextDark)
+            setHintTextColor(
+                ColorUtils.setAlphaComponent(getColor(R.color.colorTextGray), 0x99)
+            )
+            textSize = 14f
+            gravity = Gravity.CENTER_VERTICAL or Gravity.START
+            inputType = android.text.InputType.TYPE_CLASS_NUMBER
+            isSingleLine = true
+            filters = arrayOf(android.text.InputFilter.LengthFilter(10))
+            setPadding(
+                (14 * density).toInt(),
+                (12 * density).toInt(),
+                (14 * density).toInt(),
+                (12 * density).toInt()
+            )
+            background = GradientDrawable().apply {
+                cornerRadius = 14 * density
+                setColor(monetColors.surfaceVariant)
+                setStroke(
+                    density.toInt().coerceAtLeast(1),
+                    ColorUtils.setAlphaComponent(getColor(R.color.colorTextGray), 0x38)
+                )
+            }
+            container.addView(
+                this,
+                NativeLinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = (6 * density).toInt() }
+            )
+        }
+    }
+
+    val minEditor = addPlayCountEditor(
+        R.string.recommend_video_min_play_count,
+        recommendVideoMinPlayCount
+    ).apply {
+        imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_NEXT
+    }
+    val maxEditor = addPlayCountEditor(
+        R.string.recommend_video_max_play_count,
+        recommendVideoMaxPlayCount
+    ).apply {
+        imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_DONE
+    }
+
+    val errorView = NativeTextView(this).apply {
+        visibility = View.GONE
+        textColor = if (ColorUtils.calculateLuminance(monetColors.surface) < 0.5) {
+            0xFFFFB4AB.toInt()
+        } else {
+            0xFFBA1A1A.toInt()
+        }
+        textSize = 12f
+        setLineSpacing(4 * density, 1f)
+    }
+    container.addView(
+        errorView,
+        NativeLinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = (10 * density).toInt() }
+    )
+
+    fun showError(@StringRes messageRes: Int, target: NativeEditText) {
+        errorView.text = getString(messageRes)
+        errorView.visibility = View.VISIBLE
+        errorView.announceForAccessibility(errorView.text)
+        target.requestFocus()
+        target.setSelection(target.text.length)
+    }
+
+    fun parsePlayCount(editor: NativeEditText): Int? {
+        val raw = editor.textToString().trim()
+        if (raw.isEmpty()) return 0
+        val parsed = raw.toLongOrNull() ?: return null
+        return parsed.takeIf { it in 1L..Int.MAX_VALUE.toLong() }?.toInt()
+    }
+
+    val buttonRow = NativeLinearLayout(this).apply {
+        orientation = NativeLinearLayout.HORIZONTAL
+        gravity = Gravity.END or Gravity.CENTER_VERTICAL
+    }
+    buttonRow.addView(
+        NativeTextView(this).apply {
+            text = getString(R.string.dialog_cancel)
+            textColor = getColor(R.color.colorTextGray)
+            textSize = 15f
+            gravity = Gravity.CENTER
+            setPadding(
+                (20 * density).toInt(),
+                (11 * density).toInt(),
+                (20 * density).toInt(),
+                (11 * density).toInt()
+            )
+            background = selfRippleBackground(14f)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { dismissWithAnimation(dialog, container) {} }
+        }
+    )
+    buttonRow.addView(
+        NativeTextView(this).apply {
+            text = getString(R.string.dialog_confirm)
+            textColor = monetColors.onPrimary
+            textSize = 15f
+            typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setPadding(
+                (22 * density).toInt(),
+                (11 * density).toInt(),
+                (22 * density).toInt(),
+                (11 * density).toInt()
+            )
+            val radius = 20 * density
+            val content = GradientDrawable().apply {
+                cornerRadius = radius
+                setColor(monetColors.primary)
+            }
+            val rippleMask = GradientDrawable().apply {
+                cornerRadius = radius
+                setColor(Color.WHITE)
+            }
+            background = RippleDrawable(
+                ColorStateList.valueOf(
+                    ColorUtils.setAlphaComponent(monetColors.onPrimary, 0x33)
+                ),
+                content,
+                rippleMask
+            )
+            skinActionButton(this, filled = true)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener {
+                errorView.visibility = View.GONE
+                val minimum = parsePlayCount(minEditor)
+                if (minimum == null) {
+                    showError(R.string.recommend_video_play_count_invalid_number, minEditor)
+                    return@setOnClickListener
+                }
+                val maximum = parsePlayCount(maxEditor)
+                if (maximum == null) {
+                    showError(R.string.recommend_video_play_count_invalid_number, maxEditor)
+                    return@setOnClickListener
+                }
+                if (minimum > 0 && maximum > 0 && minimum > maximum) {
+                    showError(R.string.recommend_video_play_count_invalid_range, maxEditor)
+                    return@setOnClickListener
+                }
+
+                recommendVideoMinPlayCount = minimum
+                recommendVideoMaxPlayCount = maximum
+                runCatching {
+                    prefs().edit {
+                        putInt(FeaturePreferences.RECOMMEND_VIDEO_MIN_PLAY_COUNT, minimum)
+                        putInt(FeaturePreferences.RECOMMEND_VIDEO_MAX_PLAY_COUNT, maximum)
+                    }
+                }.onFailure { throwable ->
+                    Log.e(
+                        "BilibiliInnocentLab",
+                        "write recommended video play count prefs failed",
+                        throwable
+                    )
+                }
+                updateRecommendVideoPlayCountSummary()
+                dismissWithAnimation(dialog, container) {}
+            }
+        },
+        NativeLinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { marginStart = (16 * density).toInt() }
+    )
+    container.addView(
+        buttonRow,
+        NativeLinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = (18 * density).toInt() }
+    )
+    presentModalDialog(dialog, container, anchor)
+}
+
 /** 小范围模态内容使用系统 Transition；不把逐帧布局传播到外层设置滚动树。 */
 private fun MainActivity.setModalSectionVisible(
     parent: ViewGroup,
@@ -1163,6 +1386,12 @@ private fun MainActivity.updateRecommendVideoDurationSummary() {
     recommendVideoDurationSummaryView?.text =
         getString(R.string.recommend_video_duration_range) + "\n" +
             recommendVideoDurationSummary()
+}
+
+private fun MainActivity.updateRecommendVideoPlayCountSummary() {
+    recommendVideoPlayCountSummaryView?.text =
+        getString(R.string.recommend_video_play_count_range) + "\n" +
+            recommendVideoPlayCountSummary()
 }
 
 /**

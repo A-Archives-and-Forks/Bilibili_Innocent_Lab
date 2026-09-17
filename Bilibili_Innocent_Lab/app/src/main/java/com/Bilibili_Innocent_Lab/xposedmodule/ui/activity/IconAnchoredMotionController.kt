@@ -102,6 +102,10 @@ internal class IconAnchoredMotionController(
         contentElevation = content.elevation
         content.elevation = 0f
         layer.background = surfaceDrawable
+        // 不要给承载层设 elevation。2026-09-17 真机实测：稳定态的卡片**根本不投影**
+        // （底边外 0..60px 亮度恒为 70，与背景一致）——它的背景 drawable 没有提供 outline。
+        // 而承载层有自绘 outline，一旦给它 elevation 就会在形变期间投出一片阴影，
+        // 到 settleExpanded 交还给卡片时又无影可接，表现为"阴影闪一下"。
         layer.blockInteraction = true
         titleMotion?.captureTargetPosition()
         apply(0f)

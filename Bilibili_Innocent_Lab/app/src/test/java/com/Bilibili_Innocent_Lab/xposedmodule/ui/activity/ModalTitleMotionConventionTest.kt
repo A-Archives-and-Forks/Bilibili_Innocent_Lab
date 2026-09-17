@@ -101,7 +101,8 @@ class ModalTitleMotionConventionTest {
             "showCommentMinLevelDialog" to "R.string.comment_min_level_filter",
             "showDanmakuWeightDialog" to "R.string.danmaku_weight_filter",
             "showAppLanguageDialog" to "R.string.app_language",
-            "showRecommendVideoDurationRangeDialog" to "R.string.recommend_video_duration_range"
+            "showRecommendVideoDurationRangeDialog" to "R.string.recommend_video_duration_range",
+            "showRecommendVideoPlayCountRangeDialog" to "R.string.recommend_video_play_count_range"
         )
         val bodies = dialogSources.flatMap { functions(it) }.toMap()
         expected.forEach { (name, titleRef) ->

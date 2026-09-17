@@ -41,7 +41,9 @@ internal class HomeRecommendPurifyFeatureInstaller(
      * 那些选择只活在 [SectionPickSession] / [AuthorPickSession] 的内存里，
      * 没有 accessor 就当场失效。
      */
-    private val sectionPickEnabled: Boolean = false
+    private val sectionPickEnabled: Boolean = false,
+    minPlayCount: Int = 0,
+    maxPlayCount: Int = 0
 ) : FeatureInstaller {
 
     private val titleKeywords = if (titleFilterEnabled) {
@@ -50,6 +52,7 @@ internal class HomeRecommendPurifyFeatureInstaller(
         emptySet()
     }
     private val durationRange = VideoDurationRange(minDurationSeconds, maxDurationSeconds)
+    private val playCountRange = VideoPlayCountRange(minPlayCount, maxPlayCount)
 
     /** 没有开关，名单非空即启用——与标题关键词同模式，避免"开着但名单为空"的无意义状态。 */
     private val blockedTids = TidBlocklistCodec.parse(rawBlockedTids)
@@ -75,7 +78,7 @@ internal class HomeRecommendPurifyFeatureInstaller(
     /** `shouldRemove` 的其余判定也全部关闭时，直接跳过整段分类/规则工作。 */
     private val itemRemovalEnabled = semanticClassificationEnabled ||
         titleKeywords.isNotEmpty() || durationRange.isEnabled ||
-        tagDimensionEnabled || authorDimensionEnabled
+        playCountRange.isEnabled || tagDimensionEnabled || authorDimensionEnabled
 
     override val id: String = ID
     override val capabilityIds: List<String> get() = buildList {
@@ -92,6 +95,7 @@ internal class HomeRecommendPurifyFeatureInstaller(
         if (removePgc) add("home_recommend_pgc_removed")
         if (removeSpecialCards) add("home_recommend_special_cards_removed")
         if (durationRange.isEnabled) add("home_recommend_duration_filter")
+        if (playCountRange.isEnabled) add("home_recommend_play_count_filter")
         if (tagDimensionEnabled) add("home_recommend_tid_block")
         if (authorDimensionEnabled) add("home_recommend_author_block")
     }
@@ -108,11 +112,18 @@ internal class HomeRecommendPurifyFeatureInstaller(
                     "min=${durationRange.minSeconds},max=${durationRange.maxSeconds}"
             )
         }
-        if (!hasContentFilter && !durationRange.isEnabled) {
-            val reason = if (durationRange.isConfigured && !durationRange.isValid) {
-                "invalid-duration-range"
-            } else {
-                "disabled"
+        if (playCountRange.isConfigured && !playCountRange.isValid) {
+            environment.logError(
+                "home_recommend_play_count_invalid",
+                "[BIL] 推荐视频播放量范围无效，已保守放行: " +
+                    "min=${playCountRange.minimum},max=${playCountRange.maximum}"
+            )
+        }
+        if (!hasContentFilter && !durationRange.isEnabled && !playCountRange.isEnabled) {
+            val reason = when {
+                durationRange.isConfigured && !durationRange.isValid -> "invalid-duration-range"
+                playCountRange.isConfigured && !playCountRange.isValid -> "invalid-play-count-range"
+                else -> "disabled"
             }
             environment.reportStatus(CHANNEL_STATUS, reason)
             return FeatureInstallResult.Skipped(reason)
@@ -135,6 +146,7 @@ internal class HomeRecommendPurifyFeatureInstaller(
             subtitle = resolveOptional(environment, "subtitle", adapted.subtitleGetter),
             desc = resolveOptional(environment, "desc", adapted.descGetter),
             duration = resolveDuration(environment, adapted),
+            playCountGate = resolvePlayCountGate(environment, adapted),
             tid = resolveTid(environment, adapted),
             author = resolveAuthor(environment, adapted)
         )
@@ -143,11 +155,28 @@ internal class HomeRecommendPurifyFeatureInstaller(
         if (removePgc && !extraTypesReadable && accessors.uri == null) partialReason = "missing-pgc-readers"
         if (removeSpecialCards && !extraTypesReadable) partialReason = "missing-special-card-readers"
         if (durationRange.isEnabled && accessors.duration == null) {
-            if (!hasContentFilter) return missing(environment, "missing-duration-accessor")
+            if (!hasContentFilter && !playCountRange.isEnabled) {
+                return missing(environment, "missing-duration-accessor")
+            }
             partialReason = "missing-duration-accessor"
             environment.logError(
                 "home_recommend_duration_missing",
                 "[BIL] 首页推荐时长读取适配不完整，其他推荐过滤继续生效"
+            )
+        }
+        val playCountGate = accessors.playCountGate ?: accessors.duration?.playerArgsGetter
+        if (playCountRange.isEnabled && playCountGate == null) {
+            if (!hasContentFilter && !durationRange.isEnabled) {
+                return missing(environment, "missing-play-count-gate")
+            }
+            partialReason = if (partialReason == null) {
+                "missing-play-count-gate"
+            } else {
+                "$partialReason+missing-play-count-gate"
+            }
+            environment.logError(
+                "home_recommend_play_count_missing",
+                "[BIL] 首页推荐播放量读取门禁适配不完整，其他推荐过滤继续生效"
             )
         }
         // 名单非空却读不到 tid：必须报 partial。否则每张卡都拿 null、静默变成"从不命中"，
@@ -246,6 +275,8 @@ internal class HomeRecommendPurifyFeatureInstaller(
         for (capability in capabilityIds) {
             val readable = when (capability) {
                 "home_recommend_duration_filter" -> accessors.duration != null
+                "home_recommend_play_count_filter" ->
+                    (accessors.playCountGate ?: accessors.duration?.playerArgsGetter) != null
                 "home_recommend_title_filter_enabled" -> accessors.title != null
                 "home_recommend_ads_removed" -> true // required holderType is a valid advertisement-token source
                 "home_recommend_cm_v2_removed" -> accessors.cardType != null // this predicate reads cardType only
@@ -268,6 +299,7 @@ internal class HomeRecommendPurifyFeatureInstaller(
             "home_recommend_purify_ok",
             "[BIL] 首页推荐服务端过滤已安装，hooks=$installed," +
                 "duration=${durationRange.isEnabled}," +
+                "playCount=${playCountRange.isEnabled}," +
                 // 只记条数不记内容；用来区分"名单没传到宿主"和"传到了但不命中"。
                 "tagIds=${blockedTids.size},tagNames=${blockedTagNames.size}," +
                 "tnameReadable=${accessors.tid?.tnameGetter != null}"
@@ -319,6 +351,7 @@ internal class HomeRecommendPurifyFeatureInstaller(
             (removeVertical && HostContentKind.VERTICAL in kinds) ||
             (removeLarge && HostContentKind.LARGE in kinds) ||
             durationRange.shouldRemove(signals.durationSeconds) ||
+            playCountRange.shouldRemove(signals.playCount) ||
             // 标签是独立维度：精确相等，读不到 tid 放行。
             // **只比 tid**。2026-09-12 实测：宿主把 `args.tid` 写进不感兴趣请求时用的键是
             // `tag_id`，`args.rid` 才是分区——两者不是同一个 id 空间。拿分区 id 去比这份
@@ -397,6 +430,13 @@ internal class HomeRecommendPurifyFeatureInstaller(
                         duration.durationGetter,
                         duration.durationField
                     )
+                }
+            } else {
+                null
+            },
+            playCount = if (playCountRange.isEnabled) {
+                (accessors.playCountGate ?: accessors.duration?.playerArgsGetter)?.let { gate ->
+                    VideoPlayCountReader.fromHomeCover(item, gate)
                 }
             } else {
                 null
@@ -518,6 +558,15 @@ internal class HomeRecommendPurifyFeatureInstaller(
         return DurationAccessor(getter, durationGetter, durationField)
     }
 
+    private fun resolvePlayCountGate(
+        environment: HookEnvironment,
+        points: VersionAdapter.HomeRecommendFeedPoints
+    ): Method? {
+        if (!playCountRange.isEnabled) return null
+        val getterPoint = points.playerArgsGetter ?: return null
+        return resolve(environment, "player_args_play_count", getterPoint)
+    }
+
     private fun resolveOptional(
         environment: HookEnvironment,
         suffix: String,
@@ -568,6 +617,7 @@ internal class HomeRecommendPurifyFeatureInstaller(
         val desc: String? = null,
         val hasAdInfo: Boolean = false,
         val durationSeconds: Long? = null,
+        val playCount: Long? = null,
         /**
          * `args.tid`——**标签 id**（宿主自己按 `tag_id` 上报），不是分区。
          *
@@ -604,6 +654,7 @@ internal class HomeRecommendPurifyFeatureInstaller(
         val subtitle: Method?,
         val desc: Method?,
         val duration: DurationAccessor?,
+        val playCountGate: Method?,
         val tid: TidAccessor?,
         val author: AuthorAccessor?
     )

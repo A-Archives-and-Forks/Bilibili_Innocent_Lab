@@ -200,3 +200,21 @@ internal fun MainActivity.recommendVideoDurationSummary(): String = when {
         formatDurationSeconds(recommendVideoMaxDurationSeconds)
     )
 }
+
+internal fun MainActivity.recommendVideoPlayCountSummary(): String = when {
+    recommendVideoMinPlayCount <= 0 && recommendVideoMaxPlayCount <= 0 ->
+        getString(R.string.recommend_video_play_count_range_empty)
+    recommendVideoMaxPlayCount <= 0 -> getString(
+        R.string.recommend_video_play_count_min_only,
+        formatPlayCount(recommendVideoMinPlayCount)
+    )
+    recommendVideoMinPlayCount <= 0 -> getString(
+        R.string.recommend_video_play_count_max_only,
+        formatPlayCount(recommendVideoMaxPlayCount)
+    )
+    else -> getString(
+        R.string.recommend_video_play_count_both,
+        formatPlayCount(recommendVideoMinPlayCount),
+        formatPlayCount(recommendVideoMaxPlayCount)
+    )
+}

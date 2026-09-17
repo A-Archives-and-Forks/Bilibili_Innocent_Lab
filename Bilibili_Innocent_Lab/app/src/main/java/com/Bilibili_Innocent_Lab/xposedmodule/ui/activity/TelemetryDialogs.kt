@@ -83,11 +83,29 @@ internal fun MainActivity.showTelemetryDisclosureDialog() {
 }
 
 /**
- * @param origin ⓘ 在**点击那一刻**的屏幕矩形。GitHub 面板会先收起把 ⓘ 一起带走，所以这里只能
- *   收矩形、不能收 View。传 null（从遥测说明返回等路径）保持原有的居中缩放入场。
+ * @param origin ⓘ 在**点击那一刻**的屏幕矩形（形变的折叠端）。只能收矩形不能收 View：
+ *   ⓘ 在父面板里，父面板一动它的位置就不是用户看到的那个了。
+ * @param cover 父面板卡片的屏幕矩形（形变的展开端）。给了它，本面板就叠在父面板**上面**并
+ *   完全盖住它，父面板不关闭。
+ * @param parentDialog / @param parentContainer 被盖住的父面板。本面板里那几个"关掉自己再开
+ *   另一个弹窗"的入口需要它：新弹窗的 `presentSizedModalDialog` 开头会硬关当前弹窗，
+ *   不提前让父面板走自己的退场动画，用户就会看到它"啪"地消失。
+ *
+ * 四个参数都传 null（例如从遥测说明返回）＝退回原有的居中缩放入场，行为与改动前一致。
  */
-internal fun MainActivity.showTelemetryInfoDialog(origin: SettingsBackupMotionRect? = null) {
+internal fun MainActivity.showTelemetryInfoDialog(
+    origin: SettingsBackupMotionRect? = null,
+    cover: SettingsBackupMotionRect? = null,
+    parentDialog: Dialog? = null,
+    parentContainer: NativeLinearLayout? = null
+) {
     val density = resources.displayMetrics.density
+    // 与本面板的退场并行跑，不串行等：两张卡片一起收，比"收完一张再收一张"短得多。
+    fun closeCoveredParent() {
+        val parent = parentDialog ?: return
+        val parentView = parentContainer ?: return
+        if (parent.isShowing) dismissWithAnimation(parent, parentView) {}
+    }
     val dialog = Dialog(this)
     val container = createModalContainer()
 
@@ -110,6 +128,9 @@ internal fun MainActivity.showTelemetryInfoDialog(origin: SettingsBackupMotionRe
             subtitle = getString(R.string.telemetry_explanation_summary),
             highlight = false
         ) {
+            // 这一步会开新弹窗，父面板留不住（新弹窗的 present 开头会硬关它），
+            // 所以和本面板的退场一起开始收，而不是等收完再收。
+            closeCoveredParent()
             dismissWithAnimation(dialog, container) { showTelemetryExplanationDialog() }
         }
     )
@@ -119,6 +140,9 @@ internal fun MainActivity.showTelemetryInfoDialog(origin: SettingsBackupMotionRe
             subtitle = getString(R.string.telemetry_preview_note),
             highlight = false
         ) {
+            // 预览成功会开新弹窗；失败只弹 toast。两种结局都让父面板一起收，保持四个入口
+            // 行为一致——改动前点这些入口本来也是"全部关掉"，这里不是回退。
+            closeCoveredParent()
             dismissWithAnimation(dialog, container) {
                 toast(getString(R.string.telemetry_collecting))
                 TelemetryCoordinator.preview(applicationContext) { result ->
@@ -162,6 +186,7 @@ internal fun MainActivity.showTelemetryInfoDialog(origin: SettingsBackupMotionRe
             subtitle = getString(R.string.telemetry_purge_summary),
             highlight = false
         ) {
+            closeCoveredParent()
             dismissWithAnimation(dialog, container) {
                 showTelemetryPurgeConfirmDialog()
             }
@@ -172,14 +197,18 @@ internal fun MainActivity.showTelemetryInfoDialog(origin: SettingsBackupMotionRe
         ).apply { topMargin = (6 * density).toInt() }
     )
 
+    // 盖住父面板时卡片被抬到父面板的高度，多出来的空档默认全落在最后一行**下面**，
+    // 于是"关闭"会浮在半空，和父面板那颗对不上。用一条 weight 弹性占位把空档收到
+    // 关闭行**上面**，关闭行就贴着卡片底边——两张卡片的底边和内边距相同，位置自然重合。
+    // 非覆盖场景卡片是 WRAP_CONTENT，没有多余空间可分，这条占位高度恒为 0，不影响原样式。
+    container.addView(
+        android.view.View(this),
+        NativeLinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+    )
     val closeRow = NativeLinearLayout(this).apply {
         orientation = NativeLinearLayout.HORIZONTAL
         gravity = Gravity.END or Gravity.CENTER_VERTICAL
-        addView(
-            createTermsActionButton(getString(R.string.dialog_close), filled = false) {
-                dismissWithAnimation(dialog, container) {}
-            }
-        )
+        addView(createPanelCloseButton { dismissWithAnimation(dialog, container) {} })
     }
     container.addView(
         closeRow,
@@ -188,7 +217,7 @@ internal fun MainActivity.showTelemetryInfoDialog(origin: SettingsBackupMotionRe
             ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = (14 * density).toInt() }
     )
-    presentModalDialog(dialog, container, morphAnchorBounds = origin)
+    presentModalDialog(dialog, container, morphAnchorBounds = origin, coverBounds = cover)
 }
 
 private fun MainActivity.showTelemetryExplanationDialog() {

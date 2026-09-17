@@ -361,33 +361,38 @@ internal class SettingsImportPlanner(
         entries: List<ImportPlanEntry>,
         current: SettingsSnapshot
     ): List<ImportPlanEntry> {
-        val durationIds = setOf(
-            SettingsCatalog.ID_RECOMMEND_VIDEO_MIN_DURATION,
-            SettingsCatalog.ID_RECOMMEND_VIDEO_MAX_DURATION
-        )
-        if (!durationIds.all { id -> catalog.any { it.id == id } }) return entries
-
         fun effectiveInt(id: String): Int? {
             val entry = entries.firstOrNull { it.id == id }
             val value = if (entry?.willWrite == true) entry.proposed else current[id]?.value
             return (value as? SettingValue.IntValue)?.value
         }
 
-        val minSeconds = effectiveInt(SettingsCatalog.ID_RECOMMEND_VIDEO_MIN_DURATION)
-            ?: return entries
-        val maxSeconds = effectiveInt(SettingsCatalog.ID_RECOMMEND_VIDEO_MAX_DURATION)
-            ?: return entries
-        if (minSeconds <= 0 || maxSeconds <= 0 || minSeconds <= maxSeconds) return entries
-
-        return entries.map { entry ->
-            if (entry.id !in durationIds || !entry.willWrite) return@map entry
-            entry.copy(
-                status = ImportStatus.INVALID_VALUE,
-                proposed = null,
-                willWrite = false,
-                reason = ImportReason.TYPE_OR_RANGE_INVALID
-            )
+        fun rejectReversed(minId: String, maxId: String, source: List<ImportPlanEntry>): List<ImportPlanEntry> {
+            if (!catalog.any { it.id == minId } || !catalog.any { it.id == maxId }) return source
+            val minimum = effectiveInt(minId) ?: return source
+            val maximum = effectiveInt(maxId) ?: return source
+            if (minimum <= 0 || maximum <= 0 || minimum <= maximum) return source
+            val pair = setOf(minId, maxId)
+            return source.map { entry ->
+                if (entry.id !in pair || !entry.willWrite) return@map entry
+                entry.copy(
+                    status = ImportStatus.INVALID_VALUE,
+                    proposed = null,
+                    willWrite = false,
+                    reason = ImportReason.TYPE_OR_RANGE_INVALID
+                )
+            }
         }
+
+        return rejectReversed(
+            SettingsCatalog.ID_RECOMMEND_VIDEO_MIN_PLAY_COUNT,
+            SettingsCatalog.ID_RECOMMEND_VIDEO_MAX_PLAY_COUNT,
+            rejectReversed(
+                SettingsCatalog.ID_RECOMMEND_VIDEO_MIN_DURATION,
+                SettingsCatalog.ID_RECOMMEND_VIDEO_MAX_DURATION,
+                entries
+            )
+        )
     }
 
     private fun planKnownRecord(

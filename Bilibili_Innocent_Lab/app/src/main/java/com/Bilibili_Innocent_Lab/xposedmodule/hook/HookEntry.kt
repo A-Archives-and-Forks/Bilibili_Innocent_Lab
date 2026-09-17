@@ -3085,6 +3085,14 @@ class HookEntry : XposedModule() {
                             FeaturePreferences.RECOMMEND_VIDEO_MAX_DURATION_SECONDS,
                             0
                         ),
+                        minPlayCount = prefs.getInt(
+                            FeaturePreferences.RECOMMEND_VIDEO_MIN_PLAY_COUNT,
+                            0
+                        ),
+                        maxPlayCount = prefs.getInt(
+                            FeaturePreferences.RECOMMEND_VIDEO_MAX_PLAY_COUNT,
+                            0
+                        ),
                         points = hostAdaptResult?.homeRecommendFeed,
                         rawBlockedTids = prefs.getString(
                             FeaturePreferences.HOME_RECOMMEND_BLOCKED_TIDS,
@@ -3327,6 +3335,14 @@ class HookEntry : XposedModule() {
                         ),
                         maxDurationSeconds = prefs.getInt(
                             FeaturePreferences.RECOMMEND_VIDEO_MAX_DURATION_SECONDS,
+                            0
+                        ),
+                        minPlayCount = prefs.getInt(
+                            FeaturePreferences.RECOMMEND_VIDEO_MIN_PLAY_COUNT,
+                            0
+                        ),
+                        maxPlayCount = prefs.getInt(
+                            FeaturePreferences.RECOMMEND_VIDEO_MAX_PLAY_COUNT,
                             0
                         ),
                         matchingEnhancementEnabled = prefs.getBoolean(
