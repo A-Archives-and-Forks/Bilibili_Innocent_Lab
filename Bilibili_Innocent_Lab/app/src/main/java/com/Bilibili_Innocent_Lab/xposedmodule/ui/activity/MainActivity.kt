@@ -2269,7 +2269,20 @@ class MainActivity : SkinnedActivity() {
                 BUBBLE_TAIL_HALF_WIDTH_DP * density).apply { setPlacement(bubblePlacement) }
         } else null
         val morphLayer = anchorBounds?.takeIf { bubblePlacement == null }
-            ?.let { IconAnchoredMotionLayer(this) }
+            ?.let {
+                IconAnchoredMotionLayer(
+                    this,
+                    surfaceBackground = modalBackground.takeIf { cover != null },
+                    fallbackColor = monetColors.surface,
+                    surfaceRadiusPx = MODAL_CORNER_RADIUS_DP * density
+                ).also { layer ->
+                    if (layer.usesPersistentSurface) {
+                        // 覆盖式面板的填充与描边始终归承载表面；正文只负责内容动画。
+                        container.background = null
+                        container.elevation = 0f
+                    }
+                }
+            }
         val root = NativeFrameLayout(this).apply {
             val cardParams = if (bubblePlacement != null) {
                 NativeFrameLayout.LayoutParams(

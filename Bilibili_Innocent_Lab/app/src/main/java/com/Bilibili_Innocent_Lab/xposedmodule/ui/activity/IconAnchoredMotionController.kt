@@ -101,7 +101,7 @@ internal class IconAnchoredMotionController(
         contentTiming = IconAnchoredContentTiming.TIMED
         contentElevation = content.elevation
         content.elevation = 0f
-        layer.background = surfaceDrawable
+        layer.background = if (layer.usesPersistentSurface) null else surfaceDrawable
         // 不要给承载层设 elevation。2026-09-17 真机实测：稳定态的卡片**根本不投影**
         // （底边外 0..60px 亮度恒为 70，与背景一致）——它的背景 drawable 没有提供 outline。
         // 而承载层有自绘 outline，一旦给它 elevation 就会在形变期间投出一片阴影，
@@ -279,7 +279,7 @@ internal class IconAnchoredMotionController(
         contentTiming = timing
         contentElevation = content.elevation.takeIf { it > 0f } ?: contentElevation
         content.elevation = 0f
-        layer.background = surfaceDrawable
+        layer.background = if (layer.usesPersistentSurface) null else surfaceDrawable
         layer.blockInteraction = true
         titleMotion?.captureTargetPosition()
         titleMotion?.prepare(expansion)

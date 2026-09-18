@@ -2,28 +2,47 @@
 
 package com.Bilibili_Innocent_Lab.xposedmodule.ui.activity
 
+import android.annotation.SuppressLint
 import android.content.Context
+import android.graphics.Canvas
+import android.graphics.Path
+import android.graphics.drawable.Drawable
 import android.graphics.Outline
 import android.graphics.RectF
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
+import com.highcapable.betterandroid.ui.extension.view.child
 import kotlin.math.ceil
 import kotlin.math.floor
 
 /**
- * 图标锚点形变的承载层：一张全屏、可变 outline 的表面，弹窗卡片是它唯一的 child。
+ * 图标锚点形变承载层：普通路径裁剪卡片，覆盖路径分开绘制表面与卡片内容。
  *
- * 形状完全由 outline 裁剪表达——**不新增自绘 surface**，因此不会多出一个
- * `LiquidMotionSurfaceFrameProvider` 采样面（实时液态玻璃的逐帧回读预算是硬约束）。
- * 阴影同样由 outline 生成，形状变化时阴影自然跟随，卡片自身的 elevation 在形变期间让位。
+ * 普通弹窗沿用 outline 裁剪。覆盖式子面板复用气泡的有界皮肤表面并持续持有背景，
+ * 取代卡片背景与全屏动画背景；只裁正文，避免终点切换两套描边与抗锯齿边缘。
+ * 承载层不接管 elevation，不为原本没有阴影的表面新增阴影。
  *
  * 与 `SettingsBackupMotionHost` 的关系：两者共用"可变 outline 裁剪"这一个原语，但那个 host
  * 还要承担 backdrop、标题副本、跨窗口坐标和页面替换；图标锚点一条都不需要，所以单独实现，
  * 不去继承或改造它。
  */
-internal class IconAnchoredMotionLayer(context: Context) : FrameLayout(context) {
+@SuppressLint("ViewConstructor")
+internal class IconAnchoredMotionLayer(
+    context: Context,
+    surfaceBackground: Drawable? = null,
+    fallbackColor: Int = 0,
+    private val surfaceRadiusPx: Float = 0f
+) : FrameLayout(context) {
+
+    // 覆盖式子面板始终由同一个表面画填充和描边；只裁正文，不裁表面自身的抗锯齿边缘。
+    // 复用气泡的皮肤桥接，Liquid 仍从真实 View 取得位置与刷新登记。
+    private val persistentSurface = surfaceBackground?.let {
+        BubbleSkinSurfaceView(context, it, fallbackColor)
+    }
+    private val contentClip = Path()
+    val usesPersistentSurface: Boolean get() = persistentSurface != null
 
     private val motionBounds = RectF()
     private var motionRadius = 0f
@@ -51,6 +70,7 @@ internal class IconAnchoredMotionLayer(context: Context) : FrameLayout(context) 
     init {
         clipChildren = true
         clipToPadding = false
+        persistentSurface?.let { addView(it, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)) }
         outlineProvider = object : ViewOutlineProvider() {
             override fun getOutline(view: View, outline: Outline) {
                 if (!shaped || motionBounds.isEmpty) {
@@ -71,7 +91,7 @@ internal class IconAnchoredMotionLayer(context: Context) : FrameLayout(context) 
 
     fun applyFrame(left: Float, top: Float, right: Float, bottom: Float, radiusPx: Float) {
         val normalizedRadius = radiusPx.coerceAtLeast(0f)
-        if (shaped && clipToOutline &&
+        if (shaped && (clipToOutline || usesPersistentSurface) &&
             motionBounds.left == left && motionBounds.top == top &&
             motionBounds.right == right && motionBounds.bottom == bottom &&
             motionRadius == normalizedRadius
@@ -81,23 +101,65 @@ internal class IconAnchoredMotionLayer(context: Context) : FrameLayout(context) 
         motionBounds.set(left, top, right, bottom)
         motionRadius = normalizedRadius
         shaped = true
-        clipToOutline = true
-        invalidateOutline()
+        if (usesPersistentSurface) {
+            // 表面直接画当前尺寸的圆角和描边，不能再被父层 outline 二次裁切。
+            clipToOutline = false
+            contentClip.rewind()
+            contentClip.addRoundRect(motionBounds, motionRadius, motionRadius, Path.Direction.CW)
+            persistentSurface?.updateFrame(motionBounds, motionRadius, 1f)
+            invalidate()
+        } else {
+            clipToOutline = true
+            invalidateOutline()
+        }
     }
 
     /**
-     * 回到"没有形变"的终态：关闭裁剪并把表面让给卡片自己的背景。
+     * 回到稳定端：关闭正文裁剪。普通弹窗交还卡片背景，覆盖式面板保留同一个表面。
      *
      * 必须显式清掉 outline，否则最后一帧的圆角会永久留在层上，卡片内容一旦超出该矩形
      * （例如展开的搜索结果列表）就会被裁掉。
      */
     fun clearShape() {
-        if (!shaped && !clipToOutline) return
+        if (!shaped && !clipToOutline) {
+            updateRestingSurface()
+            return
+        }
         shaped = false
         clipToOutline = false
         motionBounds.setEmpty()
         motionRadius = 0f
+        contentClip.rewind()
+        updateRestingSurface()
         invalidateOutline()
+        invalidate()
+    }
+
+    private fun updateRestingSurface() {
+        val surface = persistentSurface ?: return
+        if (childCount < 2) return
+        val card = child<View>(1)
+        motionBounds.set(card.left.toFloat(), card.top.toFloat(), card.right.toFloat(), card.bottom.toFloat())
+        surface.updateFrame(motionBounds, surfaceRadiusPx, 1f)
+    }
+
+    override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        super.onLayout(changed, left, top, right, bottom)
+        // 稳定后正文高度仍可能改变；表面跟随真实布局，不保留旧动画终点。
+        if (!shaped) updateRestingSurface()
+    }
+
+    override fun drawChild(canvas: Canvas, child: View, drawingTime: Long): Boolean {
+        if (!usesPersistentSurface || child === persistentSurface || !shaped) {
+            return super.drawChild(canvas, child, drawingTime)
+        }
+        val saved = canvas.save()
+        return try {
+            canvas.clipPath(contentClip)
+            super.drawChild(canvas, child, drawingTime)
+        } finally {
+            canvas.restoreToCount(saved)
+        }
     }
 
     override fun onInterceptTouchEvent(event: MotionEvent): Boolean = blockInteraction
