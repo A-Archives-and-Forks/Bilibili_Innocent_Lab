@@ -213,8 +213,8 @@ class DiagnosticsActivity : SkinnedActivity() {
             collapsedStrokeWidthPx = DiagnosticsEntryVisualSpec.STROKE_WIDTH_DP *
                 resources.displayMetrics.density
         )
-        motionHost.setLiquidMotionSurfaceBackground(
-            liquidMotionSurfaceBackgroundOrNull(
+        motionHost.setMotionSurfaceBackground(
+            skinMotionSurfaceBackground(
                 collapsedSurfaceColor,
                 DiagnosticsEntryVisualSpec.CORNER_RADIUS_DP
             )
@@ -725,6 +725,7 @@ class DiagnosticsActivity : SkinnedActivity() {
     private fun buildToolbar(): View = LinearLayout(this).apply {
         gravity = Gravity.CENTER_VERTICAL
         setPadding(10.dp, 0, 8.dp, 0)
+        background = skinTopBarBackground(monetColors.background)
         addView(actionButton("‹", getString(R.string.diagnostics_title)) {
             onBackPressedDispatcher.onBackPressed()
         }.also(motionHost::registerNavigationBack), LinearLayout.LayoutParams(48.dp, 48.dp))
@@ -1308,7 +1309,7 @@ class DiagnosticsActivity : SkinnedActivity() {
         if (currentSnapshot == null || viewModel.exportState.value is DiagnosticsExportState.Running) return
         activeDialog?.dismiss()
         val density = resources.displayMetrics.density
-        val dialog = Dialog(this)
+        val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
         val container = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             minimumWidth = (292 * density).toInt()
@@ -1396,6 +1397,7 @@ class DiagnosticsActivity : SkinnedActivity() {
             setDimAmount(0f)
         }
         dialog.setContentView(root)
+        val disposeElasticInteraction = installDialogElasticInteraction(dialog)
         dialog.setCanceledOnTouchOutside(false)
         dialog.setOnKeyListener { _, keyCode, event ->
             if (keyCode == KeyEvent.KEYCODE_BACK) {
@@ -1405,7 +1407,10 @@ class DiagnosticsActivity : SkinnedActivity() {
                 true
             } else false
         }
-        dialog.setOnDismissListener { if (activeDialog === dialog) activeDialog = null }
+        dialog.setOnDismissListener {
+            disposeElasticInteraction()
+            if (activeDialog === dialog) activeDialog = null
+        }
         activeDialog = dialog
         stylePreparedSkinControls(container)
         dialog.show()
@@ -1578,16 +1583,23 @@ class DiagnosticsActivity : SkinnedActivity() {
         setColor(color)
     }
 
-    private fun rippleBackground(radiusDp: Float) = RippleDrawable(
-        ColorStateList.valueOf(ColorUtils.setAlphaComponent(monetColors.primary, 0x28)),
-        Color.TRANSPARENT.toDrawable(),
-        GradientDrawable().apply {
-            cornerRadius = radiusDp * resources.displayMetrics.density
-            setColor(Color.WHITE)
-        }
-    )
-
-    private fun Int.toDrawable() = GradientDrawable().apply { setColor(this@toDrawable) }
+    private fun rippleBackground(radiusDp: Float): RippleDrawable {
+        val radius = radiusDp * resources.displayMetrics.density
+        // content 必须与 mask 同圆角：RippleDrawable.getOutline() 只取第一个非 mask 层，
+        // 无圆角的透明 content 报出 radius=0 的直角轮廓，长按高光会按方形裁剪
+        // （见 MainActivity.selfRippleBackground 同款注释）。
+        return RippleDrawable(
+            ColorStateList.valueOf(ColorUtils.setAlphaComponent(monetColors.primary, 0x28)),
+            GradientDrawable().apply {
+                cornerRadius = radius
+                setColor(Color.TRANSPARENT)
+            },
+            GradientDrawable().apply {
+                cornerRadius = radius
+                setColor(Color.WHITE)
+            }
+        )
+    }
 
     private fun cardParams(top: Int = 8.dp) = LinearLayout.LayoutParams(matchParent, wrapContent).apply {
         topMargin = top

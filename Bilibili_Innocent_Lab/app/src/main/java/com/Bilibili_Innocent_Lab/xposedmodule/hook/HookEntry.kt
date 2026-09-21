@@ -1727,13 +1727,14 @@ class HookEntry : XposedModule() {
                 }
                 if (bubbleX < dp(8)) bubbleX = dp(8).toFloat()
                 val anchorCenterX = loc[0] + anchor.width / 2
-                // 箭头位置：指向 anchor 中心（限制在 body 内合理范围，避免尖端贴到圆角处）
+                // 箭头位置：指向 anchor 中心。下限与 BubbleDrawable 内部钳制保持一致——
+                // 箭头底边必须整体落在圆角之外的直边上，否则圆角处会多描出一截直线。
                 val arrowWidthPx = dp(12).toFloat()
                 val arrowHeightPx = dp(6).toFloat()
                 val cornerRadiusPx = density * 14f
                 val arrowOffsetPx = (anchorCenterX - bubbleX).coerceIn(
-                    arrowWidthPx / 2f + cornerRadiusPx * 0.4f,
-                    bubbleMaxW - arrowWidthPx / 2f - cornerRadiusPx * 0.4f
+                    arrowWidthPx / 2f + cornerRadiusPx,
+                    bubbleMaxW - arrowWidthPx / 2f - cornerRadiusPx
                 )
 
                 // 气泡主体：圆角矩形 + 顶部三角形箭头，由 BubbleDrawable 一次画出，

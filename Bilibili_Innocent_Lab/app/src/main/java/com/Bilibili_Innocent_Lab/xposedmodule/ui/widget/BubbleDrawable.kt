@@ -103,9 +103,8 @@ class BubbleDrawable(
     private fun rebuildPath(w: Float, h: Float) {
         val aw = arrowWidthPx
         val ah = arrowHeightPx
-        val r = cornerRadiusPx.coerceAtMost(minOf(w, h) / 2f)
-        // 箭头中心 x：限制在 body 内的合理范围（避免箭头尖端贴到圆角处）
-        val arrowCx = arrowOffsetPx.coerceIn(aw / 2f + r * 0.4f, w - aw / 2f - r * 0.4f)
+        val r = resolvedCornerRadius(cornerRadiusPx, w, h, aw)
+        val arrowCx = arrowCenterX(arrowOffsetPx, w, aw, r)
         val arrowLeft = arrowCx - aw / 2f
         val arrowRight = arrowCx + aw / 2f
         pivotCx = arrowCx
@@ -155,5 +154,36 @@ class BubbleDrawable(
     fun setBubbleColor(color: Int) {
         fillPaint.color = color
         invalidateSelf()
+    }
+
+    companion object {
+        /**
+         * 圆角收敛到"左右两个圆角 + 箭头底边"与"上下边"都放得下的值：
+         * r ≤ (w − aw)/2 保证箭头底边能完整落在圆角之外的直边上，r ≤ min(w,h)/2
+         * 保证四角合法。请求值为负或宽高非法时退化为 0（直角）。
+         */
+        internal fun resolvedCornerRadius(
+            requestedPx: Float, widthPx: Float, heightPx: Float, arrowWidthPx: Float
+        ): Float {
+            if (widthPx <= 0f || heightPx <= 0f) return 0f
+            return requestedPx.coerceAtLeast(0f)
+                .coerceAtMost(minOf(widthPx, heightPx) / 2f)
+                .coerceAtMost(maxOf(widthPx - arrowWidthPx, 0f) / 2f)
+        }
+
+        /**
+         * 箭头中心 x。底边必须整体位于圆角之外的直边上——若允许箭头贴进圆角区，
+         * 顶部直线会从圆角终点回扫一小截，描边随之在气泡角外多画一条悬空直线
+         * （NEW 气泡尾巴根部那条多出来的线即由此而来）。区间为空（气泡窄于
+         * "箭头 + 两侧圆角"）时退化为水平居中。
+         */
+        internal fun arrowCenterX(
+            arrowOffsetPx: Float, widthPx: Float, arrowWidthPx: Float, cornerRadiusPx: Float
+        ): Float {
+            if (widthPx <= 0f) return 0f
+            val minCx = arrowWidthPx / 2f + cornerRadiusPx
+            val maxCx = widthPx - arrowWidthPx / 2f - cornerRadiusPx
+            return if (minCx <= maxCx) arrowOffsetPx.coerceIn(minCx, maxCx) else widthPx / 2f
+        }
     }
 }

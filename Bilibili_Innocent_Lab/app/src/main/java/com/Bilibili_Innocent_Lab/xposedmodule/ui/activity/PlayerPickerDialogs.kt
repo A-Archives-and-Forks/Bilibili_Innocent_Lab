@@ -46,7 +46,7 @@ import android.widget.TextView as NativeTextView
 /** 播放器默认画质选择：只写模块配置，实际 Hook 在 B 站下次主进程启动时安装。 */
 internal fun MainActivity.showPlayerQualityDialog(anchor: View? = null) {
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
 
     container.addView(
@@ -159,7 +159,7 @@ private fun MainActivity.showPlayerChoiceDialog(
     onSelected: (Int) -> Boolean
 ) {
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
     container.addView(NativeTextView(this).apply {
         text = title
@@ -263,7 +263,7 @@ private fun MainActivity.savePlayerIntPreference(key: String, value: Int, logMes
 /** 使用百分比整数发布配置；非法输入留在弹窗内，跟随宿主是独立、明确的操作。 */
 internal fun MainActivity.showPlayerSpeedDialog(longPress: Boolean, anchor: View? = null) {
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
     val current = if (longPress) playerLongPressSpeedPercent else playerDefaultSpeedPercent
     container.addView(NativeTextView(this).apply {
@@ -345,7 +345,7 @@ internal fun MainActivity.showPlayerSpeedDialog(longPress: Boolean, anchor: View
 /** 评论最低等级选择：沿用播放器画质选择器的模态菜单与进退场动画。 */
 internal fun MainActivity.showCommentMinLevelDialog(anchor: View? = null) {
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
 
     container.addView(
@@ -450,7 +450,7 @@ internal fun MainActivity.showCommentMinLevelDialog(anchor: View? = null) {
 /** 弹幕权重阈值选择；与评论等级选择共用同一套弹窗结构与关闭动画。 */
 internal fun MainActivity.showDanmakuWeightDialog(anchor: View? = null) {
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
 
     container.addView(

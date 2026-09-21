@@ -62,7 +62,7 @@ internal fun MainActivity.showHomeRecommendFilterDialog(
     anchor: View? = null
 ) {
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
     val draft = HomeRecommendFilterDraft(homeRecommendFilterValues())
     container.addView(NativeTextView(this).apply {
@@ -204,7 +204,7 @@ internal fun MainActivity.showHomeRecommendFilterDialog(
  */
 internal fun MainActivity.showPortraitContentFilterDialog(anchor: View? = null) {
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
     val draft = PortraitContentFilterDraft(portraitContentFilterValues())
 
@@ -415,7 +415,7 @@ internal fun MainActivity.showPortraitContentFilterDialog(anchor: View? = null) 
  */
 internal fun MainActivity.showVideoRelateFilterDialog(anchor: View? = null) {
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
     val draft = VideoRelateFilterDraft(
         videoRelateFilterValues(),
@@ -808,7 +808,7 @@ internal fun MainActivity.showVideoRelateFilterDialog(anchor: View? = null) {
 /** 推荐视频时长范围编辑器：空输入表示不限制，非法区间保持弹窗等待修正。 */
 internal fun MainActivity.showRecommendVideoDurationRangeDialog(anchor: View? = null) {
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
 
     container.addView(
@@ -1039,7 +1039,7 @@ internal fun MainActivity.showRecommendVideoDurationRangeDialog(anchor: View? = 
 
 internal fun MainActivity.showRecommendVideoPlayCountRangeDialog(anchor: View? = null) {
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
 
     container.addView(
@@ -1405,7 +1405,7 @@ internal fun MainActivity.showDetailModuleFilterDialog(
     anchor: View? = null
 ) {
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
     val draft = DetailModuleFilterDraft(detailModuleFilterValues())
     container.addView(NativeTextView(this).apply {

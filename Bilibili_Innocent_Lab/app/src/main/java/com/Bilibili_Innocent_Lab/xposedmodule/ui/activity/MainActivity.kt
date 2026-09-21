@@ -38,6 +38,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup.MarginLayoutParams
 import android.view.animation.PathInterpolator
+import android.widget.CompoundButton
 import android.widget.LinearLayout
 import android.transition.ChangeBounds
 import android.transition.Fade
@@ -88,6 +89,7 @@ import com.highcapable.hikage.widget.android.widget.FrameLayout
 import com.highcapable.hikage.widget.android.widget.Space
 import com.highcapable.hikage.widget.android.widget.TextView
 import com.highcapable.hikage.widget.androidx.core.widget.NestedScrollView
+import com.highcapable.hikage.widget.com.Bilibili_Innocent_Lab.xposedmodule.ui.activity.LogSegmentScrubBar
 import com.highcapable.hikage.widget.com.Bilibili_Innocent_Lab.xposedmodule.ui.view.MaterialSwitch
 import com.Bilibili_Innocent_Lab.xposedmodule.settings.ModuleUiSettings
 import com.Bilibili_Innocent_Lab.xposedmodule.settings.prefs
@@ -513,6 +515,8 @@ class MainActivity : SkinnedActivity() {
 
     /** 激活卡片需要同时聚合 LSPosed 状态与经过版本校验的免 Root heartbeat。 */
     private var activationCardView: View? = null
+    /** 顶部工具栏：由 SettingsHomePresenter 提为悬浮层，盖在滚动内容之上。 */
+    private var settingsFloatingToolbar: View? = null
     private var activationIconView: android.widget.ImageView? = null
     private var activationTitleView: NativeTextView? = null
     private var activationSourceView: NativeTextView? = null
@@ -626,6 +630,8 @@ class MainActivity : SkinnedActivity() {
     /** 设置搜索只持有当前 Activity 的控件树，销毁时与其他 View 引用一起释放。 */
     private var settingsSearchRoot: ViewGroup? = null
     private var settingsSearchScrollView: androidx.core.widget.NestedScrollView? = null
+    internal var settingsHome: SettingsHomePresenter? = null
+    private val settingsRevealRequest = SettingsRevealRequest()
     private var settingsSearchHighlightView: View? = null
     private var settingsSearchHighlightDrawable: GradientDrawable? = null
     private var settingsSearchHighlightAnimator: ValueAnimator? = null
@@ -653,10 +659,8 @@ class MainActivity : SkinnedActivity() {
     // internal：外移的 SkinSummaryPresenter 要用；扩展函数看不见 private 成员。
     internal var skinFailureHandled = false
 
-    /** 皮肤选择的同步写入和退场动画只允许单飞，避免重复动画吞掉 recreate 回调。 */
-    internal var skinSelectionActionInProgress = false
-    // internal：外移的 SkinSummaryPresenter 要用；扩展函数看不见 private 成员。
-    internal var skinSummaryView: NativeTextView? = null
+    /** 高级材质开关回退时抑制监听器重入；与 SPEC 开关同一模式。 */
+    private var advancedMaterialProgrammaticSwitch = false
     private var materialColorSpecProgrammaticSwitch = false
 
     /** 自定义背景导入只允许单飞；文件解码、哈希和原子替换全部离开主线程。 */
@@ -729,14 +733,8 @@ class MainActivity : SkinnedActivity() {
             .setDuration(320L).setInterpolator(emphasizedDecelerate).start()
     }
 
-    /** 日志详细度档位选择器的两个 pill 控件引用 + 滑动滑块 + 描述 TextView */
-    private var logLevelMinimalPill: android.widget.TextView? = null
-    private var logLevelCompletePill: android.widget.TextView? = null
-    private var logLevelThumb: View? = null
+    /** 日志详细度档位描述 TextView（档位选择器本体由 LogSegmentScrubBar 自管理） */
     private var logLevelDesc: android.widget.TextView? = null
-    private var logLevelColorAnimator: ValueAnimator? = null
-    /** 档位选择器是否已完成首次布局（滑块定位需要测量后执行） */
-    private var logLevelLaidOut = false
 
     // Material You 标准动效插值器
     internal val emphasizedDecelerate = PathInterpolator(0.2f, 0f, 0f, 1f)   // 展开（减速收尾）
@@ -761,94 +759,29 @@ class MainActivity : SkinnedActivity() {
         }
 
     /**
-     * 切换日志详细度档位：滑块平滑滑动到目标项 + 文字颜色/字重渐变 + 描述联动更新。
-     * 滑块动画用 translationX（GPU 加速、不触发布局），文字用 ValueAnimator 逐帧插值颜色。
+     * 切换日志详细度档位：写偏好 + 描述联动。
+     * 滑块滑动、文字颜色渐变与弹簧回弹均由 LogSegmentScrubBar 内部完成。
      */
-    private fun animateLogLevelTo(verbose: Boolean) {
-        if (logVerbose == verbose && logLevelLaidOut) {
-            // 已在该档位，仅刷新描述（防御）
-            updateLogLevelDesc()
-            return
+    private fun commitLogLevel(index: Int) {
+        val verbose = index == 1
+        runCatching {
+            prefs().edit {
+                putString(
+                    HookEntry.PREF_LOG_LEVEL,
+                    if (verbose) HookEntry.LOG_LEVEL_COMPLETE else HookEntry.LOG_LEVEL_MINIMAL
+                )
+            }
+        }.onFailure { t ->
+            Log.e("BilibiliInnocentLab", "write log level failed", t)
         }
         logVerbose = verbose
-        val thumb = logLevelThumb ?: return
-        val minimal = logLevelMinimalPill ?: return
-        val complete = logLevelCompletePill ?: return
-        val gray = getColor(R.color.colorTextGray)
-        val onPrimary = skinEmphasisTextColor
-
-        // 目标 X 偏移：按容器宽度的一半计算（滑块已收缩为容器半宽，选中「完整」时右移容器半宽）。
-        // 注意不能用 thumb.width/2：滑块收缩后自身宽度已是容器一半，再除 2 会只滑到 1/4 处（卡在中间）。
-        val containerWidth = (thumb.parent as? View)?.width ?: 0
-        val targetX = if (verbose) containerWidth / 2f else 0f
-
-        // 1. 滑块平滑滑动（emphasized decelerate，Material You 标准）
-        thumb.animate().cancel()
-        thumb.animate()
-            .translationX(targetX)
-            .setDuration(260L)
-            .setInterpolator(emphasizedDecelerate)
-            .start()
-
-        // 2. 文字颜色随进度渐变（精简 pill：onPrimary↔gray；完整 pill：gray↔onPrimary）
-        val fromMinimalColor = minimal.currentTextColor
-        val toMinimalColor = if (verbose) gray else onPrimary
-        val fromCompleteColor = complete.currentTextColor
-        val toCompleteColor = if (verbose) onPrimary else gray
-
-        logLevelColorAnimator?.cancel()
-        logLevelColorAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 260L
-            interpolator = emphasizedDecelerate
-            addUpdateListener { a ->
-                val f = a.animatedFraction
-                minimal.textColor = argbLerp(fromMinimalColor, toMinimalColor, f)
-                complete.textColor = argbLerp(fromCompleteColor, toCompleteColor, f)
-            }
-            start()
-        }
-
-        // 字重：选中项 BOLD（切换即可，无需逐帧）
-        minimal.typeface = if (!verbose) Typeface.create(Typeface.DEFAULT, Typeface.BOLD) else Typeface.DEFAULT
-        complete.typeface = if (verbose) Typeface.create(Typeface.DEFAULT, Typeface.BOLD) else Typeface.DEFAULT
-
-        // 3. 描述联动更新
         updateLogLevelDesc()
-    }
-
-    /** 在两个 ARGB 颜色间按进度插值 */
-    private fun argbLerp(from: Int, to: Int, frac: Float): Int {
-        val f = frac.coerceIn(0f, 1f)
-        val a = ((from shr 24 and 0xFF) + ((to shr 24 and 0xFF) - (from shr 24 and 0xFF)) * f).toInt()
-        val r = ((from shr 16 and 0xFF) + ((to shr 16 and 0xFF) - (from shr 16 and 0xFF)) * f).toInt()
-        val g = ((from shr 8 and 0xFF) + ((to shr 8 and 0xFF) - (from shr 8 and 0xFF)) * f).toInt()
-        val b = ((from and 0xFF) + ((to and 0xFF) - (from and 0xFF)) * f).toInt()
-        return (a shl 24) or (r shl 16) or (g shl 8) or b
     }
 
     /** 更新档位描述文本（跟随当前 logVerbose） */
     private fun updateLogLevelDesc() {
         val desc = logLevelDesc ?: return
         desc.text = getString(if (logVerbose) R.string.log_level_complete_desc else R.string.log_level_minimal_desc)
-    }
-
-    /** 滑块首次定位：布局完成后按当前档位对齐滑块（不带动画），并把滑块宽度收缩为容器一半 */
-    private fun positionLogLevelThumb() {
-        val thumb = logLevelThumb ?: return
-        val container = thumb.parent as? View ?: return
-        if (container.width <= 0 || thumb.width <= 0) return
-        logLevelLaidOut = true
-        // 滑块宽度 = 容器一半
-        val half = container.width / 2
-        if (thumb.width != half) {
-            thumb.layoutParams = thumb.layoutParams.apply { width = half }
-            thumb.requestLayout()
-            // 布局参数更新后，下一帧再定位
-            thumb.post { positionLogLevelThumb() }
-            return
-        }
-        val targetX = if (logVerbose) half.toFloat() else 0f
-        thumb.translationX = targetX
     }
 
     internal fun currentNoRootDisplayState(): NoRootDisplayState {
@@ -933,7 +866,6 @@ class MainActivity : SkinnedActivity() {
         val activated = displayState == ActivationDisplayState.ACTIVE_LSPOSED ||
             displayState == ActivationDisplayState.ACTIVE_LSPATCH ||
             displayState == ActivationDisplayState.ACTIVE_NPATCH
-        val liquidCard = isLiquidSkinEffective
         val darkTheme = (resources.configuration.uiMode and
             android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
             android.content.res.Configuration.UI_MODE_NIGHT_YES
@@ -942,26 +874,20 @@ class MainActivity : SkinnedActivity() {
             darkTheme
         )
         activationCardView?.apply {
-            background = if (liquidCard) {
-                skinCardBackground(
-                    monetColors.surfaceVariant,
-                    ActivationCardVisualSpec.CORNER_RADIUS_DP
-                )
-            } else {
-                roundedColor(if (activated) monetColors.primary else monetColors.surfaceVariant)
-            }
-            foreground = if (liquidCard) {
+            background = skinCardBackground(monetColors.surfaceVariant, ActivationCardVisualSpec.CORNER_RADIUS_DP)
+            // 涟漪必须常驻前景：整卡已可点击，长按弹性高光与轻点反馈都靠它。
+            // 未激活态的 accent 光晕只画边缘（外发光/内发光/描边三层 stroke），
+            // 叠在涟漪之上不遮挡按压反馈。
+            val ripple = selfRippleBackground(ActivationCardVisualSpec.CORNER_RADIUS_DP)
+            foreground = if (activated) ripple else android.graphics.drawable.LayerDrawable(arrayOf(
+                ripple,
                 ActivationCardAccentDrawable(accentColor, resources.displayMetrics.density)
-            } else null
+            ))
         }
-        val activationContentColor = getColor(
-            if (liquidCard) R.color.colorTextGray else R.color.white
-        )
+        val activationContentColor = getColor(R.color.colorTextDark)
         activationIconView?.apply {
             setImageResource(if (activated) R.mipmap.ic_success else R.mipmap.ic_warn)
-            imageTintList = ColorStateList.valueOf(
-                if (liquidCard) accentColor else activationContentColor
-            )
+            imageTintList = ColorStateList.valueOf(accentColor)
         }
         activationTitleView?.textColor = activationContentColor
         activationSourceView?.textColor = activationContentColor
@@ -1205,6 +1131,9 @@ class MainActivity : SkinnedActivity() {
     private val dialogAnchoredClosers =
         java.util.WeakHashMap<Dialog, (Boolean, (() -> Unit)?) -> Boolean>()
 
+    /** 弹窗窗口内的背板压暗层（位于卡片之下）；随各路径的动画进度同步 alpha。 */
+    private val dialogScrims = java.util.WeakHashMap<Dialog, View>()
+
     /**
      * 弹窗**卡片矩形**与**可见表面**之间的差。
      *
@@ -1241,6 +1170,8 @@ class MainActivity : SkinnedActivity() {
             .scaleX(0.92f).scaleY(0.92f).alpha(0f)
             .setDuration(180L)
             .setInterpolator(emphasizedAccelerate)
+            // 背板压暗层随卡片淡出：锚点路径由 controller 的 onFrame 自己推进度，不走这里。
+            .setUpdateListener { dialogScrims[dialog]?.alpha = container.alpha }
             .setListener(object : AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: Animator) {
                     dialog.dismiss()
@@ -1261,13 +1192,25 @@ class MainActivity : SkinnedActivity() {
      */
     internal fun selfRippleBackground(cornerRadiusDp: Float = 10f): RippleDrawable {
         val density = resources.displayMetrics.density
+        // 局部 val 不能命名为 cornerRadius：同名会遮蔽 GradientDrawable 的 setCornerRadius
+        // 属性，apply 块里给它赋值会报 "'val' cannot be reassigned"。
+        val radiusPx = cornerRadiusDp * density
+        // content 必须与 mask 同圆角：RippleDrawable.getOutline() 只取第一个非 mask 层，
+        // 透明 ColorDrawable 的 outline 报出的是 radius=0 的**直角**矩形（不是 NaN），
+        // 弹性长按高光（ElasticInteractionController.TouchHighlight）据此裁剪，
+        // 设计圆角全在 mask 上，于是高光边缘变成方角、与涟漪边缘对不上。
+        // content 仍然全透明，视觉与阴影都不变，只是让轮廓说真话。
+        val content = GradientDrawable().apply {
+            cornerRadius = radiusPx
+            setColor(Color.TRANSPARENT)
+        }
         val mask = GradientDrawable().apply {
-            cornerRadius = cornerRadiusDp * density
+            cornerRadius = radiusPx
             setColor(Color.WHITE)
         }
         return RippleDrawable(
             ColorStateList.valueOf(ColorUtils.setAlphaComponent(getColor(R.color.colorTextGray), 0x30)),
-            ColorDrawable(Color.TRANSPARENT),
+            content,
             mask
         )
     }
@@ -1394,7 +1337,7 @@ class MainActivity : SkinnedActivity() {
     }
 
     internal fun createTermsNeutralRoot(): NativeFrameLayout = NativeFrameLayout(this).apply {
-        setBackgroundColor(monetColors.background)
+        background = neutralWindowBackground()
         isFocusable = true
         isFocusableInTouchMode = true
     }
@@ -1553,10 +1496,11 @@ class MainActivity : SkinnedActivity() {
             toast(getString(R.string.highlights_unavailable))
             return
         }
+        cancelSettingsReveal()
         pendingHighlightDestination = settingId
         highlightNavigationInFlight = true
         val generation = ++highlightNavigationGeneration
-        revealSettingsSearchTarget(target) {
+        revealSettingsSearchTarget(target, fromHighlight = true) {
             if (generation != highlightNavigationGeneration || highlightsDisposed) return@revealSettingsSearchTarget
             highlightNavigationInFlight = false
             if (!updateUiResumed || activeConfirmDialog?.isShowing == true || !hasWindowFocus()) {
@@ -1574,6 +1518,7 @@ class MainActivity : SkinnedActivity() {
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
+        settingsHome?.saveState(outState)
         outState.putLong("compat_retry_revision", compatibilityRetryTracker.pendingRevision ?: 0L)
         outState.putInt("compat_retry_failures", compatibilityRetryTracker.failures)
         if (releaseHighlightsDialog?.isShowing == true) activeHighlightsFrom?.let {
@@ -1610,8 +1555,13 @@ class MainActivity : SkinnedActivity() {
                 (16 * density).toInt(),
                 (13 * density).toInt()
             )
-            background = selfRippleBackground(14f)
-            if (highlight) skinSelectionControl(this, 14f, selected = true)
+            if (highlight) {
+                // 高亮行走选中面背景；涟漪放前景，避免被皮肤表面整份覆盖后丢失按压反馈。
+                skinSelectionControl(this, 14f, selected = true)
+                foreground = selfRippleBackground(14f)
+            } else {
+                background = selfRippleBackground(14f)
+            }
             isClickable = true
             isFocusable = true
             setOnClickListener { onClick() }
@@ -2043,6 +1993,9 @@ class MainActivity : SkinnedActivity() {
     /** 弹窗卡片圆角；图标锚点形变的展开端半径必须与它一致，否则末帧会有一次圆角跳变。 */
     private val MODAL_CORNER_RADIUS_DP = 28f
 
+    /** 弹窗背板压暗色（40% 黑）：比 UiTokens.scrim 略重，底页文字不会透过模态面板与内容混排。 */
+    private val MODAL_SCRIM_COLOR = 0x66000000.toInt()
+
     /** 正文起始位移上限（每轴）。够看出"从锚点方向飞来"，又不至于让长卡片整体晃动。 */
     private val CONTENT_TRAVEL_CAP_DP = 20f
 
@@ -2184,6 +2137,8 @@ class MainActivity : SkinnedActivity() {
         morphAnchorBounds: SettingsBackupMotionRect? = null,
         coverBounds: SettingsBackupMotionRect? = null
     ) {
+        clearElasticInteractions()
+        container.tag = com.Bilibili_Innocent_Lab.xposedmodule.ui.interaction.ElasticInteractionController.CONTAINER_TAG
         // 子面板要盖在父面板上，父面板就不能被硬关；关闭时再把它还回 activeConfirmDialog，
         // 否则更新检查那几处 `activeConfirmDialog?.isShowing` 会以为没有弹窗开着。
         val cover = coverBounds?.takeIf { it.isValid && anchorStyle == AnchorStyle.CONTAINER }
@@ -2283,7 +2238,20 @@ class MainActivity : SkinnedActivity() {
                     }
                 }
             }
+        // 窗口内压暗层：盖在卡片之下、整窗铺开，随卡片/形变进度同步淡入淡出——
+        // 平台 dim（FLAG_DIM_BEHIND）不可动画，且会硬切在自绘的形变/气泡入场之前。
+        // 叠在父面板上的子面板不再加一层：父面板那层还在，两层 scrim 会叠加得更暗。
+        val scrim = if (cover == null) View(this).apply {
+            setBackgroundColor(MODAL_SCRIM_COLOR)
+            alpha = 0f
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            isFocusable = false
+        } else null
         val root = NativeFrameLayout(this).apply {
+            scrim?.let {
+                addView(it, NativeFrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            }
             val cardParams = if (bubblePlacement != null) {
                 NativeFrameLayout.LayoutParams(
                     bubblePlacement.width.toInt(),
@@ -2381,11 +2349,13 @@ class MainActivity : SkinnedActivity() {
             materialYouSkin = isMaterialYouSkinEffective,
             density = density
         )
+        scrim?.let { dialogScrims[dialog] = it }
         val bubbleController = if (bubbleLayer != null) {
             BubbleMotionController(
                 layer = bubbleLayer,
                 onFrame = { progress ->
                     backdropBlur?.apply(progress)
+                    scrim?.alpha = progress
                     coveredContent?.alpha = IconAnchoredMotionSpec.coveredParentAlpha(progress)
                 },
                 onExpanded = ::notifyExpanded,
@@ -2428,6 +2398,7 @@ class MainActivity : SkinnedActivity() {
                 titleMotion = titleMotion,
                 onFrame = { progress ->
                     backdropBlur?.apply(progress)
+                    scrim?.alpha = progress
                     coveredContent?.alpha = IconAnchoredMotionSpec.coveredParentAlpha(progress)
                 },
                 onExpanded = ::notifyExpanded,
@@ -2540,6 +2511,7 @@ class MainActivity : SkinnedActivity() {
             // 实测本机这两个窗口的 `anim=` 是非零的（`dumpsys window windows`），确认动画开着。
         }
         dialog.setContentView(root)
+        val releaseElasticInteraction = installDialogElasticInteraction(dialog)
         // **必须在 setContentView 之后**：`PhoneWindow.generateLayout()`（由 setContentView 触发）
         // 会从主题里重新读 `windowAnimationStyle` 覆盖 `params.windowAnimations`，
         // 放在前面写的 0 会被原样抹掉——真机 `dumpsys window windows` 里 `anim=` 依旧非零，
@@ -2599,6 +2571,7 @@ class MainActivity : SkinnedActivity() {
                             container.scaleX = 1f - 0.05f * progress
                             container.scaleY = 1f - 0.05f * progress
                             container.alpha = 1f - 0.15f * progress
+                            scrim?.alpha = container.alpha
                         }
                     }
                 },
@@ -2614,6 +2587,10 @@ class MainActivity : SkinnedActivity() {
                                 .setDuration(260L)
                                 .setInterpolator(emphasizedDecelerate)
                                 .start()
+                            scrim?.animate()?.alpha(1f)
+                                ?.setDuration(260L)
+                                ?.setInterpolator(emphasizedDecelerate)
+                                ?.start()
                         }
                     }
                 },
@@ -2671,6 +2648,7 @@ class MainActivity : SkinnedActivity() {
             }
         }
         dialog.setOnDismissListener {
+            releaseElasticInteraction()
             // 其他入口硬关（presentSizedModalDialog 开头的 activeConfirmDialog?.dismiss()）
             // 也要收掉在途 animator，否则回调会继续驱动一个已经消失的窗口。
             morphController?.cancelMotion()
@@ -2683,6 +2661,7 @@ class MainActivity : SkinnedActivity() {
             }
             dialogAnchoredClosers.remove(dialog)
             dialogSurfaceInsets.remove(dialog)
+            dialogScrims.remove(dialog)
             // 硬关会把形变停在半路，父面板不能留着半透明的 alpha：它马上就要重新露出来。
             coveredContent?.alpha = 1f
             // 子面板收起后父面板重新露出来，它必须变回"当前弹窗"：这个字段是更新检查
@@ -2767,9 +2746,13 @@ class MainActivity : SkinnedActivity() {
                 // 无锚点弹窗没有形变时钟，借它自己的入场进度推模糊。退场由
                 // 共用的 dismissWithAnimation 负责，窗口撤掉时模糊随之消失（硬切，
                 // 与这条路径本来的淡出观感一致），不去改那 72 个调用点。
-                .setUpdateListener { backdropBlur?.apply(container.alpha) }
+                .setUpdateListener {
+                    backdropBlur?.apply(container.alpha)
+                    scrim?.alpha = container.alpha
+                }
                 .withEndAction {
                     backdropBlur?.apply(1f)
+                    scrim?.alpha = 1f
                     notifyExpanded()
                 }
                 .start()
@@ -3265,6 +3248,8 @@ class MainActivity : SkinnedActivity() {
             }
             val header = NativeLinearLayout(this).apply {
                 orientation = NativeLinearLayout.HORIZONTAL
+                // 折叠卡标题参与全局长按弹性：长按后拖动时原生流会收到 CANCEL
+                // （涟漪退场、不触发折叠），轻点仍在 UP 前恢复几何后正常折叠。
                 gravity = Gravity.CENTER_VERTICAL
                 minimumHeight = (48f * density).toInt()
                 setPadding(
@@ -3505,8 +3490,7 @@ class MainActivity : SkinnedActivity() {
     }
 
     override fun onPause() {
-        highlightNavigationGeneration++
-        highlightNavigationInFlight = false
+        cancelSettingsReveal(keepPendingHighlight = true)
         updateUiResumed = false
         updateUiHandler.removeCallbacksAndMessages(null)
         ColdStartUpdateSession.state.pause(updateUiOwner)
@@ -3642,7 +3626,7 @@ class MainActivity : SkinnedActivity() {
             }
         }
 
-        visit(root, SettingsSearchSection.GENERAL)
+        (settingsHome?.searchRoots ?: listOf(root)).forEach { visit(it, SettingsSearchSection.GENERAL) }
         return targets
     }
 
@@ -3660,6 +3644,15 @@ class MainActivity : SkinnedActivity() {
         if (highlightDrawable != null) highlightView?.overlay?.remove(highlightDrawable)
     }
 
+    /** All navigation sources share cancellation, including a replacement on the same page. */
+    private fun cancelSettingsReveal(keepPendingHighlight: Boolean = false) {
+        settingsRevealRequest.cancel()
+        clearSettingsSearchTargetHighlight()
+        highlightNavigationGeneration++
+        highlightNavigationInFlight = false
+        if (!keepPendingHighlight) pendingHighlightDestination = null
+    }
+
     internal fun scheduleSettingsSearchTargetHighlight(targetView: View) {
         clearSettingsSearchTargetHighlight()
         settingsSearchHighlightView = targetView
@@ -3667,7 +3660,7 @@ class MainActivity : SkinnedActivity() {
             override fun run() {
                 if (settingsSearchHighlightRunnable !== this) return
                 settingsSearchHighlightRunnable = null
-                if (isFinishing || isDestroyed || !targetView.isAttachedToWindow ||
+                if (!updateUiResumed || isFinishing || isDestroyed || !targetView.isAttachedToWindow ||
                     targetView.width <= 0 || targetView.height <= 0
                 ) {
                     clearSettingsSearchTargetHighlight()
@@ -3718,39 +3711,121 @@ class MainActivity : SkinnedActivity() {
         targetView.postDelayed(highlightRunnable, SETTINGS_SEARCH_HIGHLIGHT_DELAY_MS)
     }
 
-    internal fun revealSettingsSearchTarget(target: RuntimeSettingsSearchTarget, afterReveal: (() -> Unit)? = null) {
-        val primarySectionDelay = when (target.section) {
+    internal fun revealSettingsSearchTarget(
+        target: RuntimeSettingsSearchTarget,
+        fromHighlight: Boolean = false,
+        afterReveal: (() -> Unit)? = null
+    ) {
+        if (fromHighlight) {
+            settingsRevealRequest.cancel()
+            clearSettingsSearchTargetHighlight()
+        } else cancelSettingsReveal()
+        if (!updateUiResumed || isFinishing || isDestroyed) {
+            cancelSettingsReveal(keepPendingHighlight = fromHighlight)
+            return
+        }
+        val home = settingsHome
+        val scrollView = if (home != null) home.revealPageFor(target.view) else settingsSearchScrollView
+        if (scrollView == null || !target.view.isSameOrDescendantOf(scrollView)) {
+            cancelSettingsReveal()
+            return
+        }
+        when (target.section) {
             SettingsSearchSection.PURIFICATION_ADVANCED,
             SettingsSearchSection.ENHANCEMENT_ADVANCED,
             SettingsSearchSection.APPEARANCE,
             SettingsSearchSection.COMPATIBILITY -> {
-                if (setSecondaryMenuExpanded(target.section, expanded = true)) 300L else 0L
+                setSecondaryMenuExpanded(target.section, expanded = true)
             }
             SettingsSearchSection.GENERAL,
             SettingsSearchSection.PURIFICATION,
             SettingsSearchSection.ENHANCEMENT,
-            SettingsSearchSection.EXPERIMENTAL -> 0L
+            SettingsSearchSection.EXPERIMENTAL -> Unit
         }
-        val categoryDelay = if (
-            target.section.isAdvanced &&
-            expandAdvancedCategoryContaining(target.view)
-        ) {
-            300L
-        } else 0L
-        val sectionDelay = maxOf(primarySectionDelay, categoryDelay)
-        val scrollView = settingsSearchScrollView ?: return
-        scrollView.postDelayed({
-            if (isFinishing || isDestroyed || target.view.parent == null) return@postDelayed
-            val rect = Rect()
+        if (target.section.isAdvanced) expandAdvancedCategoryContaining(target.view)
+        val expanding = listOfNotNull(purificationAdvancedContent, enhancementAdvancedContent,
+            appearanceContent, compatibilityContent) + advancedCategorySections.values.map { it.content }
+        val targetSections = expanding.filter { target.view.isSameOrDescendantOf(it) }
+        val rect = Rect()
+        var destinationY: Int? = null
+        var scrollAnimator: ValueAnimator? = null
+        val scrollMotion = SettingsRevealScrollMotion(
+            currentPosition = { scrollView.scrollY },
+            setPosition = { y -> scrollView.scrollTo(0, y) }
+        )
+        var token = 0L
+        val observer = scrollView.viewTreeObserver
+        val listener = android.view.ViewTreeObserver.OnPreDrawListener {
+            if (!settingsRevealRequest.owns(token)) return@OnPreDrawListener true
+            if (!updateUiResumed || isFinishing || isDestroyed || !target.view.isAttachedToWindow ||
+                !scrollView.isAttachedToWindow || !target.view.isSameOrDescendantOf(scrollView)) {
+                cancelSettingsReveal(keepPendingHighlight = fromHighlight && !updateUiResumed)
+                return@OnPreDrawListener true
+            }
+            // Wait for the real expansion geometry and final transform, independent of animation scale.
+            if (!scrollView.isLaidOut || scrollView.isLayoutRequested || target.view.isLayoutRequested ||
+                target.view.width <= 0 || target.view.height <= 0 ||
+                targetSections.any { it.isLayoutRequested || it.alpha != 1f || it.translationY != 0f }) {
+                return@OnPreDrawListener true
+            }
+            if (!target.view.isShown) {
+                cancelSettingsReveal()
+                return@OnPreDrawListener true
+            }
             target.view.getDrawingRect(rect)
             scrollView.offsetDescendantRectToMyCoords(target.view, rect)
-            val topPadding = (28 * resources.displayMetrics.density).toInt()
-            scrollView.smoothScrollTo(0, (rect.top - topPadding).coerceAtLeast(0))
-            scheduleSettingsSearchTargetHighlight(target.view)
-            if (afterReveal != null) target.view.postDelayed({
-                if (!isFinishing && !isDestroyed && target.view.isAttachedToWindow) afterReveal()
-            },280L)
-        }, sectionDelay)
+            val child = scrollView.firstChildOrNull<View>()
+            if (child == null) {
+                cancelSettingsReveal()
+                return@OnPreDrawListener true
+            }
+            val margins = child.layoutParams as? ViewGroup.MarginLayoutParams
+            val range = (child.height + (margins?.topMargin ?: 0) + (margins?.bottomMargin ?: 0) -
+                (scrollView.height - scrollView.paddingTop - scrollView.paddingBottom)).coerceAtLeast(0)
+            // 目标停靠点在顶部悬浮栏之下：栏高 + 常规留白，避免定位到的控件被栏盖住。
+            val topOffset = (home?.currentHeaderInset ?: 0) +
+                (28 * resources.displayMetrics.density).toInt()
+            val desiredY = (rect.top - topOffset).coerceIn(0, range)
+            if (destinationY != desiredY) {
+                // Async module status text can change the page height while navigation is in progress.
+                scrollAnimator?.cancel()
+                if (destinationY == null) {
+                    // End any preceding native fling before this request takes scroll ownership.
+                    scrollView.smoothScrollTo(scrollView.scrollX, scrollView.scrollY, 0)
+                }
+                destinationY = desiredY
+                val scrollToken = scrollMotion.retarget(desiredY)
+                if (!ValueAnimator.areAnimatorsEnabled() || scrollView.scrollY == desiredY) {
+                    scrollMotion.frame(scrollToken, 1f)
+                } else {
+                    scrollAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+                        duration = 250L
+                        interpolator = android.view.animation.DecelerateInterpolator()
+                        addUpdateListener {
+                            if (settingsRevealRequest.owns(token)) {
+                                scrollMotion.frame(scrollToken, it.animatedFraction)
+                            }
+                        }
+                        start()
+                    }
+                }
+            }
+            // A clamped end-of-list target is complete at its actual scroll position, not after a timer.
+            if (scrollView.scrollY == destinationY && settingsRevealRequest.complete(token)) {
+                scheduleSettingsSearchTargetHighlight(target.view)
+                afterReveal?.invoke()
+            }
+            true
+        }
+        token = settingsRevealRequest.begin {
+            if (observer.isAlive) observer.removeOnPreDrawListener(listener)
+            else scrollView.viewTreeObserver.removeOnPreDrawListener(listener)
+            scrollMotion.cancel()
+            scrollAnimator?.cancel()
+            scrollAnimator = null
+        }
+        observer.addOnPreDrawListener(listener)
+        scrollView.postInvalidateOnAnimation()
     }
 
     private fun launchSettingsBackup() {
@@ -3787,6 +3862,9 @@ class MainActivity : SkinnedActivity() {
     }
 
     override fun onDestroy() {
+        settingsHome?.dispose()
+        settingsHome = null
+        cancelSettingsReveal()
         compatibilityPendingRetry?.cancel()
         compatibilityRetryHint?.animate()?.cancel()
         compatibilityRetryHint = null
@@ -3867,12 +3945,6 @@ class MainActivity : SkinnedActivity() {
         diagnosticsEntryView = null
         diagnosticsEntryTitleView = null
         diagnosticsSummaryView = null
-        logLevelColorAnimator?.cancel()
-        logLevelColorAnimator = null
-        logLevelThumb?.animate()?.cancel()
-        logLevelMinimalPill = null
-        logLevelCompletePill = null
-        logLevelThumb = null
         logLevelDesc = null
         playerQualitySummaryView = null
         playerCodecPreferenceSummaryView = null
@@ -3902,7 +3974,6 @@ class MainActivity : SkinnedActivity() {
         danmakuWeightSummaryView = null
         portraitContentFilterSummaryView = null
         videoRelateFilterSummaryView = null
-        skinSummaryView = null
         liquidBackgroundSummaryView = null
         SettingsBackupTransitionOriginRegistry.clear(settingsBackupEntryView)
         settingsBackupEntryView = null
@@ -3923,8 +3994,8 @@ class MainActivity : SkinnedActivity() {
         pendingHighlightDestination = savedInstanceState?.getString("highlights_destination")
             ?.takeIf { id -> ReleaseHighlightsCatalog.destinations.any { it.settingId == id } }
 
-        // Base activity background（应用 Monet 动态背景色）
-        findViewById<View>(Android_R.id.content).setBackgroundColor(monetColors.background)
+        // Neutral pre-consent backdrop does not initialize preferences or a rendering session.
+        findViewById<View>(Android_R.id.content).background = neutralWindowBackground()
 
         // 条款门禁必须先于现有 prefs、跨进程镜像、主布局和自动更新检查。
         termsConsentState = UserTermsConsentStore.readStateOrInitialize(applicationContext)
@@ -4181,19 +4252,26 @@ class MainActivity : SkinnedActivity() {
                     lparams = LayoutParams(widthMatchParent = true),
                     init = {
                         gravity = Gravity.CENTER or Gravity.START
-                        updatePadding(horizontal = 15.dp)
-                        updatePadding(top = 13.dp, bottom = 5.dp)
+                        // presenter 把工具栏包进 58dp 高的长胶囊悬浮栏（48dp 按钮 +
+                        // 上下各 5dp，29dp 圆角成正胶囊端头）。水平方向不设内边距：
+                        // 由首尾按钮各自的 5dp 外边距提供与上下一致的内边距，
+                        // 否则左右会比上下宽出一截，胶囊端头与按钮边缘的距离不统一。
+                        updatePadding(vertical = 5.dp)
                         clipChildren = false
                         clipToPadding = false
+                        // 自身保持透明：弹性手势按"有表面的控件"提升形变组，
+                        // 背景加在 presenter 包的外层上，三枚图标各自独立回弹。
+                        settingsFloatingToolbar = this
                     }
                 ) {
                     ImageView(
-                        lparams = LayoutParams(27.dp, 27.dp) {
+                        lparams = LayoutParams(48.dp, 48.dp) {
                             marginStart = 5.dp
                         }
                     ) {
-                        background = selfRippleBackground(14f)
-                        alpha = 0.85f
+                        background = skinFloatingBackground(monetColors.surface, 24f)
+                        foreground = selfRippleBackground(24f)
+                        updatePadding(10.dp)
                         setImageResource(R.drawable.ic_search)
                         imageTintList = stateColorResource(R.color.colorTextGray)
                         contentDescription = stringResource(R.string.settings_search_description)
@@ -4201,30 +4279,32 @@ class MainActivity : SkinnedActivity() {
                     }
                     Space(lparams = LayoutParams { weight = 1f })
                     ImageView(
-                        lparams = LayoutParams(27.dp, 27.dp) {
+                        lparams = LayoutParams(48.dp, 48.dp) {
                             marginEnd = 12.dp
                         }
                     ) {
-                        background = selfRippleBackground(14f)
-                        alpha = 0.85f
+                        background = skinFloatingBackground(monetColors.surface, 24f)
+                        foreground = selfRippleBackground(24f)
+                        updatePadding(10.dp)
                         setImageResource(R.drawable.ic_restart)
                         imageTintList = stateColorResource(R.color.colorTextGray)
                         contentDescription = stringResource(R.string.restart_bilibili)
                         setOnClickListener { showRestartConfirmDialog(it) }
                     }
-                    // 只占原图标的空间，角标叠放，不改变工具栏高度或相邻按钮位置。
+                    // The badge stays outside the circular button and does not change its anchor geometry.
                     FrameLayout(
-                        lparams = LayoutParams(27.dp, 27.dp) { marginEnd = 5.dp },
+                        lparams = LayoutParams(48.dp, 48.dp) { marginEnd = 5.dp },
                         init = {
                             clipChildren = false
                             clipToPadding = false
                         }
                     ) {
                         ImageView(
-                            lparams = LayoutParams(27.dp, 27.dp)
+                            lparams = LayoutParams(48.dp, 48.dp)
                         ) {
-                            background = selfRippleBackground(14f)
-                            alpha = 0.85f
+                            background = skinFloatingBackground(monetColors.surface, 24f)
+                            foreground = selfRippleBackground(24f)
+                            updatePadding(10.dp)
                             setImageResource(R.mipmap.ic_github)
                             imageTintList = stateColorResource(R.color.colorTextGray)
                             contentDescription = stringResource(R.string.github_menu_description)
@@ -4239,6 +4319,9 @@ class MainActivity : SkinnedActivity() {
                         ) {
                             githubUpdateBadge?.animate()?.setListener(null)?.cancel()
                             githubUpdateBadge = this
+                            // 角标不独占弹性手势：完整手势交给外层图标帧，长按拖动时
+                            // 图标与角标作为一个整体形变（搜索/重启图标同款效果）。
+                            tag = com.Bilibili_Innocent_Lab.xposedmodule.ui.interaction.ElasticInteractionController.EXCLUDED_TAG
                             text = stringResource(R.string.github_new_update_badge)
                             textSize = 8f
                             includeFontPadding = false
@@ -4283,7 +4366,15 @@ class MainActivity : SkinnedActivity() {
                         gravity = Gravity.CENTER or Gravity.START
                         // 首次绘制使用中性确认态；布局完成后由单快照 renderer 统一收敛。
                         background = roundedColor(monetColors.surfaceVariant)
+                        // 整卡参与全局长按弹性（与「设置备份与恢复」同款）：涟漪放前景，
+                        // renderActivationUi 会在未激活态把 accent 光晕叠在它上面
+                        // （光晕只画边缘，不挡按压反馈）。轻点整卡＝打开统一功能诊断。
+                        foreground = selfRippleBackground(ActivationCardVisualSpec.CORNER_RADIUS_DP)
+                        isClickable = true
+                        isFocusable = true
+                        importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_YES
                         activationCardView = this
+                        setOnClickListener { launchDiagnostics() }
                     }
                 ) {
                     ImageView(
@@ -4510,29 +4601,59 @@ class MainActivity : SkinnedActivity() {
             return
         }
 
-        liquidStretchViewport = liquidStretchScrollTarget?.let {
-            installPreparedLiquidStretch(it)
-        }
+        installSettingsHome(savedInstanceState)
         val skinRoot = findViewById<View>(Android_R.id.content)
         bindPreparedSkinRoot(
             skinRoot,
             ::handleSkinRendererFailure
         )
-        // 两次 animation callback 跨过首次 traversal，刷新首帧实际降级后的后端名称。
-        skinRoot.postOnAnimation {
-            skinRoot.postOnAnimation {
-                if (!isFinishing && !isDestroyed) skinSummaryView?.text = currentSkinSummary()
-            }
-        }
         // 两个进阶菜单已在各自大类末尾；首帧前只整理区域分组，不移动顶层卡片。
         installAdvancedCategorySections()
         renderNoRootUi()
-        // 布局完成后定位日志档位滑块（宽度收缩为一半 + 对齐当前档位）
-        findViewById<View>(Android_R.id.content).post {
-            positionLogLevelThumb()
-        }
         // 首次连续前台停留十秒后，每进程至多一次自动检查；不在布局重建时重复启动。
         scheduleColdStartUpdate()
+    }
+
+    private fun installSettingsHome(savedState: Bundle?) {
+        val scroll = settingsSearchScrollView ?: return
+        val content = settingsSearchRoot ?: return
+        val shell = scroll.parent as? NativeLinearLayout ?: return
+        settingsHome = SettingsHomePresenter(
+            activity = this,
+            shell = shell,
+            originalScroll = scroll,
+            originalContent = content,
+            purification = purificationSettingsRoot,
+            enhancement = enhancementSettingsRoot,
+            activation = activationCardView,
+            floatingToolbar = settingsFloatingToolbar,
+            savedState = savedState,
+            installStretch = { target, allowed -> installPreparedLiquidStretch(target, allowed) },
+            finishStretch = { target -> finishPreparedLiquidStretch(target) },
+            skinPositionChanged = { notifyPreparedSkinPositionChanged() },
+            navigationChanged = {
+                cancelSettingsReveal()
+            },
+            navigationTouched = {
+                if (settingsRevealRequest.isActive) cancelSettingsReveal()
+            }
+        ).also {
+            it.install()
+            settingsSearchRoot = it.searchRoots.firstOrNull()
+        }
+        liquidStretchScrollTarget = null
+    }
+
+    internal fun styleHomeControls(root: View) = stylePreparedSkinControls(root)
+
+    private fun bindFavoriteSwitch(
+        view: com.Bilibili_Innocent_Lab.xposedmodule.ui.view.MaterialSwitch,
+        storageKey: String,
+        directToggle: Boolean = true
+    ) {
+        val id = SettingsCatalog.byStorageKey[storageKey]?.id ?: return
+        view.settingId = id
+        view.supportsFavoriteToggle = directToggle
     }
 
     /** 设置备份入口卡片。 */
@@ -4681,6 +4802,7 @@ class MainActivity : SkinnedActivity() {
                     bottomMargin = 5.dp
                 }
             ) {
+                bindFavoriteSwitch(this, HookEntry.PREF_GAMECARD_ENABLED, directToggle = true)
                 text = stringResource(R.string.gamecard_ad_enable)
                 isAllCaps = false
                 textColor = colorResource(R.color.colorTextGray)
@@ -4712,6 +4834,7 @@ class MainActivity : SkinnedActivity() {
                     bottomMargin = 5.dp
                 }
             ) {
+                bindFavoriteSwitch(this, FeaturePreferences.HIDE_VIDEO_DETAIL_APP_PROMOTION, directToggle = true)
                 text = stringResource(R.string.hide_video_detail_app_promotion)
                 isAllCaps = false
                 textColor = colorResource(R.color.colorTextGray)
@@ -4751,6 +4874,7 @@ class MainActivity : SkinnedActivity() {
                     bottomMargin = 5.dp
                 }
             ) {
+                bindFavoriteSwitch(this, HookEntry.PREF_MERCH_ENABLED, directToggle = true)
                 text = stringResource(R.string.merch_ad_enable)
                 isAllCaps = false
                 textColor = colorResource(R.color.colorTextGray)
@@ -4783,6 +4907,7 @@ class MainActivity : SkinnedActivity() {
                     bottomMargin = 5.dp
                 }
             ) {
+                bindFavoriteSwitch(this, HookEntry.PREF_ENABLED, directToggle = true)
                 text = stringResource(R.string.paused_page_ad_enable)
                 isAllCaps = false
                 textColor = colorResource(R.color.colorTextGray)
@@ -4835,6 +4960,7 @@ class MainActivity : SkinnedActivity() {
                     bottomMargin = 5.dp
                 }
             ) {
+                bindFavoriteSwitch(this, HookEntry.PREF_BANNER_ENABLED, directToggle = true)
                 text = stringResource(R.string.banner_ad_enable)
                 isAllCaps = false
                 textColor = colorResource(R.color.colorTextGray)
@@ -5000,6 +5126,7 @@ class MainActivity : SkinnedActivity() {
                     bottomMargin = 5.dp
                 }
             ) {
+                bindFavoriteSwitch(this, HookEntry.PREF_FREE_COPY_ENABLED, directToggle = true)
                 text = stringResource(R.string.free_copy_enable)
                 isAllCaps = false
                 textColor = colorResource(R.color.colorTextGray)
@@ -5040,6 +5167,7 @@ class MainActivity : SkinnedActivity() {
                     bottomMargin = 5.dp
                 }
             ) {
+                bindFavoriteSwitch(this, HookEntry.PREF_FREE_COPY_DESC_ENABLED, directToggle = true)
                 text = stringResource(R.string.free_copy_desc_enable)
                 isAllCaps = false
                 textColor = colorResource(R.color.colorTextGray)
@@ -5091,6 +5219,7 @@ class MainActivity : SkinnedActivity() {
                     bottomMargin = 5.dp
                 }
             ) {
+                bindFavoriteSwitch(this, HookEntry.PREF_FREE_COPY_AUTO_LIGHT, directToggle = true)
                 text = stringResource(R.string.free_copy_auto_light)
                 isAllCaps = false
                 textColor = colorResource(R.color.colorTextGray)
@@ -5126,6 +5255,7 @@ class MainActivity : SkinnedActivity() {
                     bottomMargin = 5.dp
                 }
             ) {
+                bindFavoriteSwitch(this, HookEntry.PREF_FREE_COPY_LIGHT_MODE, directToggle = false)
                 text = stringResource(R.string.free_copy_light_mode)
                 isAllCaps = false
                 textColor = colorResource(R.color.colorTextGray)
@@ -5270,8 +5400,7 @@ class MainActivity : SkinnedActivity() {
                 experimentalSettingsRoot = this
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER or Gravity.START
-                background = skinCardBackground(monetColors.surfaceVariant)
-                updatePadding(horizontal = 15.dp, vertical = 15.dp)
+                updatePadding(vertical = 15.dp)
             }
         ) {
             LinearLayout(
@@ -5319,6 +5448,9 @@ class MainActivity : SkinnedActivity() {
                         background = selfRippleBackground(10f)
                         isClickable = true
                         isFocusable = true
+                        // 可展开标题参与全局长按弹性：长按后拖动时原生流会收到 CANCEL
+                        // （涟漪退场、不触发展开），轻点仍在 UP 前恢复几何后正常展开，
+                        // 与「净化/增强进阶设置」两个同型入口一致。
                         setOnClickListener { toggleSecondaryMenu(SettingsSearchSection.APPEARANCE) }
                     }
                 ) {
@@ -5383,38 +5515,34 @@ class MainActivity : SkinnedActivity() {
                         textSize = 12f
                         typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
                     }
-                    LinearLayout(
+                    MaterialSwitch(
                         lparams = LayoutParams(widthMatchParent = true) {
                             bottomMargin = 5.dp
-                        },
-                        init = {
-                            orientation = LinearLayout.VERTICAL
-                            background = selfRippleBackground(10f)
-                            updatePadding(horizontal = 0.dp, vertical = 9.dp)
-                            isClickable = true
-                            isFocusable = true
-                            setOnClickListener { showSkinSelectionDialog(it) }
                         }
                     ) {
-                        TextView(
-                            lparams = LayoutParams(widthMatchParent = true)
-                        ) {
-                            updatePadding(horizontal = 0.dp)
-                            text = stringResource(R.string.skin_setting_title)
-                            textColor = colorResource(R.color.colorTextGray)
-                            textSize = 15f
-                        }
-                        TextView(
-                            lparams = LayoutParams(widthMatchParent = true) {
-                                topMargin = 4.dp
+                        updatePadding(horizontal = 0.dp)
+                        text = stringResource(R.string.advanced_material_title)
+                        isAllCaps = false
+                        textColor = colorResource(R.color.colorTextGray)
+                        textSize = 15f
+                        isChecked = SkinRepository.resolveRequestedSkin(applicationContext) == SkinId.LIQUID
+                        setOnCheckedChangeListener { button, checked ->
+                            if (advancedMaterialProgrammaticSwitch) {
+                                return@setOnCheckedChangeListener
                             }
-                        ) {
-                            alpha = 0.72f
-                            skinSummaryView = this
-                            text = currentSkinSummary()
-                            textColor = colorResource(R.color.colorTextDark)
-                            textSize = 12f
+                            setAdvancedMaterial(button, checked)
                         }
+                    }
+                    TextView(
+                        lparams = LayoutParams(widthMatchParent = true) {
+                            bottomMargin = 10.dp
+                        }
+                    ) {
+                        alpha = 0.6f
+                        setLineSpacing(6f, 1f)
+                        text = stringResource(R.string.advanced_material_summary)
+                        textColor = colorResource(R.color.colorTextDark)
+                        textSize = 12f
                     }
                     TextView(
                         lparams = LayoutParams(widthMatchParent = true) {
@@ -5643,6 +5771,7 @@ class MainActivity : SkinnedActivity() {
                         background = selfRippleBackground(10f)
                         isClickable = true
                         isFocusable = true
+                        // 可展开标题参与全局长按弹性，同「外观」入口（见上）。
                         setOnClickListener { toggleSecondaryMenu(SettingsSearchSection.COMPATIBILITY) }
                     }
                 ) {
@@ -5774,6 +5903,7 @@ class MainActivity : SkinnedActivity() {
                             bottomMargin = 5.dp
                         }
                     ) {
+                        bindFavoriteSwitch(this, HookEntry.PREF_ROAMING_COMPAT_ENABLED, directToggle = true)
                         text = stringResource(R.string.roaming_compat_enable)
                         isAllCaps = false
                         textColor = colorResource(R.color.colorTextGray)
@@ -5821,6 +5951,7 @@ class MainActivity : SkinnedActivity() {
                                 bottomMargin = 5.dp
                             }
                         ) {
+                            bindFavoriteSwitch(this, HookEntry.PREF_PREDICTIVE_BACK_ENABLED, directToggle = true)
                             text = stringResource(R.string.predictive_back_enable)
                             isAllCaps = false
                             textColor = colorResource(R.color.colorTextGray)
@@ -5900,6 +6031,33 @@ class MainActivity : SkinnedActivity() {
         }
     }
 
+    /**
+     * 高级材质开关：液态玻璃材质已并入柔光美学，开关只决定是否加装这层材质。
+     *
+     * 打开时默认把全屏实时取样一起打开（renderer 仍按设备支持情况自动降级到标准档）；
+     * 关闭时不保留失效的高负载偏好。材质写入失败只回退开关本身。
+     */
+    private fun setAdvancedMaterial(button: CompoundButton, enabled: Boolean) {
+        val target = if (enabled) SkinId.LIQUID else SkinId.MATERIAL_YOU
+        if (SkinRepository.resolveRequestedSkin(applicationContext) == target) return
+        val result = runCatching {
+            SkinRepository.beginSelection(applicationContext, target)
+        }.onFailure { throwable ->
+            Log.e("BilibiliInnocentLab", "persist advanced material selection failed", throwable)
+        }.getOrNull()
+        if (result?.persisted != true) {
+            advancedMaterialProgrammaticSwitch = true
+            button.isChecked = !enabled
+            advancedMaterialProgrammaticSwitch = false
+            toast(getString(R.string.skin_save_failed))
+            return
+        }
+        runCatching { LiquidRealtimeCaptureStore.setEnabled(applicationContext, enabled) }
+        button.post {
+            if (!isFinishing && !isDestroyed) recreate()
+        }
+    }
+
     /** 日志设置卡片。 */
     // 注解用全限定名：本文件已经导入了同名的**函数** com.highcapable.hikage.core.base.Hikagable
     // （见 createPromotionItem 的 Hikagable<MarginLayoutParams> { }），不能再按简名导入注解。
@@ -5914,6 +6072,10 @@ class MainActivity : SkinnedActivity() {
                 gravity = Gravity.CENTER or Gravity.START
                 background = skinCardBackground(monetColors.surfaceVariant)
                 updatePadding(left = 15.dp, top = 15.dp, right = 15.dp, bottom = 15.dp)
+                // 日志档位滑块长按拖动时会溢出自身边界（按压缩放约 4dp + 弹性位移 4dp），
+                // 默认 clipToPadding=true 会把溢出圆角裁成竖直断框；上界小于 15dp 内边距，装得下。
+                clipChildren = false
+                clipToPadding = false
             }
         ) {
             LinearLayout(
@@ -5947,6 +6109,7 @@ class MainActivity : SkinnedActivity() {
                     bottomMargin = 5.dp
                 }
             ) {
+                bindFavoriteSwitch(this, HookEntry.PREF_LOG_ENABLED, directToggle = true)
                 text = stringResource(R.string.log_capture_enable)
                 isAllCaps = false
                 textColor = colorResource(R.color.colorTextGray)
@@ -5985,86 +6148,35 @@ class MainActivity : SkinnedActivity() {
                 textColor = colorResource(R.color.colorTextGray)
                 textSize = 13f
             }
-            // 详细度档位选择器：FrameLayout 内叠放「滑动滑块 + 两个透明文字项」
-            FrameLayout(
+            // 详细度档位选择器：底栏同款 scrub 控件（长按拖动切换 + 触点高光 + 弹簧回弹）。
+            // 不走 skinSelectionControl：它会把这里整份替换成 surface 系表面，
+            // 轨道与滑块就都成了灰白系，滑块的 primary 填充随之丢失。
+            LogSegmentScrubBar(
                 lparams = LayoutParams(widthMatchParent = true),
                 init = {
-                    // 背景槽位（surface 色圆角，作滑块滑动轨道）
-                    background = GradientDrawable().apply {
-                        cornerRadius = resources.displayMetrics.density * 10f
-                        setColor(monetColors.background)
-                    }
-                    skinSelectionControl(this, 10f, selected = false)
+                    // 控件整体接管触摸（轻点/拖动/回弹），与全局长按弹性手势互斥，
+                    // 打上排除标记（底栏 dock 同款处理）。
+                    tag = com.Bilibili_Innocent_Lab.xposedmodule.ui.interaction.ElasticInteractionController.EXCLUDED_TAG
+                    configure(
+                        labels = listOf(
+                            stringResource(R.string.log_level_minimal),
+                            stringResource(R.string.log_level_complete)
+                        ),
+                        colors = ModernNavigationColors(
+                            text = colorResource(R.color.colorTextGray),
+                            selectedText = monetColors.onPrimary,
+                            highlight = monetColors.primary
+                        ),
+                        thumbBackground = logLevelThumbBg(),
+                        trackBackground = GradientDrawable().apply {
+                            cornerRadius = resources.displayMetrics.density * 10f
+                            setColor(monetColors.background)
+                        },
+                        selectedIndex = if (logVerbose) 1 else 0,
+                        onSelect = ::commitLogLevel
+                    )
                 }
-            ) {
-                // 滑动滑块（primary 圆角，随选中项平移；宽度在布局后动态设为容器一半）
-                FrameLayout(
-                    lparams = LayoutParams(matchParent = true),
-                    init = {
-                        logLevelThumb = this
-                        background = logLevelThumbBg()
-                        skinSelectionControl(this, 10f, selected = true)
-                    }
-                )
-                // 两个等宽文字项（透明背景，仅作点击热区 + 文字显示）
-                LinearLayout(
-                    lparams = LayoutParams(matchParent = true),
-                    init = {
-                        orientation = LinearLayout.HORIZONTAL
-                    }
-                ) {
-                    TextView(
-                        lparams = LayoutParams {
-                            weight = 1f
-                        }
-                    ) {
-                        logLevelMinimalPill = this
-                        gravity = Gravity.CENTER
-                        updatePadding(vertical = 12.dp)
-                        text = stringResource(R.string.log_level_minimal)
-                        textSize = 14f
-                        isClickable = true
-                        isFocusable = true
-                        textColor = if (!logVerbose) skinEmphasisTextColor else colorResource(R.color.colorTextGray)
-                        typeface = if (!logVerbose) Typeface.create(Typeface.DEFAULT, Typeface.BOLD) else Typeface.DEFAULT
-                        setOnClickListener {
-                            if (logVerbose) {
-                                runCatching {
-                                    prefs().edit { putString(HookEntry.PREF_LOG_LEVEL, HookEntry.LOG_LEVEL_MINIMAL) }
-                                }.onFailure { t ->
-                                    Log.e("BilibiliInnocentLab", "write log level failed", t)
-                                }
-                                animateLogLevelTo(verbose = false)
-                            }
-                        }
-                    }
-                    TextView(
-                        lparams = LayoutParams {
-                            weight = 1f
-                        }
-                    ) {
-                        logLevelCompletePill = this
-                        gravity = Gravity.CENTER
-                        updatePadding(vertical = 12.dp)
-                        text = stringResource(R.string.log_level_complete)
-                        textSize = 14f
-                        isClickable = true
-                        isFocusable = true
-                        textColor = if (logVerbose) skinEmphasisTextColor else colorResource(R.color.colorTextGray)
-                        typeface = if (logVerbose) Typeface.create(Typeface.DEFAULT, Typeface.BOLD) else Typeface.DEFAULT
-                        setOnClickListener {
-                            if (!logVerbose) {
-                                runCatching {
-                                    prefs().edit { putString(HookEntry.PREF_LOG_LEVEL, HookEntry.LOG_LEVEL_COMPLETE) }
-                                }.onFailure { t ->
-                                    Log.e("BilibiliInnocentLab", "write log level failed", t)
-                                }
-                                animateLogLevelTo(verbose = true)
-                            }
-                        }
-                    }
-                }
-            }
+            )
             // 档位描述（随选中项动态更新）
             TextView(
                 lparams = LayoutParams(widthMatchParent = true) {
@@ -6245,6 +6357,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.PURIFY_SHARE_CONTENT, directToggle = true)
             text = stringResource(R.string.purify_share_content)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -6283,6 +6396,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.SHARE_MINI_PROGRAM_DIRECT_LINK, directToggle = true)
             text = stringResource(R.string.share_mini_program_direct_link)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -6340,6 +6454,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.PURIFY_SPLASH_ADS, directToggle = true)
             text = stringResource(R.string.purify_splash_ads)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -6375,6 +6490,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.BLOCK_TEENAGERS_MODE_PROMPT, directToggle = true)
             text = stringResource(R.string.block_teenagers_mode_prompt)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -6421,6 +6537,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.BLOCK_APP_UPDATE, directToggle = true)
             text = stringResource(R.string.block_app_update)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -6459,6 +6576,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.BLOCK_COMPONENT_LIBRARY_DOWNLOAD, directToggle = true)
             text = stringResource(R.string.block_component_library_download)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -6549,6 +6667,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.HIDE_COMMENT_SECTION, directToggle = true)
             text = stringResource(R.string.hide_comment_section)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -6576,6 +6695,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_COMMENT_SEARCH_LINKS, directToggle = true)
             text = stringResource(R.string.remove_comment_search_links)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -6614,6 +6734,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_COMMENT_EMPTY_GUIDE, directToggle = true)
             text = stringResource(R.string.remove_comment_empty_guide)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -6652,6 +6773,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_COMMENT_VOTE_WIDGETS, directToggle = true)
             text = stringResource(R.string.remove_comment_vote_widgets)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -6690,6 +6812,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_COMMENT_FOLLOW_BUTTONS, directToggle = true)
             text = stringResource(R.string.remove_comment_follow_buttons)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -6728,6 +6851,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_COMMENT_QOE, directToggle = true)
             text = stringResource(R.string.remove_comment_qoe)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -6766,6 +6890,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_COMMENT_OPERATIONS, directToggle = true)
             text = stringResource(R.string.remove_comment_operations)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -6804,6 +6929,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.COMMENT_KEYWORD_FILTER_ENABLED, directToggle = true)
             text = stringResource(R.string.comment_keyword_filter)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -6892,6 +7018,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.COMMENT_MIN_LEVEL_FILTER_ENABLED, directToggle = true)
             text = stringResource(R.string.comment_min_level_filter)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -6944,6 +7071,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_AT_ONLY_COMMENTS, directToggle = true)
             text = stringResource(R.string.remove_at_only_comments)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -6982,6 +7110,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.COMMENT_USER_FILTER_ENABLED, directToggle = true)
             text = stringResource(R.string.comment_user_filter)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -7071,6 +7200,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.HIDE_PLAYER_PORTRAIT_CONTROL, directToggle = true)
             text = stringResource(R.string.hide_player_portrait_control)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -7109,6 +7239,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.HIDE_PLAYER_INTERACTIVE_OVERLAYS, directToggle = true)
             text = stringResource(R.string.hide_player_interactive_overlays)
             settingsDestinations.bind("player.interactive_overlays.hidden",this)
             isAllCaps = false
@@ -7148,6 +7279,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.HIDE_PLAYER_POPUP_PROMOTION, directToggle = true)
             text = stringResource(R.string.hide_player_popup_promotion)
             settingsDestinations.bind("player.popup_promotion.hidden",this)
             isAllCaps = false
@@ -7187,6 +7319,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.HIDE_PLAYER_END_PAGE_RECOMMEND, directToggle = true)
             text = stringResource(R.string.hide_player_end_page_recommend)
             settingsDestinations.bind("player.end_page_recommend.hidden",this)
             isAllCaps = false
@@ -7226,6 +7359,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.HIDE_PGC_AUTO_ACTIVITY_POPUP, directToggle = true)
             text = stringResource(R.string.hide_pgc_auto_activity_popup)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -7368,6 +7502,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_STORY_ADS, directToggle = true)
             visibility = View.GONE
             text = stringResource(R.string.remove_story_ads)
             isAllCaps = false
@@ -7387,6 +7522,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_STORY_LIVE, directToggle = true)
             visibility = View.GONE
             text = stringResource(R.string.remove_story_live)
             isAllCaps = false
@@ -7406,6 +7542,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_STORY_GAMES, directToggle = true)
             visibility = View.GONE
             text = stringResource(R.string.remove_story_games)
             isAllCaps = false
@@ -7425,6 +7562,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_STORY_BANGUMI, directToggle = true)
             visibility = View.GONE
             text = stringResource(R.string.remove_story_bangumi)
             isAllCaps = false
@@ -7444,6 +7582,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_STORY_COURSES, directToggle = true)
             visibility = View.GONE
             text = stringResource(R.string.remove_story_courses)
             isAllCaps = false
@@ -7463,6 +7602,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_STORY_SHORT_DRAMA, directToggle = true)
             visibility = View.GONE
             text = stringResource(R.string.remove_story_short_drama)
             isAllCaps = false
@@ -7485,6 +7625,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_STORY_SHOPPING, directToggle = true)
             visibility = View.GONE
             text = stringResource(R.string.remove_story_shopping)
             isAllCaps = false
@@ -7507,6 +7648,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_STORY_MOVIES, directToggle = true)
             visibility = View.GONE
             text = stringResource(R.string.remove_story_movies)
             isAllCaps = false
@@ -7526,6 +7668,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_STORY_DOCUMENTARIES, directToggle = true)
             visibility = View.GONE
             text = stringResource(R.string.remove_story_documentaries)
             isAllCaps = false
@@ -7548,6 +7691,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_STORY_TV, directToggle = true)
             visibility = View.GONE
             text = stringResource(R.string.remove_story_tv)
             isAllCaps = false
@@ -7567,6 +7711,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_STORY_VARIETY, directToggle = true)
             visibility = View.GONE
             text = stringResource(R.string.remove_story_variety)
             isAllCaps = false
@@ -7586,6 +7731,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_STORY_MUSIC, directToggle = true)
             visibility = View.GONE
             text = stringResource(R.string.remove_story_music)
             isAllCaps = false
@@ -7763,6 +7909,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.DANMAKU_WEIGHT_FILTER_ENABLED, directToggle = true)
             text = stringResource(R.string.danmaku_weight_filter)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -7817,6 +7964,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_VIP_COLORFUL_DANMAKU, directToggle = true)
             text = stringResource(R.string.remove_vip_colorful_danmaku)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -7873,6 +8021,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.HIDE_MINE_VIP, directToggle = true)
             text = stringResource(R.string.hide_mine_vip)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -7911,6 +8060,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.KEEP_MINE_VIP_SPACE, directToggle = true)
             text = stringResource(R.string.keep_mine_vip_space)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -7999,6 +8149,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.HIDE_SEARCH_HOME_RECOMMEND, directToggle = true)
             text = stringResource(R.string.hide_search_home_recommend)
             settingsDestinations.bind("search.home_recommend.hidden",this)
             isAllCaps = false
@@ -8038,6 +8189,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_SEARCH_COMMERCIAL, directToggle = true)
             text = stringResource(R.string.remove_search_commercial)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -8076,6 +8228,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.SEARCH_KEYWORD_FILTER_ENABLED, directToggle = true)
             text = stringResource(R.string.search_keyword_filter)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -8156,6 +8309,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.SEARCH_AUTHOR_FILTER_ENABLED, directToggle = true)
             text = stringResource(R.string.search_author_filter)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -8292,6 +8446,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.HIDE_DYNAMIC_CITY_TAB, directToggle = true)
             text = stringResource(R.string.hide_dynamic_city_tab)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -8330,6 +8485,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.HIDE_DYNAMIC_SCHOOL_TAB, directToggle = true)
             text = stringResource(R.string.hide_dynamic_school_tab)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -8378,6 +8534,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.DYNAMIC_KEYWORD_FILTER_ENABLED, directToggle = true)
             text = stringResource(R.string.dynamic_keyword_filter)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -8458,6 +8615,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.DYNAMIC_AUTHOR_FILTER_ENABLED, directToggle = true)
             text = stringResource(R.string.dynamic_author_filter)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -8538,6 +8696,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_DYNAMIC_PROMOTIONS, directToggle = true)
             text = stringResource(R.string.remove_dynamic_promotions)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -8576,6 +8735,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_DYNAMIC_CHARGE_ONLY, directToggle = true)
             text = stringResource(R.string.remove_dynamic_charge_only)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -8614,6 +8774,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.HIDE_DYNAMIC_FREQUENT_VISITS, directToggle = true)
             text = stringResource(R.string.hide_dynamic_frequent_visits)
             settingsDestinations.bind("dynamic.frequent_visits.hidden",this)
             isAllCaps = false
@@ -8653,6 +8814,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.HIDE_DYNAMIC_TOPIC_LIST, directToggle = true)
             text = stringResource(R.string.hide_dynamic_topic_list)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -8691,6 +8853,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_DYNAMIC_LIVE_UP_ENTRIES, directToggle = true)
             text = stringResource(R.string.remove_dynamic_live_up_entries)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -8747,6 +8910,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.HIDE_HOME_GAME_MENU, directToggle = true)
             text = stringResource(R.string.hide_home_game_menu)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -8785,6 +8949,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.HIDE_HOME_SEARCH_DEFAULT_WORD, directToggle = true)
             text = stringResource(R.string.hide_home_search_default_word)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -8891,6 +9056,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REMOVE_HOME_RECOMMEND_CM_V2, directToggle = true)
             text = stringResource(R.string.remove_home_recommend_cm_v2)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -8979,6 +9145,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.HOME_RECOMMEND_TITLE_FILTER_ENABLED, directToggle = true)
             text = stringResource(R.string.home_recommend_title_filter)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -9077,6 +9244,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.SPLASH_AUTO_NIGHT, directToggle = true)
             text = stringResource(R.string.splash_auto_night)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -9115,6 +9283,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.SYSTEM_MEDIA_NOTIFICATION, directToggle = true)
             text = stringResource(R.string.system_media_notification)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -9153,6 +9322,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.FORCE_EXTERNAL_BROWSER, directToggle = true)
             text = stringResource(R.string.force_external_browser)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -9207,6 +9377,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.SHOW_FULL_NUMBERS, directToggle = true)
             text = stringResource(R.string.show_full_numbers)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -9246,6 +9417,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.SHOW_BV_AS_AV, directToggle = true)
             text = stringResource(R.string.show_bv_as_av)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -9300,6 +9472,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.REPLY_TOPOLOGY_ENABLED, directToggle = true)
             text = stringResource(R.string.reply_topology_enabled)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -9330,6 +9503,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.BLOCK_COMMENT_QUICK_REPLY, directToggle = true)
             text = stringResource(R.string.block_comment_quick_reply)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -9385,6 +9559,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.BLOCK_LIVE_ROOM_SWITCH, directToggle = true)
             text = stringResource(R.string.block_live_room_switch)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -9423,6 +9598,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.LIVE_ROOM_DOUBLE_TAP_PAUSE, directToggle = true)
             text = stringResource(R.string.live_room_double_tap_pause)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -9590,6 +9766,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.TRANSPARENT_PLAYER_STATUS_BAR, directToggle = true)
             text = stringResource(R.string.transparent_player_status_bar)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -9642,6 +9819,7 @@ class MainActivity : SkinnedActivity() {
                     bottomMargin = 5.dp
                 }
             ) {
+                bindFavoriteSwitch(this, key)
                 text = stringResource(label)
                 isAllCaps = false
                 textColor = colorResource(R.color.colorTextGray)
@@ -9676,6 +9854,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.PLAYER_DISABLE_LONG_PRESS, directToggle = true)
             text = stringResource(R.string.player_disable_long_press)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -9747,6 +9926,7 @@ class MainActivity : SkinnedActivity() {
             topMargin = 12.dp
             bottomMargin = 5.dp
         }) {
+            bindFavoriteSwitch(this, FeaturePreferences.HOME_RECOMMEND_SECTION_PICK_ENABLED, directToggle = true)
             text = stringResource(R.string.home_recommend_section_pick)
             textColor = colorResource(R.color.colorTextGray)
             textSize = 15f
@@ -9905,6 +10085,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.HOME_VERTICAL_OPEN_DETAIL, directToggle = true)
             text = stringResource(R.string.home_vertical_open_detail)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
@@ -9943,6 +10124,7 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.PREFER_DYNAMIC_VIDEO_TAB, directToggle = true)
             text = stringResource(R.string.prefer_dynamic_video_tab)
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)

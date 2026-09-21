@@ -316,7 +316,7 @@ internal fun MainActivity.showUserTermsDialog() {
     activeConfirmDialog?.dismiss()
     termsDecisionActionInProgress = false
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
 
     container.addView(
@@ -519,10 +519,12 @@ internal fun MainActivity.showUserTermsDialog() {
     }
 
     dialog.setContentView(root)
+    val releaseElasticInteraction = installDialogElasticInteraction(dialog)
     dialog.setCancelable(true)
     dialog.setCanceledOnTouchOutside(false)
     dialog.setOnCancelListener { finish() }
     dialog.setOnDismissListener {
+        releaseElasticInteraction()
         if (activeConfirmDialog === dialog) activeConfirmDialog = null
         termsDialogHintView = null
         termsManagerLauncher = null

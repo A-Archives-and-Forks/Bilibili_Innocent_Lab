@@ -65,9 +65,13 @@ internal class LiquidBlurBackendApi31(
         radiusPx: Float,
         viewX: Int,
         viewY: Int,
-        opticalIntensity: Float
+        opticalIntensity: Float,
+        stretchDirY: Float,
+        contentAlpha: Float
     ) {
         val node = checkNotNull(renderNode) { "Liquid blur backdrop is not bound" }
+        // 模糊后端没有边缘光学项，方向不参与；contentAlpha 直接让真实下层内容透入。
+        node.alpha = contentAlpha.coerceIn(0f, 1f)
         clipBounds.set(bounds)
         clipPath.reset()
         clipPath.addRoundRect(clipBounds, radiusPx, radiusPx, Path.Direction.CW)

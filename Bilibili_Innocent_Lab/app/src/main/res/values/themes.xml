@@ -1,4 +1,4 @@
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Base application theme. -->
     <style name="Theme.AppDefault" parent="Theme.Material3.DayNight.NoActionBar">
         <!-- Primary brand color. -->
@@ -12,6 +12,13 @@
         <!-- Status bar color. -->
         <item name="android:statusBarColor">@color/white</item>
         <item name="android:windowLightStatusBar">true</item>
+        <!--
+            Android 12+ 系统开屏：显式指定矢量开屏图标。不指定时系统回退用启动器图标，
+            而 AdaptiveIconDrawable 会按“图标视图 / 108dp 固有尺寸”被再放大约 1.5 倍，
+            只露出安全区，满幅图案（电视机天线、电视两侧）会被裁掉。旧版这里是 192px
+            位图，被放大约 3.3 倍后出现毛边。API 31 以下无系统开屏，该属性被忽略。
+        -->
+        <item name="android:windowSplashScreenAnimatedIcon" tools:targetApi="31">@drawable/ic_splash_icon</item>
         <!-- Customize your theme here. -->
     </style>
 

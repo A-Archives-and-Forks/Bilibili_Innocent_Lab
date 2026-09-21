@@ -1,0 +1,20 @@
+<resources>
+    <string name="settings_home_favorites">常用</string>
+    <string name="settings_home_purify">淨化</string>
+    <string name="settings_home_enhance">增強</string>
+    <string name="settings_home_module">模組</string>
+    <string name="settings_home_favorites_hint">把常用開關放在一起，隨手就能找到。</string>
+    <string name="settings_home_purify_hint">留下想看的，隱藏不需要的。</string>
+    <string name="settings_home_enhance_hint">調整播放與瀏覽，讓使用更順手。</string>
+    <string name="settings_home_module_hint">外觀、相容選項與運行狀態。</string>
+    <string name="settings_favorites_manage">管理常用</string>
+    <string name="settings_favorites_search">尋找開關</string>
+    <string name="settings_favorites_loading">正在讀取常用開關…</string>
+    <string name="settings_favorites_empty">點選「管理常用」，把經常使用的開關釘在這裡。</string>
+    <string name="settings_favorites_unavailable">暫時無法讀取常用清單，已保留原有記錄。</string>
+    <string name="settings_favorites_save_failed">常用清單儲存失敗，請重試。</string>
+    <string name="settings_favorites_missing">暫不可用 · %1$s</string>
+    <string name="settings_favorites_move_up">上移%1$s</string>
+    <string name="settings_favorites_move_down">下移%1$s</string>
+    <string name="settings_favorites_no_matches">沒有符合的開關</string>
+</resources>

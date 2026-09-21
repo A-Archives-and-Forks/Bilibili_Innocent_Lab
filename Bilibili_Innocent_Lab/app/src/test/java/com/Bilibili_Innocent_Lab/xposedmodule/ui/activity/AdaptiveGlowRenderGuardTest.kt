@@ -1,0 +1,74 @@
+package com.Bilibili_Innocent_Lab.xposedmodule.ui.activity
+
+import java.io.File
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/**
+ * 光晕渲染路径的结构护栏。
+ *
+ * 拦的是三类会**静默退化**的写法（编译照过、界面照动、只有掉帧或跳变）：
+ * ① 每帧重建 shader；② 离屏模糊；③ 纯几何层被 android.graphics 污染（JVM 单测随之失效）。
+ * 都以源码文本断言——本仓 ModalTitleMotionConventionTest / SettingsDialogExtractionTest 的同款思路。
+ */
+class AdaptiveGlowRenderGuardTest {
+
+    private fun source(relative: String): String {
+        val candidates = sequenceOf(
+            File("src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/$relative"),
+            File("app/src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/$relative")
+        )
+        return candidates.firstOrNull(File::isFile)?.readText()
+            ?: error("cannot locate $relative from ${File(".").absolutePath}")
+    }
+
+    private val surfaces = listOf(
+        "ui/activity/ModernNavigationBar.kt",
+        "ui/activity/LogSegmentScrubBar.kt",
+        "ui/interaction/ElasticInteractionController.kt"
+    )
+
+    @Test fun geometryLayerStaysFreeOfAndroidGraphics() {
+        val policy = source("ui/activity/AdaptiveGlowPolicy.kt")
+        val imports = policy.lineSequence().filter { it.startsWith("import ") }.toList()
+        assertTrue("纯几何层不得 import android.graphics", imports.none { it.contains("android.graphics") })
+        assertTrue("纯几何层不得 import Canvas/Paint/Shader",
+            imports.none { it.contains(".Canvas") || it.contains(".Paint") || it.contains(".Shader") })
+    }
+
+    @Test fun surfacesNeverBuildAShaderOrGoOffscreen() {
+        for (path in surfaces) {
+            val text = source(path)
+            assertTrue("$path 不得自建 RadialGradient（shader 只在 TouchGlowRenderer 构造）",
+                !text.contains("RadialGradient("))
+            assertTrue("$path 不得离屏模糊", !text.contains("BlurMaskFilter"))
+            assertTrue("$path 不得 RenderEffect", !text.contains("RenderEffect"))
+            assertTrue("$path 不得 saveLayer", !text.contains("saveLayer"))
+        }
+    }
+
+    @Test fun rendererBuildsTheShaderExactlyOnceAndOutsideDraw() {
+        val renderer = source("ui/widget/TouchGlowRenderer.kt")
+        assertEquals("shader 只准建一次", 1, Regex("RadialGradient\\(").findAll(renderer).count())
+        val buildIndex = renderer.indexOf("RadialGradient(")
+        val drawIndex = renderer.indexOf("fun draw(")
+        assertTrue("构造点必须早于 draw", buildIndex in 0 until drawIndex)
+        assertTrue("draw 内不得重建 shader", !renderer.substring(drawIndex).contains("RadialGradient("))
+        // 几何圆必须包住前移后的渐变支持域：否则形变方向会被几何硬切出一道非零 alpha 直边
+        assertTrue("draw 必须按 coreOffsetX 扩大几何圆",
+            renderer.substring(drawIndex).contains("coreOffsetX"))
+        assertTrue("draw 不得再用基准半径作几何",
+            !renderer.substring(drawIndex).contains("drawCircle(0f, 0f, radius, paint)"))
+    }
+
+    @Test fun allThreeSurfacesShareTheSameGeometry() {
+        assertTrue(source("ui/activity/ModernNavigationBar.kt").contains("GlowState"))
+        assertTrue(source("ui/activity/LogSegmentScrubBar.kt").contains("GlowState"))
+        assertTrue(source("ui/interaction/ElasticInteractionController.kt").contains("GlowState"))
+        // 底栏与 scrub 条必须共用同一个渲染器，而不是各自画
+        assertTrue(source("ui/activity/ModernNavigationBar.kt").contains("TouchGlowRenderer"))
+        assertTrue(source("ui/activity/LogSegmentScrubBar.kt").contains("TouchGlowRenderer"))
+        assertTrue(source("ui/interaction/ElasticInteractionController.kt").contains("TouchGlowRenderer"))
+    }
+}

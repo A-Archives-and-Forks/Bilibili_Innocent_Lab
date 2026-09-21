@@ -200,6 +200,7 @@ dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.constraintlayout)
+    implementation(libs.androidx.recyclerview)
 
     implementation(libs.material)
     // GitHub Release body is Markdown; render it as bounded native Spannable content.

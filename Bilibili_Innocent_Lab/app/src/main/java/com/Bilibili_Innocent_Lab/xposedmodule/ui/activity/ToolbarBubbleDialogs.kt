@@ -50,7 +50,7 @@ import android.widget.TextView as NativeTextView
 
 internal fun MainActivity.showGitHubMenuDialog(anchor: View? = null) {
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
 
     container.addView(
@@ -154,7 +154,7 @@ internal fun MainActivity.showGitHubMenuDialog(anchor: View? = null) {
 internal fun MainActivity.showSettingsSearchDialog(anchor: View? = null) {
     val activity = this
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
     val runtimeTargets = collectSettingsSearchTargets()
     val targetByKey = runtimeTargets.associateBy { it.item.key }

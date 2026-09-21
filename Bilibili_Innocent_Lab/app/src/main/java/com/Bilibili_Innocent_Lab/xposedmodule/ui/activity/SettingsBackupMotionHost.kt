@@ -182,11 +182,11 @@ internal class SettingsBackupMotionHost(
         if (expansion >= 0.999f) backdropClip.clearMotionOutline()
     }
 
-    /** Liquid renderer 绑定到该层；其父容器始终跟随形变 surface 裁剪。 */
+    /** 皮肤背景绑定到该层；其父容器始终跟随形变 surface 裁剪。 */
     fun liquidBackdropRoot(): View = backdropRoot
 
-    /** 仅诊断页在 Liquid 生效时设置；备份页继续使用原有自绘 surface。 */
-    fun setLiquidMotionSurfaceBackground(background: Drawable?) {
+    /** Both skin renderers read this View's live motion bounds, radius and fallback color. */
+    fun setMotionSurfaceBackground(background: Drawable?) {
         surface.background = background
     }
 

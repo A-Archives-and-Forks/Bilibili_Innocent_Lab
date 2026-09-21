@@ -1,5 +1,8 @@
 package com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.activity
 
+import android.app.Dialog
+import android.view.MotionEvent
+import android.view.Window
 import android.graphics.drawable.Drawable
 import android.graphics.drawable.GradientDrawable
 import android.view.View
@@ -21,6 +24,9 @@ import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.runtime.SkinSessionDiagnos
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.SkinId
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.SurfaceRole
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.theme.MonetColors
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.interaction.ElasticInteractionController
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.theme.ModernPalette
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.material.ModernMaterialDrawables
 
 /**
  * 只管理 Activity 级皮肤会话的薄基类。
@@ -33,12 +39,66 @@ abstract class SkinnedActivity : AppViewsActivity() {
     private var skinSessionOrNull: ActivitySkinSession? = null
     private var materialPaletteOrNull: MonetColors? = null
     private var lifecycleEnded = false
+    private var elasticInteraction: ElasticInteractionController? = null
+    private data class DialogInteraction(val controller: ElasticInteractionController, val release: () -> Unit)
+    private val dialogInteractions = linkedMapOf<Window, DialogInteraction>()
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (lifecycleEnded) return super.dispatchTouchEvent(event)
+        val controller = elasticInteraction ?: ElasticInteractionController(
+            root = window.decorView,
+            notifyPositionChanged = { notifyPreparedSkinPositionChanged() },
+            highlightColor = monetColors.primary
+        ).also { elasticInteraction = it }
+        return controller.dispatch(event) { original -> super.dispatchTouchEvent(original) }
+    }
+
+    /** Only restores visual ownership; original click/checked listeners stay authoritative. */
+    protected fun clearElasticInteractions() {
+        elasticInteraction?.clear()
+        dialogInteractions.values.forEach { it.controller.clear() }
+    }
+
+    /** Installed after setContentView; caller releases it from its existing dismiss listener. */
+    internal fun installDialogElasticInteraction(dialog: Dialog): () -> Unit {
+        val window = dialog.window ?: return {}
+        dialogInteractions[window]?.let { return it.release }
+        val original = window.callback ?: return {}
+        val controller = ElasticInteractionController(window.decorView,
+            notifyPositionChanged = { notifyPreparedSkinPositionChanged() },
+            highlightColor = monetColors.primary)
+        val callback = object : Window.Callback by original {
+            override fun dispatchTouchEvent(event: MotionEvent): Boolean =
+                controller.dispatch(event) { forwarded -> original.dispatchTouchEvent(forwarded) }
+        }
+        var released = false
+        var detachListener: View.OnAttachStateChangeListener? = null
+        val release = {
+            if (!released) {
+                released = true
+                detachListener?.let { window.decorView.removeOnAttachStateChangeListener(it) }
+                controller.dispose()
+                if (window.callback === callback) window.callback = original
+                dialogInteractions.remove(window)
+            }
+            Unit
+        }
+        // DecorView detaches when the dialog window is dismissed; release without
+        // waiting for a caller-side dismiss listener so bulk installs stay leak-free.
+        detachListener = object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(view: View) = Unit
+            override fun onViewDetachedFromWindow(view: View) { release() }
+        }
+        window.decorView.addOnAttachStateChangeListener(detachListener!!)
+        dialogInteractions[window] = DialogInteraction(controller, release)
+        window.callback = callback
+        return release
+    }
 
     /**
-     * 兼容现有调用点的纯 Material 调色板入口。
+     * Module-only palette: wallpaper accents with neutral modern window and surface colors.
      *
-     * 这里故意不读取 SkinPrefs 或启动 renderer；调色板只读取独立的配色规范用户设置，
-     * 让条款页与授权后的界面保持同一组 Material 颜色。
+     * Does not read SkinPrefs or start a renderer; consent and fallback windows use the same palette.
      */
     // internal 而非 protected：设置页的弹窗正按主题外移成 `MainActivity` 的扩展函数，
     // 而 Kotlin 的扩展函数**拿不到 protected 成员**（protected 只对子类体内可见）。
@@ -48,7 +108,7 @@ abstract class SkinnedActivity : AppViewsActivity() {
     // stylePreparedSkinControls 等仍是 protected——它们只被留在 Activity 里的底座调用。
     internal val monetColors: MonetColors
         get() = materialPaletteOrNull
-            ?: MonetColors.fromWallpaper(this).also { materialPaletteOrNull = it }
+            ?: ModernPalette.resolve(this).also { materialPaletteOrNull = it }
 
     /** 条款授权后的皮肤装配点；未授权分支不得调用。 */
     @MainThread
@@ -60,7 +120,8 @@ abstract class SkinnedActivity : AppViewsActivity() {
     /**
      * 把已准备的 Liquid 会话绑定到 MainActivity 的可见根 View。
      *
-     * Material You 是成功的 no-op；未 prepare 或 Activity 已结束返回 false。回调只表示完整
+     * Soft surfaces share an asynchronously prepared static backdrop; Liquid retains its optical renderer.
+     * 未 prepare 或 Activity 已结束返回 false。回调只表示完整
      * Liquid renderer 失败并已请求回退，不会把 BLUR/TRANSLUCENT 的正常降级误报为失败。
      */
     @MainThread
@@ -75,7 +136,7 @@ abstract class SkinnedActivity : AppViewsActivity() {
 
     /** One construction-time pass. No hierarchy listener, polling or preference reads. */
     protected fun stylePreparedSkinControls(root: View) {
-        if (!isLiquidSkinEffective || lifecycleEnded) return
+        if (skinSessionOrNull == null || lifecycleEnded) return
         val density = resources.displayMetrics.density
         fun choice(width: Int, height: Int, checkbox: Boolean = false, thumb: Boolean = false) =
             LiquidChoiceDrawable(width, height, density, monetColors.surface, monetColors.primary,
@@ -92,7 +153,10 @@ abstract class SkinnedActivity : AppViewsActivity() {
                     view.splitTrack = false
                 }
                 is CheckBox -> {
-                    val size = (view.buttonDrawable?.intrinsicWidth ?: 0).coerceAtLeast((24 * density).toInt())
+                    // 框架默认按钮在各 ROM 上尺寸发散（本机 ~32dp），钳到一个小区间：
+                    // 控件实际盒体 = size − 2×inset，落回约 20dp 的紧凑尺度。
+                    val size = (view.buttonDrawable?.intrinsicWidth ?: 0)
+                        .coerceIn((20 * density).toInt(), (26 * density).toInt())
                     view.buttonTintList = null
                     view.buttonDrawable = choice(size, size, checkbox = true)
                 }
@@ -108,9 +172,9 @@ abstract class SkinnedActivity : AppViewsActivity() {
         visit(root)
     }
 
-    /** Called after the existing Material decoration: Material/unauthorized paths are exact no-ops. */
+    /** Shared modern controls; unprepared consent paths stay free of renderer ownership. */
     internal fun skinActionButton(view: TextView, filled: Boolean, radiusDp: Float = 20f) {
-        if (!isLiquidSkinEffective || lifecycleEnded) return
+        if (skinSessionOrNull == null || lifecycleEnded) return
         val text = getColor(R.color.colorTextDark)
         view.setTextColor(ColorStateList(arrayOf(intArrayOf(-android.R.attr.state_enabled), intArrayOf()),
             intArrayOf(ColorUtils.setAlphaComponent(text, 0x66), text)))
@@ -127,17 +191,17 @@ abstract class SkinnedActivity : AppViewsActivity() {
     }
 
     protected val skinEmphasisTextColor: Int
-        get() = if (isLiquidSkinEffective) getColor(R.color.colorTextDark) else monetColors.onPrimary
+        get() = getColor(R.color.colorTextDark)
 
     protected fun skinSelectionControl(view: View, radiusDp: Float, selected: Boolean) {
-        if (!isLiquidSkinEffective || lifecycleEnded) return
+        if (skinSessionOrNull == null || lifecycleEnded) return
         replaceControlBackground(view, skinBackground(monetColors.surface, radiusDp, false,
             if (selected) SurfaceRole.SELECTED_ITEM else SurfaceRole.CARD))
         view.foreground = controlOutline(radiusDp, selected)
     }
 
     protected fun skinUpdateBadge(view: TextView) {
-        if (!isLiquidSkinEffective || lifecycleEnded) return
+        if (skinSessionOrNull == null || lifecycleEnded) return
         view.setTextColor(getColor(R.color.colorTextDark))
         view.background = com.Bilibili_Innocent_Lab.xposedmodule.ui.widget.GithubUpdateBadgeDrawable(
             ColorUtils.setAlphaComponent(monetColors.surface, 220), resources.displayMetrics.density,
@@ -145,7 +209,7 @@ abstract class SkinnedActivity : AppViewsActivity() {
     }
 
     protected fun skinStatusChip(view: TextView, accent: Int, radiusDp: Float = 9f) {
-        if (!isLiquidSkinEffective || lifecycleEnded) return
+        if (skinSessionOrNull == null || lifecycleEnded) return
         val density = resources.displayMetrics.density
         // Small semantic labels retain a readable solid glyph; no per-label optical capture.
         replaceControlBackground(view, GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
@@ -168,7 +232,7 @@ abstract class SkinnedActivity : AppViewsActivity() {
             cornerRadius = radiusDp * resources.displayMetrics.density
             setColor(android.graphics.Color.TRANSPARENT)
             setStroke(((if (active) 2f else 1f) * resources.displayMetrics.density).toInt().coerceAtLeast(1),
-                ColorUtils.setAlphaComponent(monetColors.primary, if (active || emphasized) 0xC0 else 0x55))
+                ColorUtils.setAlphaComponent(monetColors.primary, if (active || emphasized) 0x72 else 0x22))
         }
         return StateListDrawable().apply {
             addState(intArrayOf(android.R.attr.state_focused), border(true))
@@ -190,6 +254,12 @@ abstract class SkinnedActivity : AppViewsActivity() {
     @MainThread
     protected fun finishPreparedLiquidStretch(view: View?) {
         skinSessionOrNull?.finishStretchViewport(view)
+    }
+
+    /** Translation moves retained display lists without firing a scroll callback. */
+    @MainThread
+    protected fun notifyPreparedSkinPositionChanged() {
+        if (!lifecycleEnded) skinSessionOrNull?.notifyPositionChanged()
     }
 
     /** 当前持久化选择是否请求 Liquid；未准备会话时保持 false。 */
@@ -230,6 +300,18 @@ abstract class SkinnedActivity : AppViewsActivity() {
         materialOutline = false,
         role = SurfaceRole.CARD
     )
+
+    /** Safe before consent: palette only; no SkinPrefs, bitmap work or Liquid session ownership. */
+    internal fun neutralWindowBackground(): Drawable = ModernMaterialDrawables.neutralWindow(monetColors)
+
+    internal fun skinFloatingBackground(color: Int, radiusDp: Float = 28f): Drawable =
+        skinBackground(color, radiusDp, materialOutline = true, role = SurfaceRole.FLOATING)
+
+    internal fun skinTopBarBackground(color: Int, radiusDp: Float = 0f): Drawable =
+        skinBackground(color, radiusDp, materialOutline = false, role = SurfaceRole.TOP_BAR)
+
+    internal fun skinSelectionBackground(color: Int, radiusDp: Float = 22f): Drawable =
+        skinBackground(color, radiusDp, materialOutline = true, role = SurfaceRole.SELECTED_ITEM)
 
     /** 模态表面语义背景；保留既有 28dp 默认圆角。 */
     protected fun skinModalBackground(
@@ -273,19 +355,8 @@ abstract class SkinnedActivity : AppViewsActivity() {
         role: SurfaceRole
     ): Drawable =
         skinSessionOrNull?.surfaceBackground(color, radiusDp, materialOutline, role)
-            ?: GradientDrawable().apply {
-                cornerRadius = radiusDp.coerceAtLeast(0f) * resources.displayMetrics.density
-                setColor(color)
-                if (materialOutline) {
-                    setStroke(
-                        resources.displayMetrics.density.toInt().coerceAtLeast(1),
-                        androidx.core.graphics.ColorUtils.setAlphaComponent(
-                            android.graphics.Color.WHITE,
-                            0x18
-                        )
-                    )
-                }
-            }
+            ?: ModernMaterialDrawables.fallback(color, radiusDp.coerceAtLeast(0f) * resources.displayMetrics.density,
+                resources.displayMetrics.density, role, ColorUtils.calculateLuminance(monetColors.background) < .5)
 
     override fun onStart() {
         super.onStart()
@@ -293,8 +364,14 @@ abstract class SkinnedActivity : AppViewsActivity() {
     }
 
     override fun onStop() {
+        clearElasticInteractions()
         skinSessionOrNull?.onActivityStopped()
         super.onStop()
+    }
+
+    override fun onPause() {
+        clearElasticInteractions()
+        super.onPause()
     }
 
     override fun onTrimMemory(level: Int) {
@@ -309,6 +386,9 @@ abstract class SkinnedActivity : AppViewsActivity() {
 
     override fun onDestroy() {
         lifecycleEnded = true
+        elasticInteraction?.dispose()
+        elasticInteraction = null
+        dialogInteractions.values.toList().forEach { it.release() }
         val session = skinSessionOrNull
         skinSessionOrNull = null
         try {

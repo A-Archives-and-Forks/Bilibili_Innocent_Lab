@@ -64,7 +64,7 @@ internal fun MainActivity.showComponentPickerDialog(
     if (entries.isEmpty()) return
 
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
 
     container.addView(
@@ -298,7 +298,7 @@ internal fun MainActivity.showRuleEditorDialog(
     onConfirm: (String) -> Unit
 ) {
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
     // 扫描没结果时这个编辑器就是唯一入口，逐条手打池名并不现实，
     // 所以给一个「全量禁止」开关；它写的是 `*` 哨兵，与手填 `*` 完全等价。

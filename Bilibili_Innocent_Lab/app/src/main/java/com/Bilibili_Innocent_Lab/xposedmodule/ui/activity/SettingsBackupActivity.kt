@@ -182,6 +182,7 @@ class SettingsBackupActivity : SkinnedActivity() {
             titleColor = getColor(R.color.colorTextGray),
             sourceTitle = getString(R.string.settings_backup_title)
         )
+        motionHost.setMotionSurfaceBackground(skinMotionSurfaceBackground(monetColors.surfaceVariant, 15f))
         motionHost.onWindowSizeChangedDuringMotion = ::handleMotionWindowSizeChange
         setContentView(motionHost)
         bindPreparedSkinRoot(motionHost.liquidBackdropRoot()) {
@@ -1124,7 +1125,7 @@ class SettingsBackupActivity : SkinnedActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(4), dp(4), dp(16), dp(4))
-            // 与诊断页一致，透出动画宿主的页面背景，不再单独绘制标题栏色带。
+            background = skinTopBarBackground(monetColors.background)
         }
         toolbar.addView(TextView(this).apply {
             text = "←"

@@ -57,7 +57,7 @@ import android.widget.TextView as NativeTextView
 /** 「更新渠道」选择弹窗：稳定版 / 预览版（含 Alpha），风格与 GitHub 二级界面统一。 */
 internal fun MainActivity.showUpdateChannelDialog() {
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
     val updatePrefs = applicationContext.getSharedPreferences(UpdateChannelStore.PREF_FILE, MODE_PRIVATE)
     val current = readUpdateChannel(updatePrefs)
@@ -160,7 +160,7 @@ internal fun MainActivity.showUpdateDialogWhenIdle(
 
 internal fun MainActivity.showUpdateAvailableDialog(release: GitHubReleaseChecker.ReleaseInfo) {
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
 
     container.addView(
@@ -410,7 +410,7 @@ internal fun MainActivity.showReleaseHighlights(
     if (activeConfirmDialog?.isShowing == true) return
     val entries = ReleaseHighlightsCatalog.entriesAfter(fromRevision, automatic)
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
     container.addView(NativeTextView(this).apply {
         text = getString(R.string.highlights_title)

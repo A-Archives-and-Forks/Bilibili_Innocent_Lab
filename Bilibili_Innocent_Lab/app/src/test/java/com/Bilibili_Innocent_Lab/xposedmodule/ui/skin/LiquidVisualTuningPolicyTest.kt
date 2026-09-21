@@ -3,18 +3,33 @@ package com.Bilibili_Innocent_Lab.xposedmodule.ui.skin
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid.LiquidVisualTuningPolicy
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class LiquidVisualTuningPolicyTest {
 
+    /**
+     * 未设自定义图时 Liquid 的自动 underlay 必须与标准磨砂皮肤共用 [AmbientBackdropScene]：
+     * 两种材质下用户看到的是同一个 Monet 氛围背景。折射采样副本保持无颗粒。
+     */
     @Test
-    fun `ambient washes stay subtle in light and dark palettes`() {
+    fun `auto backdrop shares the ambient scene with the frosted skin`() {
+        val liquid = source("liquid/LiquidBackdropSource")
+        val frosted = source("material/FrostedMaterialRenderer")
+
+        assertTrue(liquid.contains("AmbientBackdropScene.paint(canvas, palette"))
+        assertTrue(liquid.contains("AmbientBackdropScene.addGrain(pixels)"))
+        // 颗粒只写进可见根位图；折射采样副本用加噪前的像素构建。
+        assertTrue(liquid.contains("opticalBitmap = optical"))
+        assertTrue(frosted.contains("AmbientBackdropScene.paint(canvas, palette"))
+        assertTrue(frosted.contains("AmbientBackdropScene.addGrain(pixels)"))
+    }
+
+    @Test
+    fun `saturation stays near the source palette`() {
         listOf(false, true).forEach { dark ->
             val tuning = LiquidVisualTuningPolicy.resolve(dark)
 
-            assertTrue(tuning.primaryWashAlpha in 1..25)
-            assertTrue(tuning.secondaryWashAlpha in 1..20)
-            assertTrue(tuning.secondaryWashAlpha <= tuning.primaryWashAlpha)
-            assertTrue(tuning.saturation in 1f..1.08f)
+            assertTrue(tuning.saturation in .94f..1f)
         }
     }
 
@@ -26,8 +41,8 @@ class LiquidVisualTuningPolicyTest {
             assertTrue(tuning.cardGlassAlpha < tuning.cardFallbackAlpha)
             assertTrue(tuning.modalGlassAlpha < tuning.modalFallbackAlpha)
             assertTrue(tuning.motionGlassAlpha < tuning.motionFallbackAlpha)
-            assertTrue(tuning.cardGlassAlpha <= 0.24f)
-            assertTrue(tuning.modalGlassAlpha <= 0.38f)
+            assertTrue(tuning.cardGlassAlpha in .24f..0.34f)
+            assertTrue(tuning.modalGlassAlpha in .4f..0.9f)
             assertTrue(tuning.cardFallbackAlpha < 0.8f)
             assertTrue(tuning.modalFallbackAlpha < 0.95f)
         }
@@ -46,4 +61,9 @@ class LiquidVisualTuningPolicyTest {
             assertTrue(tuning.motionFallbackAlpha < tuning.modalFallbackAlpha)
         }
     }
+
+    private fun source(name: String): String = sequenceOf(
+        File("src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/$name.kt"),
+        File("app/src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/$name.kt")
+    ).first(File::isFile).readText()
 }

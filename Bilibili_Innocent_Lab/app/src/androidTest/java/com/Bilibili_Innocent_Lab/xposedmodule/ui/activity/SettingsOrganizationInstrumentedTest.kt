@@ -99,7 +99,7 @@ class SettingsOrganizationInstrumentedTest {
 
     private fun assertAppearanceTitleAlignment(activity: MainActivity) {
         val titles = listOf(
-            R.string.skin_setting_title, R.string.liquid_background_setting_title,
+            R.string.advanced_material_title, R.string.liquid_background_setting_title,
             R.string.material_color_spec_title, R.string.app_language,
             R.string.hide_app_icon_on_launcher
         ).map { label(activity, it) }
@@ -392,7 +392,7 @@ class SettingsOrganizationInstrumentedTest {
                 assertEquals(View.GONE, appearance.visibility)
                 assertEquals(View.GONE, compatibility.visibility)
                 listOf(
-                    R.string.skin_setting_title, R.string.liquid_background_setting_title,
+                    R.string.advanced_material_title, R.string.liquid_background_setting_title,
                     R.string.material_color_spec_title, R.string.display_settings,
                     R.string.app_language, R.string.hide_app_icon_on_launcher
                 ).forEach { resource ->

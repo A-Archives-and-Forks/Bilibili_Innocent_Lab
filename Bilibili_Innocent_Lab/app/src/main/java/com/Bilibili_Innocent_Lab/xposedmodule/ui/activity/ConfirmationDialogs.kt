@@ -61,7 +61,7 @@ import android.widget.TextView as NativeTextView
  */
 internal fun MainActivity.showRestartConfirmDialog(anchor: View? = null) {
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val useNoRootFlow = shouldUseNoRootRestartFlow()
     val container = createModalContainer()
 
@@ -177,7 +177,7 @@ internal fun MainActivity.showAutoLightConfirmDialog(
     onCancel: () -> Unit
 ) {
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
 
     container.addView(
@@ -275,7 +275,7 @@ internal fun MainActivity.showAutoLightConfirmDialog(
 internal fun MainActivity.showAdaptConfirmDialog(anchor: View? = null) {
     val activity = this
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
 
     container.addView(

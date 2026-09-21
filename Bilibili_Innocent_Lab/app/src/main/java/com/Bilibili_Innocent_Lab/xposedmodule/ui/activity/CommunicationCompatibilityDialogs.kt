@@ -25,7 +25,7 @@ internal fun MainActivity.showCommunicationCompatibilityConfirmDialog(anchor: Vi
     if (CommunicationCompatibilityStore.isEnabled(applicationContext) ||
         !CommunicationCompatibilityStore.hasConsent(applicationContext)) return
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
     container.addView(NativeTextView(this).apply {
         text = getString(R.string.communication_compatibility_mode)

@@ -10,11 +10,10 @@ import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.background.LiquidBackgroun
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.background.LiquidBackgroundStore
 
 /**
- * 外观相关的摘要文案与失败回退：应用语言、皮肤、Liquid 背景。
+ * 外观相关的摘要文案与失败回退：应用语言、Liquid 背景。
  *
  * 皮肤/背景的**核心侧回退**由 renderer 自己完成，这里只负责事后提示与重建界面，
- * 不做降级决策——所以摘要要显示"实际请求的皮肤"与"当前降级后的后端"两项，
- * 两者可能不一致，那不是 bug。
+ * 不做降级决策。当前生效的后端与降级原因只进本地诊断，不在一级设置页展示。
  *
  * 文件名以 `Presenter.kt` 结尾 = 落进 `SettingsUiSource.VOLUME_SUFFIXES` 的扫描集。
  */
@@ -22,14 +21,6 @@ import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.background.LiquidBackgroun
 internal fun MainActivity.currentAppLanguageSummary(): String {
     val language = currentAppLanguage()
     return getString(R.string.app_language_current, getString(language.labelRes))
-}
-
-/** 实验性功能区显示实际请求的皮肤；Liquid 同时公开当前降级后端。 */
-internal fun MainActivity.currentSkinSummary(): String {
-    if (!isLiquidSkinRequested) return getString(R.string.skin_current_material_you)
-    val backendLabel = liquidBackendLabelRes(liquidBackendName)?.let { getString(it) }
-        ?: getString(R.string.skin_backend_initializing)
-    return getString(R.string.skin_current_liquid, backendLabel)
 }
 
 internal fun MainActivity.currentLiquidBackgroundSummary(): String {
@@ -58,14 +49,6 @@ internal fun MainActivity.liquidBackgroundFailureText(reason: LiquidBackgroundIm
         LiquidBackgroundImportFailure.STORAGE_FAILED -> R.string.liquid_background_storage_failed
     }
 
-@StringRes
-internal fun MainActivity.liquidBackendLabelRes(backendName: String?): Int? = when (backendName) {
-    "REFRACTION" -> R.string.skin_backend_refraction
-    "BLUR" -> R.string.skin_backend_blur
-    "TRANSLUCENT" -> R.string.skin_backend_translucent
-    else -> null
-}
-
 /** renderer 已完成核心侧回退后，当前 Activity 只负责提示并重建 Material 界面。 */
 internal fun MainActivity.handleSkinRendererFailure() {
     runOnUiThread {
@@ -76,7 +59,6 @@ internal fun MainActivity.handleSkinRendererFailure() {
             recreate()
         } else {
             toast(getString(R.string.skin_recovery_save_failed))
-            skinSummaryView?.text = currentSkinSummary()
         }
     }
 }

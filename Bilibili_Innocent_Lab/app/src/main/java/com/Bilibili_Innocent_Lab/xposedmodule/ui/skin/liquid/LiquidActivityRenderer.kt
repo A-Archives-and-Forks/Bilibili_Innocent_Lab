@@ -7,6 +7,9 @@ import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.ColorFilter
+import android.graphics.LinearGradient
+import android.graphics.Matrix
+import android.graphics.Outline
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.PixelFormat
@@ -34,11 +37,13 @@ import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.LiquidRenderBackend
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.SurfaceRole
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.theme.MonetColors
 import java.util.WeakHashMap
+import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
+import kotlin.math.roundToInt
 
 /** 动态形变表面向 Liquid Drawable 暴露当前帧，不把 renderer 泄漏给业务 View。 */
 internal interface LiquidMotionSurfaceFrameProvider {
@@ -86,23 +91,24 @@ private class LiquidSurfaceFootprint {
     fun matchesOrigin(x: Int, y: Int): Boolean = originX == x && originY == y
 }
 
-/** 记录 stretch viewport 上一次录制时的屏幕原点，判定同 [LiquidSurfaceFootprint]。 */
-private class LiquidViewportOrigin {
-    var x = Int.MIN_VALUE
-        private set
-    var y = Int.MIN_VALUE
-        private set
+private class LiquidWindowRefresh(
+    val observer: WeakReference<ViewTreeObserver>,
+    val preDraw: ViewTreeObserver.OnPreDrawListener,
+    val scroll: ViewTreeObserver.OnScrollChangedListener,
+    val batch: LiquidRefreshBatch = LiquidRefreshBatch()
+)
 
-    val hasOrigin: Boolean
-        get() = x != Int.MIN_VALUE && y != Int.MIN_VALUE
-
-    fun update(x: Int, y: Int) {
-        this.x = x
-        this.y = y
-    }
-
-    fun matches(x: Int, y: Int): Boolean = this.x == x && this.y == y
-}
+private class LiquidCaptureRequest(
+    val ticket: LiquidCaptureRequestState.Ticket,
+    val source: LiquidBackdropSource,
+    val stableBackdrop: LiquidBackdropSource,
+    val root: WeakReference<View>,
+    val width: Int,
+    val height: Int,
+    // Exclusively borrowed until this request completes: no next request can rewind the mask meanwhile.
+    val mask: Path,
+    val maskReady: Boolean
+)
 
 /**
  * MainActivity 首批使用的 Activity 级 Liquid renderer。
@@ -149,11 +155,27 @@ internal class LiquidActivityRenderer(
         style = Paint.Style.STROKE
         strokeWidth = parameters.highlightWidthDp * density
     }
+    // 模态边框高光：顶沿 WHITE、在固定竖向行程内渐隐到 BASE_RATIO，再经 paint.alpha 整体
+    // 缩放——与勾选控件同一套"光从顶沿沉入边框"的语言。渐变建在局部坐标（0..fadePx），
+    // 由 localMatrix 平移跟随面板位置，不随面板高度拉伸、也不在 draw 里重建。
+    private val modalEdgeShader = LinearGradient(
+        0f, 0f, 0f, MODAL_EDGE_FADE_DP * density,
+        Color.WHITE,
+        ColorUtils.setAlphaComponent(Color.WHITE, (255 * MODAL_EDGE_BASE_RATIO).roundToInt()),
+        Shader.TileMode.CLAMP
+    )
+    private val modalEdgeMatrix = Matrix()
+    private val modalEdgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = parameters.highlightWidthDp * density
+        shader = modalEdgeShader
+    }
     private val rootFallbackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = palette.background
     }
     private val surfaceViews = WeakHashMap<View, LiquidSurfaceFootprint>()
-    private val stretchViewports = WeakHashMap<View, Unit>()
+    private val refreshWindows = WeakHashMap<View, LiquidWindowRefresh>()
+    private val visibilityMatrix = FloatArray(9)
     private val retiredBackdropSources = LinkedHashSet<LiquidBackdropSource>()
     private val mainHandler = Handler(Looper.getMainLooper())
     private val choreographer = Choreographer.getInstance()
@@ -203,15 +225,6 @@ internal class LiquidActivityRenderer(
     private var suppressionUnderlayShader: BitmapShader? = null
     private var suppressionUnderlaySource: LiquidBackdropSource? = null
     private val suppressionPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private val stretchViewportOrigins = WeakHashMap<View, LiquidViewportOrigin>()
-    private val stretchBounds = Rect()
-    private val stretchBoundaryPath = Path().apply { fillType = Path.FillType.EVEN_ODD }
-    private val stretchLocation = IntArray(2)
-    private val stretchEdgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-    }
-
     private var backendDriver: LiquidBackendDriver? = null
 
     /**
@@ -226,7 +239,8 @@ internal class LiquidActivityRenderer(
     private var realtimeBackdropSource: LiquidBackdropSource? = null
     private var realtimeCaptureSources: List<LiquidBackdropSource> = emptyList()
     private var realtimeCaptureNextIndex = 0
-    private var realtimeCaptureInFlight: LiquidBackdropSource? = null
+    private val captureRequests = LiquidCaptureRequestState()
+    private var realtimeCaptureInFlight: LiquidCaptureRequest? = null
     private var realtimeCaptureFailureCount = 0
     private var realtimeCaptureSuspended = false
     private var realtimeFrameCallbackPosted = false
@@ -239,6 +253,11 @@ internal class LiquidActivityRenderer(
     private var originalPreferredDisplayModeId: Int? = null
     private var appliedPreferredDisplayModeId: Int? = null
     private var stretchOpticalIntensity = 1f
+    /**
+     * 当前回弹方向：-1 = 顶部下拉（表面上边缘发光）、+1 = 底部上拉、0 = 无。
+     * 与 [stretchOpticalIntensity] 一起进 shader——方向只投到对应边缘，不再四边等亮。
+     */
+    private var stretchEdgeDirY = 0f
     private var activityVisible = false
     private var boundRoot: View? = null
     private var rootDrawable: LiquidRootDrawable? = null
@@ -257,9 +276,6 @@ internal class LiquidActivityRenderer(
     private var closed = false
     private val rootScreenLocation = IntArray(2)
     private val realtimeFrameCallback = Choreographer.FrameCallback(::onRealtimeFrame)
-    private val pixelCopyFinishedListener = PixelCopy.OnPixelCopyFinishedListener { result ->
-        handleRealtimeCaptureResult(result)
-    }
 
     val backend: LiquidRenderBackend?
         get() = backendDriver?.backend ?: fallbackPlan.current
@@ -328,7 +344,10 @@ internal class LiquidActivityRenderer(
                                                             oldLeft, oldTop, oldRight, oldBottom ->
             val widthChanged = right - left != oldRight - oldLeft
             val heightChanged = bottom - top != oldBottom - oldTop
-            if (widthChanged || heightChanged) scheduleBackdropRebuild(root)
+            if (widthChanged || heightChanged) {
+                captureRequests.invalidate()
+                scheduleBackdropRebuild(root)
+            }
             root.getLocationOnScreen(rootScreenLocation)
         }
         rootLayoutListener = layoutListener
@@ -373,6 +392,7 @@ internal class LiquidActivityRenderer(
     @MainThread
     fun onActivityStopped() {
         activityVisible = false
+        captureRequests.invalidate()
         removeRealtimeFrameCallback()
         performanceController?.stop()
         restorePreferredRefreshRate()
@@ -389,7 +409,12 @@ internal class LiquidActivityRenderer(
         role = role
     )
 
-    /** 将现有滚动容器包进透明 stretch viewport；失败时保持原层级，不上报皮肤失败。 */
+    /**
+     * 将现有滚动容器包进透明 stretch viewport；失败时保持原层级，不上报皮肤失败。
+     *
+     * viewport 只让滚动前景共享同一个 Android 12+ stretch RenderNode（底层 Activity 背景保持
+     * 静止），并按回弹距离提升表面光学强度；不再绘制任何边界采样环。
+     */
     @MainThread
     @SuppressLint("ReplaceWithAndroidVersion")
     fun installStretchViewport(
@@ -405,8 +430,6 @@ internal class LiquidActivityRenderer(
             LiquidStretchViewport.installAround(
                 scrollTarget = scrollTarget,
                 isStretchAllowed = isStretchAllowed,
-                drawBoundaryUnderlay = ::drawStretchBoundaryUnderlay,
-                drawBoundaryHighlight = ::drawStretchBoundaryHighlight,
                 onStretchDistance = ::onStretchDistanceChanged
             )
         }.getOrNull()
@@ -417,132 +440,19 @@ internal class LiquidActivityRenderer(
         (view as? LiquidStretchViewport)?.finishStretch()
     }
 
-    /**
-     * 为整个可滚动 viewport 绘制一圈采样折射；它与 child 位于同一前景 RenderNode，系统
-     * stretch 会一起形变，而 Activity 稳定底图仍完全静止。
-     */
-    private fun drawStretchBoundaryUnderlay(
-        canvas: Canvas,
-        viewport: View,
-        topDistance: Float,
-        bottomDistance: Float
-    ) {
-        if (closed || effectProfile != LiquidEffectProfile.REALTIME_CAPTURE ||
-            !canvas.isHardwareAccelerated || viewport.width <= 0 || viewport.height <= 0 ||
-            backdropSource == null
-        ) {
-            return
-        }
-        stretchViewports[viewport] = Unit
-        stretchBounds.set(0, 0, viewport.width, viewport.height)
-        viewport.getLocationOnScreen(stretchLocation)
-        (stretchViewportOrigins[viewport] ?: LiquidViewportOrigin().also {
-            stretchViewportOrigins[viewport] = it
-        }).update(stretchLocation[0], stretchLocation[1])
-        val bandPx = (parameters.effectPaddingDp * density).coerceAtMost(
-            minOf(viewport.width, viewport.height) * 0.32f
-        )
-        val radiusPx = (18f * density).coerceAtMost(
-            minOf(viewport.width, viewport.height) * 0.5f
-        )
-        stretchBoundaryPath.rewind()
-        stretchBoundaryPath.fillType = Path.FillType.EVEN_ODD
-        stretchBoundaryPath.addRoundRect(
-            0f,
-            0f,
-            viewport.width.toFloat(),
-            viewport.height.toFloat(),
-            radiusPx,
-            radiusPx,
-            Path.Direction.CW
-        )
-        if (viewport.width > bandPx * 2f && viewport.height > bandPx * 2f) {
-            stretchBoundaryPath.addRoundRect(
-                bandPx,
-                bandPx,
-                viewport.width - bandPx,
-                viewport.height - bandPx,
-                (radiusPx - bandPx).coerceAtLeast(0f),
-                (radiusPx - bandPx).coerceAtLeast(0f),
-                Path.Direction.CW
-            )
-        }
-        val intensity = maxOf(
-            stretchOpticalIntensity,
-            LiquidRealtimeCapturePolicy.stretchOpticalIntensity(
-                maxOf(topDistance, bottomDistance)
-            )
-        )
-        val saveCount = canvas.save()
-        try {
-            canvas.clipPath(stretchBoundaryPath)
-            drawWithFallback { driver ->
-                if (driver.backend != LiquidRenderBackend.TRANSLUCENT) {
-                    driver.drawBackdrop(
-                        canvas = canvas,
-                        bounds = stretchBounds,
-                        radiusPx = radiusPx,
-                        viewX = stretchLocation[0] - rootScreenLocation[0],
-                        viewY = stretchLocation[1] - rootScreenLocation[1],
-                        opticalIntensity = intensity
-                    )
-                }
-            }
-        } finally {
-            canvas.restoreToCount(saveCount)
-        }
-    }
-
-    /** 控件上方只画透明高光；不采样或覆盖实时背景，因此不会遮住四边内容。 */
-    private fun drawStretchBoundaryHighlight(
-        canvas: Canvas,
-        viewport: View,
-        topDistance: Float,
-        bottomDistance: Float
-    ) {
-        if (closed || effectProfile != LiquidEffectProfile.REALTIME_CAPTURE ||
-            !canvas.isHardwareAccelerated || viewport.width <= 0 || viewport.height <= 0 ||
-            backdropSource == null
-        ) {
-            return
-        }
-        val radiusPx = (18f * density).coerceAtMost(
-            minOf(viewport.width, viewport.height) * 0.5f
-        )
-        val intensity = maxOf(
-            stretchOpticalIntensity,
-            LiquidRealtimeCapturePolicy.stretchOpticalIntensity(
-                maxOf(topDistance, bottomDistance)
-            )
-        )
-        // 多层内收亮边随系统距离连续增强，在 stretch 最陡处遮住前景与静态底图的接缝。
-        // 层数与 alpha 梯度是遮缝的关键，收窄时只动线宽，不减层、不改衰减公式。
-        val boost = ((intensity - 1f) / 0.85f).coerceIn(0f, 1f)
-        repeat(STRETCH_EDGE_LAYERS) { layer ->
-            val layerAlpha = ((0.11f + 0.13f * boost) * 255f / (layer + 1f))
-                .toInt()
-                .coerceIn(0, 255)
-            stretchEdgePaint.color = ColorUtils.setAlphaComponent(Color.WHITE, layerAlpha)
-            stretchEdgePaint.strokeWidth =
-                (STRETCH_EDGE_BASE_WIDTH_DP + layer * STRETCH_EDGE_WIDTH_STEP_DP) * density
-            val inset = stretchEdgePaint.strokeWidth * 0.5f
-            canvas.drawRoundRect(
-                inset,
-                inset,
-                viewport.width - inset,
-                viewport.height - inset,
-                (radiusPx - inset).coerceAtLeast(0f),
-                (radiusPx - inset).coerceAtLeast(0f),
-                stretchEdgePaint
-            )
-        }
-    }
-
-    private fun onStretchDistanceChanged(distance: Float) {
+    private fun onStretchDistanceChanged(distance: Float, edge: LiquidStretchEdge) {
         if (closed || effectProfile != LiquidEffectProfile.REALTIME_CAPTURE) return
         val next = LiquidRealtimeCapturePolicy.stretchOpticalIntensity(distance)
-        if (abs(next - stretchOpticalIntensity) < 0.002f) return
+        val nextDir = when (edge) {
+            LiquidStretchEdge.TOP -> -1f
+            LiquidStretchEdge.BOTTOM -> 1f
+            LiquidStretchEdge.NONE -> 0f
+        }
+        // epsilon 挡住回弹尾段的亚感知步进（全程范围 0.85，0.004 ≈ 0.5%）；
+        // 归零那帧 edge 变为 NONE、nextDir 必变，终态永远会发布，不会卡在半亮状态。
+        if (abs(next - stretchOpticalIntensity) < 0.004f && nextDir == stretchEdgeDirY) return
         stretchOpticalIntensity = next
+        stretchEdgeDirY = nextDir
         invalidateRegisteredSurfaces()
     }
 
@@ -601,7 +511,8 @@ internal class LiquidActivityRenderer(
         viewX: Int,
         viewY: Int,
         fallbackColor: Int,
-        role: SurfaceRole
+        role: SurfaceRole,
+        host: View? = null
     ) {
         val effectiveRadiusPx = radiusPx.coerceIn(
             0f,
@@ -631,21 +542,40 @@ internal class LiquidActivityRenderer(
             return
         }
 
+        // 弹窗等外部窗口里的表面不能折射实时截屏：PixelCopy 只抓 Activity 窗口，
+        // 采样到的是未被压暗/模糊的锐利底页，文字会穿透面板与内部控件混排。
+        // 改采稳定底图的光学副本（默认渐变或预模糊自定义图），得到干净的磨砂分层。
+        val foreignWindow = host != null && host.rootView !== boundRoot?.rootView
         drawWithFallback { driver ->
             if (driver.backend != LiquidRenderBackend.TRANSLUCENT) {
-                checkNotNull(realtimeBackdropSource ?: backdropSource) {
-                    "GPU Liquid backend has no backdrop source"
+                if (foreignWindow) {
+                    backdropSource?.takeIf { !it.isClosed }?.drawOpticalRegion(
+                        canvas = canvas,
+                        localBounds = bounds,
+                        radiusPx = effectiveRadiusPx,
+                        rootOffsetX = (viewX - rootScreenLocation[0]).toFloat(),
+                        rootOffsetY = (viewY - rootScreenLocation[1]).toFloat(),
+                        alpha = 255
+                    )
+                } else {
+                    checkNotNull(realtimeBackdropSource ?: backdropSource) {
+                        "GPU Liquid backend has no backdrop source"
+                    }
+                    driver.drawBackdrop(
+                        canvas,
+                        bounds,
+                        effectiveRadiusPx,
+                        viewX - rootScreenLocation[0],
+                        viewY - rootScreenLocation[1],
+                        if (effectProfile == LiquidEffectProfile.REALTIME_CAPTURE) {
+                            stretchOpticalIntensity
+                        } else 1f,
+                        if (effectProfile == LiquidEffectProfile.REALTIME_CAPTURE) {
+                            stretchEdgeDirY
+                        } else 0f,
+                        LiquidSurfaceAlphaPolicy.glassContentAlpha(role)
+                    )
                 }
-                driver.drawBackdrop(
-                    canvas,
-                    bounds,
-                    effectiveRadiusPx,
-                    viewX - rootScreenLocation[0],
-                    viewY - rootScreenLocation[1],
-                    if (effectProfile == LiquidEffectProfile.REALTIME_CAPTURE) {
-                        stretchOpticalIntensity
-                    } else 1f
-                )
             }
             drawSurfaceLayers(
                 canvas = canvas,
@@ -676,26 +606,44 @@ internal class LiquidActivityRenderer(
         )
         val surfaceAlpha = (surfaceFraction * alpha).toInt().coerceIn(0, 255)
         // 高阶玻璃使用中性的 surface 轻染色；fallback 才恢复业务传入的实色以保证可读性。
-        val tintColor = if (translucentFallback) fallbackColor else palette.surface
+        val tintColor = when {
+            role == SurfaceRole.SELECTED_ITEM -> ColorUtils.blendARGB(palette.surface, palette.primary, .06f)
+            translucentFallback -> fallbackColor
+            else -> palette.surface
+        }
         overlayPaint.color = ColorUtils.setAlphaComponent(tintColor, surfaceAlpha)
         canvas.drawRoundRect(
             bounds.left.toFloat(), bounds.top.toFloat(),
             bounds.right.toFloat(), bounds.bottom.toFloat(),
             radiusPx, radiusPx, overlayPaint
         )
-        // 标准档保持既有 0x66 高光；实时档只留低强度轮廓，连续高光交给 shader。
-        outlinePaint.color = ColorUtils.setAlphaComponent(
-            Color.WHITE,
-            (parameters.highlightAlpha * 255f * alpha / 255f).toInt().coerceIn(0, 255)
-        )
+        // Thin neutral separation; floating bars get a clearer edge without a saturated fill.
+        val edgeAlpha = (parameters.highlightAlpha *
+            LiquidSurfaceEdgePolicy.alphaMultiplier(role) * alpha).toInt().coerceIn(0, 255)
         val inset = outlinePaint.strokeWidth * 0.5f
-        canvas.drawRoundRect(
-            bounds.left + inset, bounds.top + inset,
-            bounds.right - inset, bounds.bottom - inset,
-            (radiusPx - inset).coerceAtLeast(0f),
-            (radiusPx - inset).coerceAtLeast(0f),
-            outlinePaint
-        )
+        if (role == SurfaceRole.MODAL) {
+            // 高光收进边框线条：顶沿提亮、固定行程内落回基础描边色。
+            // paint.alpha 对 shader 输出整体缩放，逐帧只改 alpha 与平移。
+            modalEdgePaint.alpha = (edgeAlpha * MODAL_EDGE_TOP_BOOST).toInt().coerceIn(0, 255)
+            modalEdgeMatrix.setTranslate(0f, bounds.top.toFloat())
+            modalEdgeShader.setLocalMatrix(modalEdgeMatrix)
+            canvas.drawRoundRect(
+                bounds.left + inset, bounds.top + inset,
+                bounds.right - inset, bounds.bottom - inset,
+                (radiusPx - inset).coerceAtLeast(0f),
+                (radiusPx - inset).coerceAtLeast(0f),
+                modalEdgePaint
+            )
+        } else {
+            outlinePaint.color = ColorUtils.setAlphaComponent(Color.WHITE, edgeAlpha)
+            canvas.drawRoundRect(
+                bounds.left + inset, bounds.top + inset,
+                bounds.right - inset, bounds.bottom - inset,
+                (radiusPx - inset).coerceAtLeast(0f),
+                (radiusPx - inset).coerceAtLeast(0f),
+                outlinePaint
+            )
+        }
     }
 
     private inline fun drawWithFallback(draw: (LiquidBackendDriver) -> Unit) {
@@ -743,6 +691,7 @@ internal class LiquidActivityRenderer(
             existing.bitmap.width == targetSize.width &&
             existing.bitmap.height == targetSize.height
         ) {
+            captureRequests.invalidate()
             existing.updateFullSize(width, height)
             bindPreparedBackendsToBackdrop(existing)
             root.invalidate()
@@ -754,12 +703,14 @@ internal class LiquidActivityRenderer(
         // 先创建并绑定新 source，再让下一次 traversal 接收全部 invalidation 后断开旧 source；
         // close 只释放 Java 所有权而不调用 Bitmap.recycle()，不能把帧回调误当作 GPU fence。
         val created = runCatching {
-            LiquidBackdropSource.create(palette, visualTuning, width, height)
+            LiquidBackdropSource.create(palette, width, height)
         }.getOrNull()
         if (created == null) {
             if (existing == null) advanceToTranslucent()
             return
         }
+        captureRequests.invalidate()
+        created.markPublished()
         backdropSource = created
         bindPreparedBackendsToBackdrop(created)
         root.invalidate()
@@ -793,7 +744,7 @@ internal class LiquidActivityRenderer(
         customBackdropFuture = backgroundWorker.submit {
             val bitmap = runCatching {
                 LiquidBackgroundStore.decodeBackdrop(
-                    context = activity,
+                    context = activity.applicationContext,
                     config = backgroundConfig,
                     targetWidth = target.width,
                     targetHeight = target.height,
@@ -802,7 +753,7 @@ internal class LiquidActivityRenderer(
                 )
             }.getOrNull()
             if (bitmap == null) {
-                root.post {
+                mainHandler.post {
                     if (!closed && generation == customBackdropLoadGeneration) {
                         customBackdropRequest = null
                         customBackdropFailed = true
@@ -810,9 +761,23 @@ internal class LiquidActivityRenderer(
                 }
                 return@submit
             }
-            val posted = root.post {
+            if (Thread.currentThread().isInterrupted) { bitmap.recycle(); return@submit }
+            val source = runCatching {
+                LiquidBackdropSource.fromCustomBitmap(bitmap, assetId, width, height, density)
+            }.getOrElse {
+                bitmap.recycle()
+                if (!Thread.currentThread().isInterrupted) mainHandler.post {
+                    if (!closed && generation == customBackdropLoadGeneration) {
+                        customBackdropFailed = true
+                        customBackdropRequest = null
+                    }
+                }
+                return@submit
+            }
+            if (Thread.currentThread().isInterrupted) { source.discardUnpublished(); return@submit }
+            val posted = mainHandler.post {
                 if (closed || generation != customBackdropLoadGeneration || boundRoot !== root) {
-                    bitmap.recycle()
+                    source.discardUnpublished()
                     return@post
                 }
                 val currentWidth = root.width.takeIf { it > 0 }
@@ -821,25 +786,19 @@ internal class LiquidActivityRenderer(
                     ?: activity.resources.displayMetrics.heightPixels.coerceAtLeast(1)
                 val currentTarget = LiquidBackdropSizingPolicy.resolve(currentWidth, currentHeight)
                 if (currentWidth != width || currentHeight != height || currentTarget != target) {
-                    bitmap.recycle()
+                    source.discardUnpublished()
                     customBackdropRequest = null
                     scheduleBackdropRebuild(root)
                     return@post
                 }
-                val source = runCatching {
-                    LiquidBackdropSource.fromCustomBitmap(
-                        bitmap = bitmap,
-                        assetId = assetId,
-                        fullWidth = width,
-                        fullHeight = height
-                    )
-                }.getOrElse {
-                    bitmap.recycle()
-                    customBackdropFailed = true
+                if (runCatching { source.markPublished() }.isFailure) {
+                    source.close() // Publication may have reached HWUI; never recycle this pair.
                     customBackdropRequest = null
+                    customBackdropFailed = true
                     return@post
                 }
                 val previous = backdropSource
+                captureRequests.invalidate()
                 backdropSource = source
                 customBackdropRequest = null
                 bindPreparedBackendsToBackdrop(source)
@@ -847,7 +806,7 @@ internal class LiquidActivityRenderer(
                 invalidateRegisteredSurfaces()
                 if (previous != null) retireBackdropAfterFrame(root, previous)
             }
-            if (!posted) bitmap.recycle()
+            if (!posted) source.discardUnpublished()
         }
     }
 
@@ -867,10 +826,17 @@ internal class LiquidActivityRenderer(
         originY: Int
     ) {
         if (closed) return
+        registerRefreshWindow(view.rootView)
         val footprint = surfaceViews[view] ?: LiquidSurfaceFootprint().also {
             surfaceViews[view] = it
         }
         footprint.update(bounds, radiusPx, originX, originY)
+    }
+
+    /** Explicit transform changes share the scroll-origin audit; no capture or backdrop rebuild. */
+    @MainThread
+    fun notifyPositionChanged() {
+        invalidateMovedSurfaces()
     }
 
     /**
@@ -880,62 +846,99 @@ internal class LiquidActivityRenderer(
      * 重录，也不会重跑折射 shader。
      */
     private fun invalidateMovedSurfaces() {
-        if (closed) return
-        try {
-            val surfaceIterator = surfaceViews.entries.iterator()
-            while (surfaceIterator.hasNext()) {
-                val entry = surfaceIterator.next()
-                val view = entry.key
-                if (!view.isAttachedToWindow) {
-                    surfaceIterator.remove()
-                    continue
-                }
-                val visible = isSurfacePotentiallyVisible(view)
-                if (entry.value.refreshState.shouldRefresh(visible,
-                        originChanged = !entry.value.matchesOrigin(movedSurfaceLocation[0], movedSurfaceLocation[1]),
-                        contentChanged = false)) view.invalidate()
-            }
-            val stretchIterator = stretchViewports.keys.iterator()
-            while (stretchIterator.hasNext()) {
-                val view = stretchIterator.next()
-                if (!view.isAttachedToWindow) {
-                    stretchIterator.remove()
-                    continue
-                }
-                // viewport 自身的边界光学环随它一起移动，位置变化同样要重录。
-                if (!view.isShown) continue
-                view.getLocationOnScreen(movedSurfaceLocation)
-                if (stretchViewportOrigins[view]?.matches(
-                        movedSurfaceLocation[0],
-                        movedSurfaceLocation[1]
-                    ) == true
-                ) continue
-                view.invalidate()
-            }
-        } finally {
-            refreshWindowRoot = null
-        }
+        queueSurfaceRefresh(contentChanged = false)
     }
 
     private fun invalidateRegisteredSurfaces() {
+        queueSurfaceRefresh(contentChanged = true)
+    }
+
+    private fun registerRefreshWindow(windowRoot: View) {
+        val observer = windowRoot.viewTreeObserver
+        val existing = refreshWindows[windowRoot]
+        if (existing?.observer?.get() === observer && observer.isAlive) return
+        existing?.let(::removeRefreshWindow)
+        val rootRef = WeakReference(windowRoot)
+        val preDraw = ViewTreeObserver.OnPreDrawListener {
+            rootRef.get()?.let(::flushSurfaceRefresh)
+            true
+        }
+        val scroll = ViewTreeObserver.OnScrollChangedListener {
+            rootRef.get()?.let { refreshWindows[it]?.batch?.mark(contentChanged = false) }
+        }
+        refreshWindows[windowRoot] = LiquidWindowRefresh(WeakReference(observer), preDraw, scroll)
+        observer.addOnPreDrawListener(preDraw)
+        observer.addOnScrollChangedListener(scroll)
+    }
+
+    private fun removeRefreshWindow(state: LiquidWindowRefresh) {
+        state.observer.get()?.takeIf { it.isAlive }?.let {
+            it.removeOnPreDrawListener(state.preDraw)
+            it.removeOnScrollChangedListener(state.scroll)
+        }
+    }
+
+    private fun queueSurfaceRefresh(contentChanged: Boolean) {
+        if (closed) return
+        val iterator = refreshWindows.entries.iterator()
+        while (iterator.hasNext()) {
+            val (root, state) = iterator.next()
+            if (!root.isAttachedToWindow) {
+                removeRefreshWindow(state)
+                iterator.remove()
+            } else if (state.batch.mark(contentChanged) && contentChanged && root.isShown) {
+                // New source pixels need a draw. Position owners already schedule their own frame.
+                triggerSurfaceFrame(root)
+            }
+        }
+    }
+
+    /**
+     * 最小损伤域的遍历触发：失效窗口内任一可见表面即可调度一帧，而它本就因
+     * contentChanged 需要重录——损伤域只有一个表面的矩形。preDraw 的
+     * [flushSurfaceRefresh] 再按 `shouldRefresh` 规则精确补齐其余表面。
+     *
+     * 旧实现用 `root.invalidate()`：整窗损伤会把页面里每个 View 的 display list 都
+     * 标脏重录。滚动期每次 PixelCopy 完成、回弹期每次 stretch 强度步进都会走到这里，
+     * 每秒数十次整窗重录就是"高级材质滑动掉帧"的主要链路。
+     *
+     * 找不到可见表面则本窗口无需这次绘制：CONTENT 标记留在 batch 里，窗口下一次遍历的
+     * preDraw 仍会完整 flush（隐藏表面经 `skipped` 在重新可见时补偿刷新）。
+     */
+    private fun triggerSurfaceFrame(windowRoot: View) {
+        val iterator = surfaceViews.entries.iterator()
+        while (iterator.hasNext()) {
+            val entry = iterator.next()
+            val view = entry.key
+            if (!view.isAttachedToWindow) {
+                iterator.remove()
+                continue
+            }
+            if (view.rootView !== windowRoot || !view.isShown) continue
+            view.invalidate()
+            return
+        }
+    }
+
+    /** Flush after all this window's animation callbacks, never on the first partial transform. */
+    private fun flushSurfaceRefresh(windowRoot: View) {
+        if (closed) return
+        val changes = refreshWindows[windowRoot]?.batch?.take() ?: return
+        if (changes == 0) return
+        val contentChanged = changes and LiquidRefreshBatch.CONTENT != 0
         try {
             val surfaceIterator = surfaceViews.entries.iterator()
             while (surfaceIterator.hasNext()) {
                 val entry = surfaceIterator.next()
                 val view = entry.key
-                if (!view.isAttachedToWindow) surfaceIterator.remove()
-                else if (entry.value.refreshState.shouldRefresh(isSurfacePotentiallyVisible(view),
-                        originChanged = false, contentChanged = true)) view.invalidate()
+                if (!view.isAttachedToWindow) { surfaceIterator.remove(); continue }
+                if (view.rootView !== windowRoot) continue
+                val visible = isSurfacePotentiallyVisible(view)
+                if (entry.value.refreshState.shouldRefresh(visible,
+                        originChanged = !entry.value.matchesOrigin(movedSurfaceLocation[0], movedSurfaceLocation[1]),
+                        contentChanged = contentChanged)) view.invalidate()
             }
-            val stretchIterator = stretchViewports.keys.iterator()
-            while (stretchIterator.hasNext()) {
-                val view = stretchIterator.next()
-                if (!view.isAttachedToWindow) stretchIterator.remove()
-                else if (view.isShown) view.invalidate()
-            }
-        } finally {
-            refreshWindowRoot = null
-        }
+        } finally { refreshWindowRoot = null }
     }
 
     /**
@@ -949,8 +952,11 @@ internal class LiquidActivityRenderer(
         if (stretchOpticalIntensity > 1f) return true
         var ancestor: View? = view
         while (ancestor != null) {
-            if (!ancestor.matrix.isIdentity || ancestor.animation != null ||
-                ancestor is LiquidMotionSurfaceFrameProvider) return true
+            if (ancestor.animation != null || ancestor is LiquidMotionSurfaceFrameProvider) return true
+            if (!ancestor.matrix.isIdentity) {
+                ancestor.matrix.getValues(visibilityMatrix)
+                if (!LiquidRefreshVisibilityPolicy.isTranslationOnly(visibilityMatrix)) return true
+            }
             ancestor = ancestor.parent as? View
         }
         val windowRoot = view.rootView
@@ -1095,13 +1101,14 @@ internal class LiquidActivityRenderer(
         }
         if (!root.isAttachedToWindow || !root.isShown ||
             root.windowVisibility != View.VISIBLE ||
-            (surfaceViews.isEmpty() && stretchViewports.isEmpty())
+            surfaceViews.isEmpty()
         ) {
             realtimeNextCaptureNanos = frameTimeNanos +
                 LiquidRealtimeCapturePolicy.RETRY_DELAY_MS * NANOS_PER_MILLISECOND
             return
         }
         val captureSources = ensureRealtimeCaptureSources(root) ?: return
+        val stable = backdropSource?.takeIf { !it.isClosed } ?: return
         val sourceIndex = realtimeCaptureNextIndex.mod(captureSources.size)
         val captureSource = captureSources[sourceIndex]
         realtimeCaptureNextIndex = (sourceIndex + 1).mod(captureSources.size)
@@ -1116,8 +1123,15 @@ internal class LiquidActivityRenderer(
         // 必须在发起截图前构建：此刻 footprint 里保存的是最近一次绘制的位置，正是 PixelCopy
         // 即将读到的那一帧的几何。放到回调里构建会与截图内容错位。
         realtimeMaskReady = buildSuppressionMask(root, captureSource)
-        realtimeCaptureInFlight = captureSource
+        val ticket = captureRequests.begin() ?: return
+        val request = LiquidCaptureRequest(ticket, captureSource, stable, WeakReference(root), root.width, root.height,
+            realtimeCaptureMask, realtimeMaskReady)
+        realtimeCaptureInFlight = request
         realtimeNextCaptureNanos = frameTimeNanos + realtimeFrameIntervalNanos
+        val recipient = WeakReference(this)
+        val pixelCopyFinishedListener = PixelCopy.OnPixelCopyFinishedListener { result ->
+            recipient.get()?.handleRealtimeCaptureResult(request, result)
+        }
         val requested = runCatching {
             PixelCopy.request(
                 activity.window,
@@ -1127,22 +1141,23 @@ internal class LiquidActivityRenderer(
                 mainHandler
             )
         }.isSuccess
-        if (!requested) handleRealtimeCaptureResult(PixelCopy.ERROR_SOURCE_INVALID)
+        if (!requested) handleRealtimeCaptureResult(request, PixelCopy.ERROR_SOURCE_INVALID)
     }
 
-    private fun handleRealtimeCaptureResult(result: Int) {
-        val captureSource = realtimeCaptureInFlight ?: return
+    private fun handleRealtimeCaptureResult(request: LiquidCaptureRequest, result: Int) {
+        if (realtimeCaptureInFlight !== request) return
+        realtimeCaptureInFlight = null
+        val completion = captureRequests.complete(request.ticket)
+        val root = request.root.get()
+        if (completion != LiquidCaptureRequestState.Completion.CURRENT || closed || !activityVisible ||
+            realtimeCaptureSuspended || effectProfile != LiquidEffectProfile.REALTIME_CAPTURE ||
+            root == null || boundRoot !== root || root.width != request.width || root.height != request.height ||
+            request.source.isClosed || request.stableBackdrop !== backdropSource) return
+        val captureSource = request.source
         val workStartedNanos = System.nanoTime()
         try {
-            realtimeCaptureInFlight = null
-            if (closed || !activityVisible || realtimeCaptureSuspended ||
-                effectProfile != LiquidEffectProfile.REALTIME_CAPTURE
-            ) {
-                return
-            }
-
             if (result == PixelCopy.SUCCESS) {
-                val outcome = sanitizeRealtimeCapture(captureSource)
+                val outcome = sanitizeRealtimeCapture(request)
                 if (outcome != LiquidCaptureOutcome.FAILED) {
                     // 位图刚被改写，立刻提示 HWUI 预上传纹理；否则上传会推迟到下一帧 draw 中间，
                     // 变成 RenderThread 上的一次同步停顿。每帧一张约 3.81 MiB 的实时缓冲。
@@ -1174,12 +1189,6 @@ internal class LiquidActivityRenderer(
         }
     }
 
-    /**
-     * 把已绘制玻璃区域以 0xDC 的稳定底图覆盖，仍保留约 14% 上一帧轮廓作为内部景深。
-     * 该递推强度严格小于 1，可抑制无限反馈，同时让实时画面在边缘折射中保持可感知。
-     *
-     * 返回值区分"没有可见玻璃"与"真的失败"，调用方只对后者累计熔断计数。
-     */
     /**
      * 记录一次成功完成，必要时按实测吞吐降一档刷新率。
      *
@@ -1237,7 +1246,7 @@ internal class LiquidActivityRenderer(
             val canvas = Canvas(bitmap)
             suppressionScaleBounds.set(0, 0, width, height)
             // 这一次放大与原逐帧填充使用同一滤波与同一源，输出内容一致。
-            stableBackdrop.drawRoot(canvas, suppressionScaleBounds, 255)
+            stableBackdrop.drawOpticalBackdrop(canvas, suppressionScaleBounds, 255)
             bitmap.prepareToDraw()
             val shader = BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
             suppressionUnderlay = bitmap
@@ -1261,7 +1270,7 @@ internal class LiquidActivityRenderer(
     /**
      * 按**发起截图那一刻**的已绘制几何构建抑制遮罩。
      *
-     * 位置一律取 footprint / viewport 在最近一次 draw 时记录的屏幕原点，而不是实时
+     * 位置一律取 footprint 在最近一次 draw 时记录的屏幕原点，而不是实时
      * `getLocationOnScreen`：`PixelCopy` 读的是最近一次已合成的帧，用当前坐标会在快速滑动时
      * 与截图内容错开几十像素。工作量与放在回调里构建完全相同。
      */
@@ -1275,7 +1284,7 @@ internal class LiquidActivityRenderer(
         val scaleY = bitmap.height.toFloat() / root.height.toFloat()
         val rootOriginX = rootScreenLocation[0]
         val rootOriginY = rootScreenLocation[1]
-        realtimeCaptureMask.reset()
+        realtimeCaptureMask.rewind()
         realtimeCaptureMask.fillType = Path.FillType.WINDING
         var hasMask = false
         val paddingPx = parameters.effectPaddingDp * density
@@ -1316,63 +1325,38 @@ internal class LiquidActivityRenderer(
                 hasMask = true
             }
         }
-        val stretchIterator = stretchViewports.keys.iterator()
-        val stretchBandPx = LiquidRealtimeCapturePolicy
-            .stretchFeedbackBandDp(parameters.effectPaddingDp) * density
-        while (stretchIterator.hasNext()) {
-            val viewport = stretchIterator.next()
-            if (!viewport.isAttachedToWindow) {
-                stretchIterator.remove()
-                continue
-            }
-            if (!viewport.isShown || viewport.alpha <= 0f || viewport.rootView !== root.rootView) {
-                continue
-            }
-            val origin = stretchViewportOrigins[viewport]?.takeIf { it.hasOrigin } ?: continue
-            val left = ((origin.x - rootOriginX) * scaleX).coerceIn(0f, bitmap.width.toFloat())
-            val top = ((origin.y - rootOriginY) * scaleY).coerceIn(0f, bitmap.height.toFloat())
-            val right = (left + viewport.width * scaleX).coerceAtMost(bitmap.width.toFloat())
-            val bottom = (top + viewport.height * scaleY).coerceAtMost(bitmap.height.toFloat())
-            val bandX = (stretchBandPx * scaleX).coerceAtMost((right - left) * 0.5f)
-            val bandY = (stretchBandPx * scaleY).coerceAtMost((bottom - top) * 0.5f)
-            if (right > left && bottom > top && bandX > 0f && bandY > 0f) {
-                realtimeCaptureMask.addRect(left, top, right, top + bandY, Path.Direction.CW)
-                realtimeCaptureMask.addRect(left, bottom - bandY, right, bottom, Path.Direction.CW)
-                realtimeCaptureMask.addRect(left, top + bandY, left + bandX, bottom - bandY, Path.Direction.CW)
-                realtimeCaptureMask.addRect(right - bandX, top + bandY, right, bottom - bandY, Path.Direction.CW)
-                hasMask = true
-            }
-        }
         return hasMask
     }
 
     /**
-     * 把已绘制玻璃区域以 0xDC 的稳定底图覆盖，仍保留约 14% 上一帧轮廓作为内部景深。
-     * 该递推强度严格小于 1，可抑制无限反馈，同时让实时画面在边缘折射中保持可感知。
+     * Replace owned optical output with the clean underlay. Leaving any composite fraction would
+     * recursively feed the module's own text and previous glass back into the next optical input.
+     * Pixels outside the owned-output mask keep the live PixelCopy content.
      *
      * 遮罩几何在发起截图时就已按当帧绘制位置构建（[buildSuppressionMask]），这里只负责应用。
      * 返回值区分"没有可见玻璃"与"真的失败"，调用方只对后者累计熔断计数。
      */
     private fun sanitizeRealtimeCapture(
-        captureSource: LiquidBackdropSource
+        request: LiquidCaptureRequest
     ): LiquidCaptureOutcome {
-        val stableBackdrop = backdropSource ?: return LiquidCaptureOutcome.FAILED
+        val captureSource = request.source
+        val stableBackdrop = request.stableBackdrop
         if (captureSource.isClosed || stableBackdrop.isClosed) return LiquidCaptureOutcome.FAILED
-        if (!realtimeMaskReady) return LiquidCaptureOutcome.NO_GLASS_VISIBLE
+        if (!request.maskReady) return LiquidCaptureOutcome.NO_GLASS_VISIBLE
 
         val bitmap = captureSource.bitmap
         realtimeCaptureBounds.set(0, 0, bitmap.width, bitmap.height)
         realtimeCaptureCanvas.setBitmap(bitmap)
         return try {
             if (ensureSuppressionUnderlay(stableBackdrop, bitmap.width, bitmap.height)) {
-                // 预缩放底图与截图 1:1，逐帧只剩 alpha 混合，不再做双线性放大。
+                // Cached opaque underlay is copied 1:1; no recursive composite fraction or per-frame resampling.
                 suppressionPaint.alpha = LiquidRealtimeCapturePolicy.BASE_SUPPRESSION_ALPHA
-                realtimeCaptureCanvas.drawPath(realtimeCaptureMask, suppressionPaint)
+                realtimeCaptureCanvas.drawPath(request.mask, suppressionPaint)
             } else {
                 // 预缩放位图分配失败时回退到原路径，抑制强度与几何完全一致。
                 stableBackdrop.drawRootMasked(
                     realtimeCaptureCanvas,
-                    realtimeCaptureMask,
+                    request.mask,
                     realtimeCaptureBounds,
                     LiquidRealtimeCapturePolicy.BASE_SUPPRESSION_ALPHA
                 )
@@ -1436,6 +1420,7 @@ internal class LiquidActivityRenderer(
     }
 
     private fun releaseRealtimeCaptureSources(rebindStableBackdrop: Boolean) {
+        captureRequests.invalidate()
         val stableBackdrop = backdropSource
         realtimeBackdropSource = null
         driverBoundSources.clear()
@@ -1568,7 +1553,7 @@ internal class LiquidActivityRenderer(
         realtimeCaptureSuspended = true
         removeRealtimeFrameCallback()
         performanceController?.close()
-        realtimeCaptureInFlight = null
+        captureRequests.invalidate()
         customBackdropLoadGeneration += 1L
         customBackdropFuture?.cancel(true)
         customBackdropFuture = null
@@ -1583,7 +1568,8 @@ internal class LiquidActivityRenderer(
         }
         rootScrollListener = null
         surfaceViews.clear()
-        stretchViewports.clear()
+        refreshWindows.values.forEach(::removeRefreshWindow)
+        refreshWindows.clear()
         onFirstVisibleDraw = null
         onFatalFailure = null
         releaseSuppressionUnderlay()
@@ -1634,16 +1620,12 @@ private const val NANOS_PER_MILLISECOND = 1_000_000L
 /** 降级原因只保留有界长度，避免把驱动的长堆栈文本带进界面。 */
 private const val MAX_BACKEND_FAILURE_MESSAGE = 160
 
-/**
- * 超出回弹亮边的层数与线宽。
- *
- * 最外层线宽决定整条亮边的视觉厚度：原为 `1.1 + 2.1×layer`（1.1/3.2/5.3dp，带宽约 5.3dp），
- * 用户反馈过厚，收到 `0.8 + 1.0×layer`（0.8/1.8/2.8dp，带宽约 2.8dp，约为原来的 53%）。
- * **层数保持 3**：由内到外的 alpha 梯度才是遮住前景与静态底图接缝的机制，减层会让接缝重新暴露。
- */
-private const val STRETCH_EDGE_LAYERS = 3
-private const val STRETCH_EDGE_BASE_WIDTH_DP = 0.8f
-private const val STRETCH_EDGE_WIDTH_STEP_DP = 1.0f
+/** 模态边框高光的竖向渐隐行程（dp）：顶部提亮只在面板最上方一段可见。 */
+private const val MODAL_EDGE_FADE_DP = 64f
+
+/** 顶沿提亮相对基础描边亮度的倍数；与 BASE_RATIO 相乘约等于 1，底端落回原亮度。 */
+private const val MODAL_EDGE_TOP_BOOST = 2.2f
+private const val MODAL_EDGE_BASE_RATIO = 0.45f
 
 private class LiquidRootDrawable(
     private val renderer: LiquidActivityRenderer,
@@ -1729,7 +1711,8 @@ private class LiquidSurfaceDrawable(
             drawX,
             drawY,
             drawFallbackColor,
-            role
+            role,
+            host = view
         )
     }
 
@@ -1743,6 +1726,12 @@ private class LiquidSurfaceDrawable(
 
     @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
+
+    /** 静态几何报告真实圆角；缺省实现是无半径矩形，会让弹性长按高光按方形裁剪。 */
+    override fun getOutline(outline: Outline) {
+        if (bounds.isEmpty) outline.setEmpty()
+        else outline.setRoundRect(bounds, radiusPx)
+    }
 }
 
 private fun AppViewsActivity.isHardwareAccelerationRequested(): Boolean {

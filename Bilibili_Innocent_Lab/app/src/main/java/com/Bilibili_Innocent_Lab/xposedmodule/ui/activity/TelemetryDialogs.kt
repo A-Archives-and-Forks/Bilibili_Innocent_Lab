@@ -43,7 +43,7 @@ internal fun MainActivity.showTelemetryDisclosureDialog() {
     val activity = this
     if (isFinishing || isDestroyed) return
     telemetryDisclosurePrompted = true
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
     val density = resources.displayMetrics.density
     container.addView(NativeTextView(this).apply {
@@ -106,7 +106,7 @@ internal fun MainActivity.showTelemetryInfoDialog(
         val parentView = parentContainer ?: return
         if (parent.isShowing) dismissWithAnimation(parent, parentView) {}
     }
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
 
     container.addView(
@@ -223,7 +223,7 @@ internal fun MainActivity.showTelemetryInfoDialog(
 private fun MainActivity.showTelemetryExplanationDialog() {
     val activity = this
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
     container.addView(NativeTextView(this).apply {
         text = getString(R.string.telemetry_explanation_action)
@@ -265,7 +265,7 @@ private fun MainActivity.showTelemetryExplanationDialog() {
 private fun MainActivity.showTelemetryPayloadPreview(payload: String) {
     val activity = this
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
     container.addView(
         NativeTextView(this).apply {
@@ -326,7 +326,7 @@ private fun MainActivity.showTelemetryPayloadPreview(payload: String) {
 
 private fun MainActivity.showTelemetryPurgeConfirmDialog() {
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
     container.addView(
         NativeTextView(this).apply {

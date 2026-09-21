@@ -6,7 +6,7 @@ internal object DiagnosticsEntryVisualSpec {
     const val STROKE_WIDTH_DP = 2f
     private const val LIGHT_SCRIM_ALPHA = 0x52
     private const val DARK_SCRIM_ALPHA = 0x48
-    const val STROKE_ALPHA = 0xA0
+    const val STROKE_ALPHA = 0x30
     const val SURFACE_HANDOFF_EXPANSION = 0.025f
 
     fun scrimAlpha(darkTheme: Boolean): Int = if (darkTheme) {

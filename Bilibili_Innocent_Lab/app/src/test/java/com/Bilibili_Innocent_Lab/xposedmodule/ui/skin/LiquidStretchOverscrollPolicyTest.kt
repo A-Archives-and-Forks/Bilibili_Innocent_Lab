@@ -108,6 +108,32 @@ class LiquidStretchOverscrollPolicyTest {
     }
 
     @Test
+    fun `dominant edge picks the stronger side and never loses direction`() {
+        // 方向随距离一起上报：高光按"哪条边在拉伸"投射，只报标量会让四边等亮。
+        assertEquals(
+            LiquidStretchEdge.TOP,
+            LiquidStretchOverscrollPolicy.dominantEdge(0.3f, 0f)
+        )
+        assertEquals(
+            LiquidStretchEdge.BOTTOM,
+            LiquidStretchOverscrollPolicy.dominantEdge(0f, 0.3f)
+        )
+        // 两侧瞬时共存（一侧衰减、一侧拉起）时取更强的一侧。
+        assertEquals(
+            LiquidStretchEdge.TOP,
+            LiquidStretchOverscrollPolicy.dominantEdge(0.4f, 0.1f)
+        )
+        assertEquals(
+            LiquidStretchEdge.BOTTOM,
+            LiquidStretchOverscrollPolicy.dominantEdge(0.1f, 0.4f)
+        )
+        assertEquals(
+            LiquidStretchEdge.NONE,
+            LiquidStretchOverscrollPolicy.dominantEdge(0f, 0f)
+        )
+    }
+
+    @Test
     fun `stop releases touch and adjusted fling but preserves absorb`() {
         assertTrue(
             LiquidStretchOverscrollPolicy.shouldReleaseOnStop(

@@ -3,19 +3,19 @@ package com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid
 import android.graphics.Bitmap
 import android.graphics.BitmapShader
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.RadialGradient
 import android.graphics.Rect
 import android.graphics.Shader
+import android.os.Looper
+import androidx.annotation.WorkerThread
 import androidx.core.graphics.createBitmap
 import androidx.core.graphics.ColorUtils
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.background.AmbientBackdropScene
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.theme.MonetColors
 import com.highcapable.betterandroid.system.extension.utils.AndroidVersion
-import kotlin.math.roundToInt
 
 /**
  * Activity 的稳定 underlay，或高负载模式下由 PixelCopy 三缓冲持有的实时采样 source。
@@ -28,14 +28,17 @@ internal class LiquidBackdropSource private constructor(
     val customAssetId: String?,
     val isRealtime: Boolean,
     fullWidth: Int,
-    fullHeight: Int
+    fullHeight: Int,
+    private val opticalBitmap: Bitmap = bitmap
 ) : AutoCloseable {
     var fullWidth: Int = fullWidth
         private set
     var fullHeight: Int = fullHeight
         private set
 
-    val bitmapShader = BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+    // Root presentation and optical sampling share coordinates, not necessarily the same pixels.
+    // The static custom source has one prefiltered copy; realtime buffers are never CPU-blurred.
+    val bitmapShader = BitmapShader(opticalBitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
 
     private val rootPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
 
@@ -46,7 +49,7 @@ internal class LiquidBackdropSource private constructor(
      * 逐帧改写它的 local matrix 会污染折射采样。
      */
     private val maskShader by lazy(LazyThreadSafetyMode.NONE) {
-        BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
+        BitmapShader(opticalBitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
             // 与旧路径的 FILTER_BITMAP_FLAG 对齐：稳定底图是 0.25 倍采样，最近邻会在
             // 抑制区域露出明显色块。setFilterMode 是 API 33 才有的显式声明，31-32 仍依赖
             // maskPaint 的 FILTER_BITMAP_FLAG。
@@ -60,6 +63,7 @@ internal class LiquidBackdropSource private constructor(
         Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply { shader = maskShader }
     }
     private var closed = false
+    private var published = false
 
     val isClosed: Boolean
         get() = closed
@@ -78,19 +82,77 @@ internal class LiquidBackdropSource private constructor(
         canvas.drawBitmap(bitmap, null, bounds, rootPaint)
     }
 
+    /** The already-filtered static optical source, also used to remove captured glass feedback. */
+    fun drawOpticalBackdrop(canvas: Canvas, bounds: Rect, alpha: Int) {
+        check(!closed) { "Liquid backdrop source is closed" }
+        rootPaint.alpha = alpha.coerceIn(0, 255)
+        canvas.drawBitmap(opticalBitmap, null, bounds, rootPaint)
+    }
+
     /**
-     * 以本底图填充给定路径，几何映射与 `drawRoot(canvas, dstBounds, alpha)` 完全一致。
+     * 在表面本地坐标中按根坐标取一块光学采样区，供外部窗口（Dialog）里的玻璃表面使用：
+     * 那些表面折射不到自己窗口的内容，实时截屏里对应位置只有未压暗的锐利底页，
+     * 改采已过滤副本才不会把底页文字透进面板。与 [drawRootMasked] 共用独立 Shader，
+     * 不触碰折射后端持有的 [bitmapShader]。
+     *
+     * @param rootOffsetX/rootOffsetY 表面在 backdrop 全幅坐标中的位置（根视图像素）。
+     */
+    fun drawOpticalRegion(
+        canvas: Canvas,
+        localBounds: Rect,
+        radiusPx: Float,
+        rootOffsetX: Float,
+        rootOffsetY: Float,
+        alpha: Int
+    ) {
+        check(!closed) { "Liquid backdrop source is closed" }
+        if (localBounds.isEmpty || opticalBitmap.width <= 0 || opticalBitmap.height <= 0 ||
+            fullWidth <= 0 || fullHeight <= 0
+        ) return
+        val scaleX = fullWidth.toFloat() / opticalBitmap.width.toFloat()
+        val scaleY = fullHeight.toFloat() / opticalBitmap.height.toFloat()
+        maskMatrix.setScale(scaleX, scaleY)
+        maskMatrix.postTranslate(-rootOffsetX, -rootOffsetY)
+        maskShader.setLocalMatrix(maskMatrix)
+        maskPaint.alpha = alpha.coerceIn(0, 255)
+        canvas.drawRoundRect(
+            localBounds.left.toFloat(), localBounds.top.toFloat(),
+            localBounds.right.toFloat(), localBounds.bottom.toFloat(),
+            radiusPx, radiusPx, maskPaint
+        )
+    }
+
+    /** Commit before binding this source to a renderer or exposing it to a window draw. */
+    fun markPublished() {
+        check(!closed) { "Liquid backdrop source is closed" }
+        if (published) return
+        published = true
+        bitmap.prepareToDraw()
+        if (opticalBitmap !== bitmap) opticalBitmap.prepareToDraw()
+    }
+
+    /** Worker results that never reached a display list can release both owned images immediately. */
+    fun discardUnpublished() {
+        if (closed) return
+        check(!published && !isRealtime) { "Cannot recycle a published or realtime backdrop source" }
+        closed = true
+        if (opticalBitmap !== bitmap && !opticalBitmap.isRecycled) opticalBitmap.recycle()
+        if (!bitmap.isRecycled) bitmap.recycle()
+    }
+
+    /**
+     * 以光学采样副本填充给定路径，几何映射与根背景相同，根背景本身仍显示用户原图。
      *
      * 旧实现是 `clipPath` + 全图 `drawBitmap`：即使裁剪把光栅化限制在玻璃区域，Skia 仍要为
      * 整张目标位图建立一次抗锯齿裁剪掩码并做 save/restore。改成一次带 Shader 的路径填充后
-     * 输出逐像素相同，但不再分配裁剪掩码。
+     * 不再分配裁剪掩码，也不在反馈抑制的逐帧路径执行 CPU 模糊。
      */
     fun drawRootMasked(canvas: Canvas, path: Path, dstBounds: Rect, alpha: Int) {
         check(!closed) { "Liquid backdrop source is closed" }
-        if (dstBounds.isEmpty || bitmap.width <= 0 || bitmap.height <= 0) return
+        if (dstBounds.isEmpty || opticalBitmap.width <= 0 || opticalBitmap.height <= 0) return
         maskMatrix.setScale(
-            dstBounds.width().toFloat() / bitmap.width.toFloat(),
-            dstBounds.height().toFloat() / bitmap.height.toFloat()
+            dstBounds.width().toFloat() / opticalBitmap.width.toFloat(),
+            dstBounds.height().toFloat() / opticalBitmap.height.toFloat()
         )
         maskMatrix.postTranslate(dstBounds.left.toFloat(), dstBounds.top.toFloat())
         maskShader.setLocalMatrix(maskMatrix)
@@ -106,42 +168,32 @@ internal class LiquidBackdropSource private constructor(
     }
 
     companion object {
+        /**
+         * 未设自定义图时的稳定 underlay：与标准磨砂皮肤共用 [AmbientBackdropScene] 配方，
+         * 两种材质下用户看到的是同一个 Monet 氛围背景。
+         *
+         * 折射采样底图（[opticalBitmap]）保留颗粒加入前的干净副本——可见根背景带细颗粒纹理，
+         * 玻璃采样源保持平滑，折射内容不会被噪点污染。实时截屏路径不受影响。
+         */
         fun create(
             palette: MonetColors,
-            tuning: LiquidVisualTuning,
             fullWidth: Int,
             fullHeight: Int
         ): LiquidBackdropSource {
             val size = LiquidBackdropSizingPolicy.resolve(fullWidth, fullHeight)
             val bitmap = createBitmap(size.width, size.height, Bitmap.Config.ARGB_8888)
+            var optical: Bitmap? = null
             try {
                 val canvas = Canvas(bitmap)
-                canvas.drawColor(palette.background)
-                val ambientPaint = Paint(
-                    Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG
-                )
-                drawAmbientWash(
-                    canvas = canvas,
-                    paint = ambientPaint,
-                    color = palette.primary,
-                    alpha = tuning.primaryWashAlpha,
-                    centerX = -0.18f * size.width,
-                    centerY = 0.24f * size.height,
-                    radius = 1.25f * size.width
-                )
-                drawAmbientWash(
-                    canvas = canvas,
-                    paint = ambientPaint,
-                    color = palette.secondary,
-                    alpha = tuning.secondaryWashAlpha,
-                    centerX = 1.12f * size.width,
-                    centerY = 0.70f * size.height,
-                    radius = 1.38f * size.width
-                )
+                val dark = ColorUtils.calculateLuminance(palette.background) < .5
+                AmbientBackdropScene.paint(canvas, palette, size.width, size.height, dark)
 
                 // 顶部与底部精确回到 background，避免状态栏/导航栏出现颜色接缝。
+                val seamPaint = Paint(
+                    Paint.ANTI_ALIAS_FLAG or Paint.DITHER_FLAG or Paint.FILTER_BITMAP_FLAG
+                )
                 val transparentBackground = ColorUtils.setAlphaComponent(palette.background, 0)
-                ambientPaint.shader = LinearGradient(
+                seamPaint.shader = LinearGradient(
                     0f,
                     0f,
                     0f,
@@ -160,43 +212,73 @@ internal class LiquidBackdropSource private constructor(
                     0f,
                     size.width.toFloat(),
                     size.height.toFloat(),
-                    ambientPaint
+                    seamPaint
                 )
+
+                val pixels = IntArray(size.width * size.height)
+                bitmap.getPixels(pixels, 0, size.width, 0, 0, size.width, size.height)
+                optical = createBitmap(size.width, size.height, Bitmap.Config.ARGB_8888)
+                optical.setPixels(pixels, 0, size.width, 0, 0, size.width, size.height)
+                AmbientBackdropScene.addGrain(pixels)
+                bitmap.setPixels(pixels, 0, size.width, 0, 0, size.width, size.height)
                 bitmap.prepareToDraw()
+                optical.prepareToDraw()
                 return LiquidBackdropSource(
                     bitmap = bitmap,
                     customAssetId = null,
                     isRealtime = false,
                     fullWidth = fullWidth,
-                    fullHeight = fullHeight
+                    fullHeight = fullHeight,
+                    opticalBitmap = optical
                 )
             } catch (throwable: Throwable) {
                 bitmap.recycle()
+                optical?.recycle()
                 throw throwable
             }
         }
 
-        /** 后台解码完成的最终尺寸 Bitmap；调用成功后由 source 接管其生命周期。 */
+        /**
+         * Called on the existing background loader after bounded image decoding. One optical copy
+         * is shared by every surface; the caller keeps ownership of [bitmap] if construction fails.
+         */
+        @WorkerThread
         fun fromCustomBitmap(
             bitmap: Bitmap,
             assetId: String,
             fullWidth: Int,
-            fullHeight: Int
+            fullHeight: Int,
+            density: Float
         ): LiquidBackdropSource {
+            check(Looper.myLooper() !== Looper.getMainLooper()) {
+                "Custom optical backdrop must be prepared off the main thread"
+            }
             require(!bitmap.isRecycled) { "Custom backdrop bitmap is recycled" }
             require(assetId.isNotBlank()) { "Custom backdrop asset id is blank" }
             val expected = LiquidBackdropSizingPolicy.resolve(fullWidth, fullHeight)
             require(bitmap.width == expected.width && bitmap.height == expected.height) {
                 "Custom backdrop bitmap does not match the bounded sample size"
             }
-            bitmap.prepareToDraw()
-            return LiquidBackdropSource(
-                bitmap = bitmap,
-                customAssetId = assetId,
-                isRealtime = false,
-                fullWidth = fullWidth,
-                fullHeight = fullHeight
-            )
+            val pixels = IntArray(bitmap.width * bitmap.height)
+            bitmap.getPixels(pixels, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+            val softened = LiquidOpticalSamplingPolicy.soften(pixels, bitmap.width, bitmap.height,
+                fullWidth, density)
+            if (Thread.currentThread().isInterrupted) throw InterruptedException("Backdrop replaced")
+            val optical = createBitmap(bitmap.width, bitmap.height, Bitmap.Config.ARGB_8888)
+            try {
+                optical.setPixels(softened, 0, bitmap.width, 0, 0, bitmap.width, bitmap.height)
+                return LiquidBackdropSource(
+                    bitmap = bitmap,
+                    customAssetId = assetId,
+                    isRealtime = false,
+                    fullWidth = fullWidth,
+                    fullHeight = fullHeight,
+                    opticalBitmap = optical
+                )
+            } catch (failure: Throwable) {
+                optical.recycle()
+                throw failure
+            }
         }
 
         /** 由 PixelCopy 三缓冲拥有的可变窗口截图；source 只建立长期复用的采样 Shader。 */
@@ -218,32 +300,6 @@ internal class LiquidBackdropSource private constructor(
                 fullWidth = fullWidth,
                 fullHeight = fullHeight
             )
-        }
-
-        private fun drawAmbientWash(
-            canvas: Canvas,
-            paint: Paint,
-            color: Int,
-            alpha: Int,
-            centerX: Float,
-            centerY: Float,
-            radius: Float
-        ) {
-            val centerAlpha = alpha.coerceIn(0, 255)
-            val middleAlpha = (centerAlpha * 0.38f).roundToInt()
-            paint.shader = RadialGradient(
-                centerX,
-                centerY,
-                radius.coerceAtLeast(1f),
-                intArrayOf(
-                    ColorUtils.setAlphaComponent(color, centerAlpha),
-                    ColorUtils.setAlphaComponent(color, middleAlpha),
-                    ColorUtils.setAlphaComponent(color, Color.TRANSPARENT)
-                ),
-                floatArrayOf(0f, 0.54f, 1f),
-                Shader.TileMode.CLAMP
-            )
-            canvas.drawRect(0f, 0f, canvas.width.toFloat(), canvas.height.toFloat(), paint)
         }
     }
 }

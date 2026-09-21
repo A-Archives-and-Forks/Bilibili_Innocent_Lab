@@ -32,6 +32,7 @@ import androidx.annotation.RequiresApi
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.LiquidParameters
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.LiquidRenderBackend
 import kotlin.math.cos
+import kotlin.math.roundToInt
 import kotlin.math.sin
 
 /**
@@ -111,7 +112,9 @@ internal class LiquidRefractionBackendApi33(
         radiusPx: Float,
         viewX: Int,
         viewY: Int,
-        opticalIntensity: Float
+        opticalIntensity: Float,
+        stretchDirY: Float,
+        contentAlpha: Float
     ) {
         checkNotNull(source) { "Liquid refraction backdrop is not bound" }
         shader.setFloatUniform("size", bounds.width().toFloat(), bounds.height().toFloat())
@@ -119,6 +122,10 @@ internal class LiquidRefractionBackendApi33(
         shader.setFloatUniform("backdropOrigin", viewX.toFloat(), viewY.toFloat())
         shader.setFloatUniform("cornerRadii", radiusPx, radiusPx, radiusPx, radiusPx)
         shader.setFloatUniform("opticalIntensity", opticalIntensity.coerceIn(1f, 1.85f))
+        shader.setFloatUniform("stretchDirY", stretchDirY.coerceIn(-1f, 1f))
+        // paint.alpha 与 shader 输出 alpha 相乘：浮动表面借此透出真实下层内容，
+        // 不需要 shader 侧再开一个 uniform。其余表面恒为 255，与旧版逐像素一致。
+        paint.alpha = (contentAlpha.coerceIn(0f, 1f) * 255f).roundToInt()
         // 全屏模态按面积降到 2 抽样散射；卡片级表面保持 4 抽样，权重两侧都守恒。
         val reducedTaps = LiquidRealtimeCapturePolicy.useReducedScatterTaps(
             bounds.width(),
@@ -175,6 +182,8 @@ uniform float fresnelStrength;
 uniform float causticLuminanceGain;
 uniform float innerShadowStrength;
 uniform float scatterTapMode;
+// 超出回弹方向：-1 = 顶部下拉（上边缘发光），+1 = 底部上拉，0 = 无回弹。
+uniform float stretchDirY;
 
 const half3 rgbToY = half3(0.2126, 0.7152, 0.0722);
 
@@ -237,11 +246,11 @@ half4 sampleContent(float2 canvasCoord) {
     return content.eval(rootCoord * backdropScale);
 }
 
-half4 sampleRefracted(float2 canvasCoord, float2 direction) {
+half4 sampleRefracted(float2 canvasCoord, float2 direction, float edgeBoost) {
     half4 center = sampleContent(canvasCoord);
     if (chromaticShift <= 0.001) return center;
     float2 axis = safeNormalize(direction, float2(1.0, 0.0));
-    float shift = chromaticShift * opticalIntensity;
+    float shift = chromaticShift * edgeBoost;
     half red = sampleContent(canvasCoord + axis * shift).r;
     half blue = sampleContent(canvasCoord - axis * shift).b;
     return half4(red, center.g, blue, center.a);
@@ -252,9 +261,10 @@ half4 sampleScattered(
     float2 direction,
     float edgeWeight,
     float interiorLens,
-    float edgeReach
+    float edgeReach,
+    float edgeBoost
 ) {
-    half4 core = sampleRefracted(canvasCoord, direction);
+    half4 core = sampleRefracted(canvasCoord, direction, edgeBoost);
     if (scatteringStrength <= 0.001 || scatteringRadius <= 0.001) return core;
 
     float spatialWeight = clamp(edgeWeight * 0.82 + interiorLens * 0.34, 0.0, 1.0);
@@ -264,7 +274,7 @@ half4 sampleScattered(
 
     float2 normal = safeNormalize(direction, float2(0.0, 1.0));
     float2 tangent = float2(-normal.y, normal.x);
-    float radius = scatteringRadius * opticalIntensity * mix(0.42, 1.0, edgeWeight)
+    float radius = scatteringRadius * edgeBoost * mix(0.42, 1.0, edgeWeight)
         * edgeReach;
     half4 tangentPositive = sampleContent(canvasCoord + tangent * radius);
     half4 tangentNegative = sampleContent(canvasCoord - tangent * radius);
@@ -282,7 +292,7 @@ half4 sampleScattered(
     half4 scattered = mix(core, diffused, amount);
     // 内容感知焦散：背后越亮，边缘的白色焦散越强。亮度用 sRGB 近似，避免额外一次线性化。
     float backdropLuma = dot(scattered.rgb, rgbToY);
-    float caustic = edgeWeight * scatteringStrength * 0.075 * opticalIntensity
+    float caustic = edgeWeight * scatteringStrength * 0.075 * edgeBoost
         * (1.0 + causticLuminanceGain * backdropLuma);
     scattered.rgb = mix(scattered.rgb, half3(1.0), clamp(caustic, 0.0, 0.2));
     return scattered;
@@ -303,14 +313,27 @@ half4 main(float2 coord) {
 
     float sd = sdRoundedRect(centeredCoord, halfSize, radius);
     float insideDistance = max(-sd, 0.0);
-    float edgePhase = clamp(1.0 - insideDistance / max(refractionHeight, 0.1), 0.0, 1.0);
-    // Cubic smoothstep has zero derivatives at both ends, preventing a flashing band when
-    // the real-time source advances to the next buffer.
-    float edgeWeight = edgePhase * edgePhase * (3.0 - 2.0 * edgePhase);
-    float d = edgeWeight * refractionAmount * opticalIntensity;
     float smoothRadius = max(radius * 1.5, min(refractionHeight * 1.6, 48.0));
     float gradRadius = min(smoothRadius, min(halfSize.x, halfSize.y));
     float2 shapeGrad = gradSdRoundedRect(centeredCoord, halfSize, gradRadius);
+
+    // 超出回弹的方向性高光：边缘外法线与回弹方向（stretchDirY：顶部下拉 -1、
+    // 底部上拉 +1）做点积投影，面向回弹方向的边缘吃满 opticalIntensity 增益，
+    // 对侧保持基准 1，侧缘随法线夹角无极过渡——不再是四边等亮的均匀描边。
+    // 折射带宽度按同一投影加宽，"厚度"也随回弹力度连续变化。
+    float stretchFacing = clamp(
+        dot(safeNormalize(shapeGrad, float2(0.0, -1.0)), float2(0.0, stretchDirY)),
+        0.0, 1.0
+    );
+    float edgeBoost = 1.0 + max(opticalIntensity - 1.0, 0.0) * stretchFacing;
+    float edgeWidthBoost = 1.0 + 0.45 * max(opticalIntensity - 1.0, 0.0) * stretchFacing;
+    float edgePhase = clamp(
+        1.0 - insideDistance / max(refractionHeight * edgeWidthBoost, 0.1), 0.0, 1.0
+    );
+    // Cubic smoothstep has zero derivatives at both ends, preventing a flashing band when
+    // the real-time source advances to the next buffer.
+    float edgeWeight = edgePhase * edgePhase * (3.0 - 2.0 * edgePhase);
+    float d = edgeWeight * refractionAmount * edgeBoost;
     float2 depthGrad = safeNormalize(centeredCoord, shapeGrad);
     float2 grad = safeNormalize(
         shapeGrad + depthEffect * edgeWeight * depthGrad,
@@ -338,7 +361,7 @@ half4 main(float2 coord) {
 
     float2 refractedCoord = coord + (interiorOffset + d * grad) * edgeReach;
     half4 color = saturateColor(
-        sampleScattered(refractedCoord, direction, edgeWeight, interiorLens, edgeReach),
+        sampleScattered(refractedCoord, direction, edgeWeight, interiorLens, edgeReach, edgeBoost),
         chromaMultiplier
     );
 
@@ -354,7 +377,7 @@ half4 main(float2 coord) {
     // 高光因此变窄，画面中部的玻璃边缘逐像素不变。
     if (fresnelStrength > 0.001) {
         float fresnel = edgeWeight * edgeWeight * edgeWeight
-            * fresnelStrength * opticalIntensity * edgeReach;
+            * fresnelStrength * edgeBoost * edgeReach;
         color.rgb = mix(color.rgb, half3(1.0), clamp(fresnel, 0.0, 0.5));
     }
 
@@ -363,7 +386,7 @@ half4 main(float2 coord) {
         float facing = clamp(dot(grad, lightDirection), 0.0, 1.0);
         float specularLobe = facing * facing * facing;
         float specular = specularLobe * edgeWeight
-            * specularStrength * opticalIntensity * edgeReach;
+            * specularStrength * edgeBoost * edgeReach;
         color.rgb = mix(color.rgb, half3(1.0), clamp(specular, 0.0, 0.35));
     }
     return color;

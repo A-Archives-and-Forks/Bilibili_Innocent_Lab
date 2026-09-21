@@ -2,16 +2,55 @@ package com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid
 
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.LiquidParameters
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.SurfaceRole
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.material.ModernBackdropBlur
+import kotlin.math.roundToInt
+
+/** One bounded optical copy per custom static backdrop, prepared only by the background loader. */
+internal object LiquidOpticalSamplingPolicy {
+    const val BLUR_RADIUS_DP = 20f
+    const val MAX_OPTICAL_BYTES = 2L * 1024L * 1024L
+    // Input pixels + two blur work arrays + output bitmap. Root/previous sources are separate owners.
+    const val MAX_PREPARATION_BYTES = MAX_OPTICAL_BYTES * 4L
+
+    fun sampledRadius(sampleWidth: Int, fullWidth: Int, density: Float): Int {
+        require(sampleWidth > 0 && fullWidth > 0 && density.isFinite() && density > 0f)
+        return (BLUR_RADIUS_DP * density * sampleWidth / fullWidth).roundToInt().coerceIn(1, 24)
+    }
+
+    fun opticalBytes(width: Int, height: Int): Long {
+        require(width > 0 && height > 0 && width.toLong() * height <= MAX_OPTICAL_BYTES / 4L)
+        return width.toLong() * height * 4L
+    }
+
+    fun soften(pixels: IntArray, width: Int, height: Int, fullWidth: Int, density: Float): IntArray {
+        opticalBytes(width, height)
+        require(width.toLong() * height == pixels.size.toLong())
+        return ModernBackdropBlur.blur(pixels, width, height, sampledRadius(width, fullWidth, density))
+    }
+}
+
+/** Separation stays subtle; top chrome has no rectangular outline of its own. */
+internal object LiquidSurfaceEdgePolicy {
+    fun alphaMultiplier(role: SurfaceRole): Float = when (role) {
+        SurfaceRole.TOP_BAR, SurfaceRole.WINDOW -> 0f
+        SurfaceRole.SELECTED_ITEM -> .35f
+        SurfaceRole.CARD -> .45f
+        SurfaceRole.FLOATING -> .55f
+        // 模态描边走"顶沿提亮、竖向落回"的渐变高光，基础亮度与卡片一致即可——
+        // 亮核集中在顶沿，整圈不需要更高强度。
+        SurfaceRole.MODAL -> .45f
+        else -> .5f
+    }
+}
 
 /**
  * Liquid 的纯视觉调参结果。
  *
- * 背景色洗和表面透明度集中在同一策略中，避免 backdrop、卡片与模态层各自硬编码后再次
- * 出现过饱和背景或过重实色遮罩。该结构不依赖 Android 对象，便于 JVM 测试约束范围。
+ * 表面透明度集中在同一策略中，避免卡片与模态层各自硬编码后再次出现过重实色遮罩；
+ * 背景氛围由 [com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.background.AmbientBackdropScene]
+ * 与标准磨砂皮肤共享同一配方，不再单独调参。该结构不依赖 Android 对象，便于 JVM 测试约束范围。
  */
 internal data class LiquidVisualTuning(
-    val primaryWashAlpha: Int,
-    val secondaryWashAlpha: Int,
     val cardGlassAlpha: Float,
     val modalGlassAlpha: Float,
     val motionGlassAlpha: Float,
@@ -21,8 +60,6 @@ internal data class LiquidVisualTuning(
     val saturation: Float
 ) {
     init {
-        require(primaryWashAlpha in 0..255)
-        require(secondaryWashAlpha in 0..255)
         require(cardGlassAlpha in 0f..1f)
         require(modalGlassAlpha in 0f..1f)
         require(motionGlassAlpha in 0f..1f)
@@ -40,27 +77,25 @@ internal data class LiquidVisualTuning(
 internal object LiquidVisualTuningPolicy {
     fun resolve(dark: Boolean): LiquidVisualTuning = if (dark) {
         LiquidVisualTuning(
-            primaryWashAlpha = 0x19,
-            secondaryWashAlpha = 0x14,
-            cardGlassAlpha = 0.24f,
-            modalGlassAlpha = 0.38f,
-            motionGlassAlpha = 0.34f,
+            cardGlassAlpha = 0.26f,
+            // 模态表面在弹窗里采的是已过滤的光学底图（无锐利文字），不再需要高不透明度
+            // 来压透字——降回通透区间，让渐变/预模糊底图的空间感透上来。
+            modalGlassAlpha = 0.62f,
+            motionGlassAlpha = 0.36f,
             cardFallbackAlpha = 0.72f,
-            modalFallbackAlpha = 0.88f,
+            modalFallbackAlpha = 0.93f,
             motionFallbackAlpha = 0.78f,
-            saturation = 1.06f
+            saturation = 0.98f
         )
     } else {
         LiquidVisualTuning(
-            primaryWashAlpha = 0x16,
-            secondaryWashAlpha = 0x10,
-            cardGlassAlpha = 0.20f,
-            modalGlassAlpha = 0.36f,
-            motionGlassAlpha = 0.30f,
+            cardGlassAlpha = 0.30f,
+            modalGlassAlpha = 0.64f,
+            motionGlassAlpha = 0.40f,
             cardFallbackAlpha = 0.78f,
-            modalFallbackAlpha = 0.92f,
+            modalFallbackAlpha = 0.94f,
             motionFallbackAlpha = 0.82f,
-            saturation = 1.03f
+            saturation = 0.98f
         )
     }
 }
@@ -78,7 +113,27 @@ internal object LiquidSurfaceAlphaPolicy {
         role == SurfaceRole.MOTION_SURFACE && translucentFallback ->
             parameters.fallbackMotionSurfaceAlpha
         role == SurfaceRole.MOTION_SURFACE -> parameters.motionSurfaceAlpha
+        role == SurfaceRole.FLOATING -> if (translucentFallback)
+            (parameters.fallbackSurfaceAlpha + .06f).coerceAtMost(1f)
+            else (parameters.surfaceAlpha + .08f).coerceAtMost(1f)
+        role == SurfaceRole.TOP_BAR -> if (translucentFallback)
+            parameters.fallbackSurfaceAlpha else parameters.surfaceAlpha * .8f
+        role == SurfaceRole.SELECTED_ITEM -> if (translucentFallback)
+            (parameters.fallbackSurfaceAlpha + .12f).coerceAtMost(1f)
+            else (parameters.surfaceAlpha + .20f).coerceAtMost(1f)
         translucentFallback -> parameters.fallbackSurfaceAlpha
         else -> parameters.surfaceAlpha
+    }
+
+    /**
+     * 玻璃折射层本身的输出不透明度：< 1 时**真实下层内容**参与合成——浮动条/选中胶囊
+     * 借此透出位于其下方的滚动内容（"对下取色"），而不是只折射合成底图。
+     * 折射截屏里表面区域本就被抑制遮罩换成稳定底图，所以这不引入任何反馈回路。
+     * 普通卡片与模态层保持 1：它们的下层就是窗口底色，全不透反而更干净。
+     */
+    fun glassContentAlpha(role: SurfaceRole): Float = when (role) {
+        SurfaceRole.FLOATING -> 0.60f
+        SurfaceRole.SELECTED_ITEM -> 0.55f
+        else -> 1f
     }
 }

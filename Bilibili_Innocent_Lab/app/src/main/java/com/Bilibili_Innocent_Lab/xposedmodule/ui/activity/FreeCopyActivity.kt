@@ -8,7 +8,7 @@
  * 界面：顶部 AppBar（关闭 + 标题）+ 提示行 + 可选择文本区。
  * 文本区用 TextView + setTextIsSelectable(true)，长按即触发
  * 系统级文本选择菜单（与系统全选/复制完全一致），零自绘选择逻辑。
- * 风格：Material You（Monet 动态取色）+ 与 MainActivity 一致的圆角卡片语言。
+ * 外观复用主界面的共享背景与表面角色，正文保持原生选择行为。
  */
 @file:Suppress("SetTextI18n")
 
@@ -65,7 +65,6 @@ class FreeCopyActivity : SkinnedActivity() {
                 lparams = LayoutParams(matchParent = true),
                 init = {
                     orientation = LinearLayout.VERTICAL
-                    if (!isLiquidSkinEffective) setBackgroundColor(monetColors.background)
                 }
             ) {
                 // ===== 顶部 AppBar =====
@@ -74,7 +73,7 @@ class FreeCopyActivity : SkinnedActivity() {
                     init = {
                         orientation = LinearLayout.HORIZONTAL
                         gravity = Gravity.CENTER or Gravity.START
-                        background = skinCardBackground(monetColors.surfaceVariant, 0f)
+                        background = skinTopBarBackground(monetColors.surface, 0f)
                         updatePadding(left = 4, top = 6, right = 16, bottom = 6)
                     }
                 ) {

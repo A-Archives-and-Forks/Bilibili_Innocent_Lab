@@ -12,14 +12,24 @@ internal interface LiquidBackendDriver : AutoCloseable {
     /** 只在布局/尺寸变化路径调用，不在 draw 中创建或绑定图形资源。 */
     fun bindBackdrop(source: LiquidBackdropSource)
 
-    /** 调用方保证在主线程绘制；实现不得在此创建 Bitmap、Shader 或 RenderEffect。 */
+    /**
+     * 调用方保证在主线程绘制；实现不得在此创建 Bitmap、Shader 或 RenderEffect。
+     *
+     * [stretchDirY]：系统超出回弹的方向，`-1` 顶部下拉（高光投到表面**上**边缘）、
+     * `+1` 底部上拉、`0` 无回弹。只在 `opticalIntensity > 1` 时有视觉意义；
+     * 不支持方向光效的后端直接忽略。
+     * [contentAlpha]：玻璃层输出不透明度。< 1 时真实下层内容参与合成（浮动表面
+     * 借此透出下方滚动内容）；1 为全不透明，行为与旧版一致。
+     */
     fun drawBackdrop(
         canvas: Canvas,
         bounds: Rect,
         radiusPx: Float,
         viewX: Int,
         viewY: Int,
-        opticalIntensity: Float
+        opticalIntensity: Float,
+        stretchDirY: Float,
+        contentAlpha: Float
     )
 }
 
@@ -36,7 +46,9 @@ internal class LiquidTranslucentBackend : LiquidBackendDriver {
         radiusPx: Float,
         viewX: Int,
         viewY: Int,
-        opticalIntensity: Float
+        opticalIntensity: Float,
+        stretchDirY: Float,
+        contentAlpha: Float
     ) = Unit
 
     override fun close() = Unit

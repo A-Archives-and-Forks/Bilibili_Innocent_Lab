@@ -125,7 +125,7 @@ private fun MainActivity.presentRecommendationBlocklistDialog(
     val draft = RecommendationBlocklistDraft.of(preferences, snapshots)
     val density = resources.displayMetrics.density
     fun dp(value: Int) = (value * density).toInt()
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
     container.addView(TextView(this).apply {
         text = getString(R.string.recommendation_blocklist_manage)

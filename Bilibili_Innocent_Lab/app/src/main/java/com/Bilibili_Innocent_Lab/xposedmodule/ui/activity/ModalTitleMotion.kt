@@ -66,7 +66,7 @@ internal object ModalTitleMotionSpec {
     fun descriptionWeight(progress: Float): Float = 1f - smooth(0f, .30f, progress)
     // 活动绘制期间只有叠加层持有文字，包括两端的停位窗口。
     // 即使两份字的位置相同，抗锯齿边缘也不是满 alpha；叠画会加深边缘。
-    // 来源与目标字重不同时（如 Liquid Glass 背景），还会直接出现不同轮廓的重影。
+    // 来源与目标字重不同时（如 高级材质背景），还会直接出现不同轮廓的重影。
     fun sourceWeight(progress: Float): Float {
         boundedProgress(progress)
         return 0f

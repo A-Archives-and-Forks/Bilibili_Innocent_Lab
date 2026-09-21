@@ -1,0 +1,20 @@
+<resources>
+    <string name="settings_home_favorites">Favorites</string>
+    <string name="settings_home_purify">Purify</string>
+    <string name="settings_home_enhance">Enhance</string>
+    <string name="settings_home_module">Module</string>
+    <string name="settings_home_favorites_hint">Your frequently used switches, together.</string>
+    <string name="settings_home_purify_hint">Choose what stays in your Bilibili.</string>
+    <string name="settings_home_enhance_hint">Playback and browsing, your way.</string>
+    <string name="settings_home_module_hint">Appearance, compatibility and module status.</string>
+    <string name="settings_favorites_manage">Manage favorites</string>
+    <string name="settings_favorites_search">Find a switch</string>
+    <string name="settings_favorites_loading">Loading favorites…</string>
+    <string name="settings_favorites_empty">Pin your frequently used switches here with Manage favorites.</string>
+    <string name="settings_favorites_unavailable">Favorites could not be read. Your saved arrangement has been kept.</string>
+    <string name="settings_favorites_save_failed">Could not save favorites. Try again.</string>
+    <string name="settings_favorites_missing">Currently unavailable · %1$s</string>
+    <string name="settings_favorites_move_up">Move %1$s up</string>
+    <string name="settings_favorites_move_down">Move %1$s down</string>
+    <string name="settings_favorites_no_matches">No matching switches</string>
+</resources>

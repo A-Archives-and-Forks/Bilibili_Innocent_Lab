@@ -47,7 +47,8 @@ internal object LiquidRealtimeCapturePolicy {
     const val INITIAL_DELAY_MS = 100L
     const val BUFFER_COUNT = 3
     const val MAX_CONSECUTIVE_FAILURES = 4
-    const val BASE_SUPPRESSION_ALPHA = 0xDC
+    // Owned optical output is replaced, never recursively mixed back into the next input frame.
+    const val BASE_SUPPRESSION_ALPHA = 0xFF
 
     /**
      * 采样像素预算。
@@ -76,7 +77,6 @@ internal object LiquidRealtimeCapturePolicy {
     private const val REDUCED_SCATTER_AREA_PX = 1_800_000L
     private const val MAX_STRETCH_DISTANCE = 0.18f
     private const val MAX_STRETCH_OPTICAL_BOOST = 0.85f
-    private const val MAX_STRETCH_FEEDBACK_BAND_DP = 12f
 
     fun isSupported(sdkInt: Int, hardwareAccelerated: Boolean): Boolean =
         sdkInt >= 31 && hardwareAccelerated
@@ -141,13 +141,6 @@ internal object LiquidRealtimeCapturePolicy {
         val eased = normalized * normalized * (3f - 2f * normalized)
         return 1f + MAX_STRETCH_OPTICAL_BOOST * eased
     }
-
-    /**
-     * 只抑制真正暴露在 viewport 外沿的反馈。effectPadding 是 Shader 采样安全区，不能再被
-     * 当作屏幕可见遮罩宽度，否则会从下一帧 source 中抹掉首尾和左右控件。
-     */
-    fun stretchFeedbackBandDp(effectPaddingDp: Float): Float =
-        effectPaddingDp.coerceIn(0f, MAX_STRETCH_FEEDBACK_BAND_DP)
 
     fun shouldSuspend(consecutiveFailures: Int): Boolean =
         consecutiveFailures >= MAX_CONSECUTIVE_FAILURES

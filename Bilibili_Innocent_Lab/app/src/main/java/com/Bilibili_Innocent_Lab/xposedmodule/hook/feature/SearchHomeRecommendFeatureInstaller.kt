@@ -59,8 +59,14 @@ internal class SearchHomeRecommendFeatureInstaller(private val enabled: Boolean)
             }
         }
         environment.reportStatus("search_home_recommend_status", if (installed == expected) "success" else "partial:$installed/$expected")
-        return if (installed == 0) FeatureInstallResult.Skipped("missing-search-home-boundary")
-            else FeatureInstallResult.Installed(installed, installed == expected)
+        return when {
+            installed > 0 -> FeatureInstallResult.Installed(installed, installed == expected)
+            // 候选多于一个时按歧义上报：FeatureSkipReason.fromRaw 以子串 "ambiguous" 映射为
+            // AMBIGUOUS_HOST_STRUCTURE，与「宿主确实没有该结构」区分开，便于日志判读。
+            points.deliveryCandidateCount > 1 ->
+                FeatureInstallResult.Skipped("ambiguous-search-home-boundary")
+            else -> FeatureInstallResult.Skipped("missing-search-home-boundary")
+        }
     }
 
     private fun ModernMemberHookCreator.filterCallbacks(

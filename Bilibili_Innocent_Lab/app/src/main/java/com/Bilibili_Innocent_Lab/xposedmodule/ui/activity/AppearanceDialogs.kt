@@ -10,9 +10,7 @@ import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
-import android.util.Log
 import android.view.Gravity
-import android.view.KeyEvent
 import android.view.View
 import android.view.ViewGroup
 import androidx.annotation.StringRes
@@ -26,8 +24,6 @@ import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.background.LiquidBackgroun
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.background.LiquidBackgroundMode
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.background.LiquidBackgroundStore
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid.LiquidRealtimeCaptureStore
-import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.SkinId
-import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.runtime.SkinRepository
 import com.highcapable.betterandroid.ui.extension.view.textColor
 import com.highcapable.betterandroid.ui.extension.view.toast
 import com.highcapable.hikage.core.layout.LayoutParams
@@ -36,8 +32,8 @@ import android.widget.LinearLayout as NativeLinearLayout
 import android.widget.TextView as NativeTextView
 
 /*
- * 界面美学相关的弹窗，从 MainActivity 外移而来（函数体逐字搬迁，未改行为）：
- * 皮肤选择、Liquid 背景图、Liquid 实时取景确认、应用语言。
+ * 外观相关的弹窗，从 MainActivity 外移而来（函数体逐字搬迁，未改行为）：
+ * 高级材质背景、全屏实时取景确认、应用语言。
  *
  * 写成 `MainActivity` 的扩展函数，是为了原样调用设置页的共用底座——
  * createModalContainer() / presentModalDialog() / dismissWithAnimation()，
@@ -49,101 +45,11 @@ import android.widget.TextView as NativeTextView
  *
  * - `liquidBackgroundPicker` 是 `registerForActivityResult(...)`，它在 Activity 构造期
  *   就要向宿主注册，搬成顶层属性会直接失去注册；
- * - `skinSelectionActionInProgress`、`liquidBackgroundDialog` 这类 `var` 一旦变成
- *   文件级顶层属性，就从"每个 Activity 一份"变成**进程级单例**，跨 Activity 重建
- *   仍然残留——这是行为改变，不是重构。
+ * - `liquidBackgroundDialog` 这类 `var` 一旦变成文件级顶层属性，就从"每个 Activity 一份"
+ *   变成**进程级单例**，跨 Activity 重建仍然残留——这是行为改变，不是重构。
  *
  * 所以它们留在 MainActivity 上，只放宽为 internal 供本文件读写。
  */
-
-/** 界面皮肤单选弹窗；只在同步持久化成功后退场并重建 Activity。 */
-internal fun MainActivity.showSkinSelectionDialog(anchor: View? = null) {
-    val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
-    val container = createModalContainer()
-    val current = SkinRepository.resolveRequestedSkin(applicationContext)
-    skinSelectionActionInProgress = false
-
-    container.addView(
-        NativeTextView(this).apply {
-            // 复用来源行的 string（文字平移要求），见 ModalTitleMotion。
-            text = getString(R.string.skin_setting_title)
-            textColor = getColor(R.color.colorTextDark)
-            textSize = 17f
-            setLineSpacing(4 * density, 1f)
-        },
-        NativeLinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = (12 * density).toInt() }
-    )
-
-    SkinId.entries.forEachIndexed { index, skin ->
-        val title = getString(skinTitleRes(skin))
-        val description = getString(skinDescriptionRes(skin))
-        val selected = current == skin
-        val row = createGitHubMenuRow(
-            title = title,
-            subtitle = description,
-            highlight = selected
-        ) {
-            selectSkinFromDialog(dialog, container, skin)
-        }.apply {
-            isSelected = selected
-            contentDescription = getString(
-                if (selected) R.string.skin_option_selected
-                else R.string.skin_option_not_selected,
-                title,
-                description
-            )
-        }
-        container.addView(
-            row,
-            NativeLinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                if (index > 0) topMargin = (6 * density).toInt()
-            }
-        )
-    }
-
-    val closeRow = NativeLinearLayout(this).apply {
-        orientation = NativeLinearLayout.HORIZONTAL
-        gravity = Gravity.END or Gravity.CENTER_VERTICAL
-    }
-    closeRow.addView(
-        NativeTextView(this).apply {
-            text = getString(R.string.dialog_close)
-            textColor = getColor(R.color.colorTextGray)
-            textSize = 15f
-            gravity = Gravity.CENTER
-            setPadding(
-                (20 * density).toInt(),
-                (11 * density).toInt(),
-                (20 * density).toInt(),
-                (11 * density).toInt()
-            )
-            background = selfRippleBackground(14f)
-            isClickable = true
-            isFocusable = true
-            setOnClickListener {
-                if (!skinSelectionActionInProgress) {
-                    dismissWithAnimation(dialog, container) {}
-                }
-            }
-        }
-    )
-    container.addView(
-        closeRow,
-        NativeLinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = (18 * density).toInt() }
-    )
-
-    presentModalDialog(dialog, container, anchor)
-}
 
 /** 实验性功能中的自定义背景配置；选择器只授权单个 image URI，不申请媒体库权限。 */
 internal fun MainActivity.showLiquidBackgroundDialog(anchor: View? = null) {
@@ -151,7 +57,7 @@ internal fun MainActivity.showLiquidBackgroundDialog(anchor: View? = null) {
     if (liquidBackgroundImportInProgress) return
     val density = resources.displayMetrics.density
     val state = LiquidBackgroundStore.read(applicationContext)
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
     liquidBackgroundDialog = dialog
     liquidBackgroundDialogContainer = container
@@ -323,7 +229,7 @@ internal fun MainActivity.showLiquidBackgroundDialog(anchor: View? = null) {
 /** 高负载模式首次开启必须由用户显式确认；关闭保持一键可逆。 */
 internal fun MainActivity.showLiquidRealtimeCaptureConfirmDialog() {
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
 
     container.addView(
@@ -435,7 +341,7 @@ internal fun MainActivity.showLiquidRealtimeCaptureConfirmDialog() {
 /** 应用语言单选弹窗：沿用现有模态容器、选中强调色和统一进退场动画。 */
 internal fun MainActivity.showAppLanguageDialog(anchor: View? = null) {
     val density = resources.displayMetrics.density
-    val dialog = Dialog(this)
+    val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
     val current = currentAppLanguage()
 
@@ -519,38 +425,6 @@ internal fun MainActivity.showAppLanguageDialog(anchor: View? = null) {
     )
 
     presentModalDialog(dialog, container, anchor)
-}
-
-private fun MainActivity.selectSkinFromDialog(
-    dialog: Dialog,
-    container: NativeLinearLayout,
-    target: SkinId
-) {
-    if (skinSelectionActionInProgress) return
-    skinSelectionActionInProgress = true
-    if (SkinRepository.resolveRequestedSkin(applicationContext) == target) {
-        dialog.setCancelable(false)
-        dialog.setOnKeyListener { _, keyCode, _ -> keyCode == KeyEvent.KEYCODE_BACK }
-        dismissWithAnimation(dialog, container) {
-            skinSelectionActionInProgress = false
-        }
-        return
-    }
-    val result = runCatching {
-        SkinRepository.beginSelection(applicationContext, target)
-    }.onFailure { throwable ->
-        Log.e("BilibiliInnocentLab", "persist skin selection failed", throwable)
-    }.getOrNull()
-    if (result?.persisted != true) {
-        skinSelectionActionInProgress = false
-        toast(getString(R.string.skin_save_failed))
-        return
-    }
-    dialog.setCancelable(false)
-    dialog.setOnKeyListener { _, keyCode, _ -> keyCode == KeyEvent.KEYCODE_BACK }
-    dismissWithAnimation(dialog, container) {
-        if (!isFinishing && !isDestroyed) recreate()
-    }
 }
 
 private fun MainActivity.createAppLanguageRow(
@@ -673,14 +547,3 @@ private fun MainActivity.liquidRealtimeCaptureSummary(enabled: Boolean): String 
     }
 )
 
-@StringRes
-private fun MainActivity.skinDescriptionRes(skin: SkinId): Int = when (skin) {
-    SkinId.MATERIAL_YOU -> R.string.skin_material_desc
-    SkinId.LIQUID -> R.string.skin_liquid_desc
-}
-
-@StringRes
-private fun MainActivity.skinTitleRes(skin: SkinId): Int = when (skin) {
-    SkinId.MATERIAL_YOU -> R.string.skin_material_title
-    SkinId.LIQUID -> R.string.skin_liquid_title
-}

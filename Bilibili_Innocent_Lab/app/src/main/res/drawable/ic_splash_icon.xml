@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    开屏专用图标：与自适应图标同一套矢量图层，但以普通 layer-list 形式提供。
+    系统开屏对 AdaptiveIconDrawable 会按“图标视图 / 108dp 固有尺寸”再放大约 1.5 倍，
+    只露出安全区，满幅图案会被裁掉；普通 drawable 则按视图填充，图案完整且为矢量渲染。
+-->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@drawable/ic_launcher_background" />
+    <item android:drawable="@drawable/ic_launcher_foreground" />
+</layer-list>

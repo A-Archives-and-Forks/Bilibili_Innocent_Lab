@@ -68,9 +68,19 @@ class LiquidControlStyleTest {
             }
         }
         // 钉住总数而不是 >=：搬迁不允许让任何一个弹窗掉出统计。新增弹窗时一并改这里。
+        // 2026-09-20：液态玻璃并入柔光美学，「界面美学」单选弹窗被「高级材质」开关取代，
+        // 弹窗总数 34 → 33。
         assertEquals(33, dialogs)
+        assertTrue(SettingsUiSource.function("showSettingsFavoritesDialog").contains("presentModalDialog(dialog, container, anchor)"))
         val presenter = SettingsUiSource.function("presentSizedModalDialog")
         assertTrue(presenter.indexOf("stylePreparedSkinControls(container)") in 0 until presenter.indexOf("dialog.show()"))
+        // 面板与底页分离：窗口内必须有随动画进度淡入的压暗层（平台 dim 不可动画，
+        // 会硬切在形变/气泡入场之前），且普通退场的淡出由 dismissWithAnimation 同步。
+        assertTrue("弹窗必须铺窗口内压暗层", presenter.contains("MODAL_SCRIM_COLOR"))
+        assertTrue("scrim 要注册进 dialogScrims", presenter.contains("dialogScrims[dialog]"))
+        assertTrue("scrim alpha 要跟动画进度", presenter.contains("scrim?.alpha"))
+        assertTrue("dismissWithAnimation 要同步收 scrim",
+            SettingsUiSource.function("dismissWithAnimation").contains("dialogScrims[dialog]"))
         val diagnostics = source("ui/activity/DiagnosticsActivity.kt")
         assertTrue(diagnostics.contains("background = skinModalBackground(monetColors.surface)"))
         assertTrue(diagnostics.contains("stylePreparedSkinControls(container)"))
@@ -79,7 +89,7 @@ class LiquidControlStyleTest {
     @Test fun `control styling is gated and cannot change preferences or listeners`() {
         val skin = source("ui/skin/activity/SkinnedActivity.kt")
         val controls = skin.substringAfter("protected fun stylePreparedSkinControls").substringBefore("/** 让一个")
-        assertTrue(controls.contains("if (!isLiquidSkinEffective || lifecycleEnded) return"))
+        assertTrue(controls.contains("if (skinSessionOrNull == null || lifecycleEnded) return"))
         listOf("isChecked =", "setOnCheckedChangeListener", "setOnClickListener", "getSharedPreferences",
             "performClick(", "addOnGlobalLayoutListener", "PixelCopy", "RuntimeShader").forEach {
             assertFalse(it, controls.contains(it))
@@ -108,8 +118,12 @@ class LiquidControlStyleTest {
         assertTrue(backup.contains("skinActionButton(this, filled = false, radiusDp = 14f)"))
         val main = source("ui/activity/MainActivity.kt")
         assertTrue(main.contains("skinUpdateBadge(this)"))
-        assertTrue(main.contains("skinSelectionControl(this, 10f, selected = true)"))
-        assertTrue(main.contains("val onPrimary = skinEmphasisTextColor"))
+        // 日志档位滑块（LogSegmentScrubBar）保持 primary 显式填充（logLevelThumbBg），
+        // 且不再被 skinSelectionControl 的 surface 表面覆盖。
+        assertTrue(main.contains("thumbBackground = logLevelThumbBg()"))
+        assertFalse(main.contains("skinSelectionControl(this, 10f, selected = true)"))
+        // 选中档位文字保持 monet onPrimary 显式接线（LogSegmentScrubBar 颜色表入参）。
+        assertTrue(main.contains("selectedText = monetColors.onPrimary"))
         assertFalse(source("hook/HookEntry.kt").contains("LiquidChoiceDrawable"))
         assertFalse(source("ui/overlay/ReplyTopologyPanelView.kt").contains("LiquidChoiceDrawable"))
     }

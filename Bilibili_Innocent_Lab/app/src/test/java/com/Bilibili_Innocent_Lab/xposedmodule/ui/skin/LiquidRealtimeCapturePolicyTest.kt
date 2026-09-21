@@ -81,7 +81,7 @@ class LiquidRealtimeCapturePolicyTest {
         assertEquals(8_333_333L, LiquidRealtimeCapturePolicy.frameIntervalNanos(120f))
         assertFalse(LiquidRealtimeCapturePolicy.isFrameDue(8_000_000L, 8_333_333L))
         assertTrue(LiquidRealtimeCapturePolicy.isFrameDue(8_333_333L, 8_333_333L))
-        assertTrue(LiquidRealtimeCapturePolicy.BASE_SUPPRESSION_ALPHA in 0xC0..0xF0)
+        assertEquals(255, LiquidRealtimeCapturePolicy.BASE_SUPPRESSION_ALPHA)
     }
 
     @Test
@@ -94,12 +94,5 @@ class LiquidRealtimeCapturePolicyTest {
         assertTrue(middle > idle)
         assertTrue(maximum > middle)
         assertEquals(maximum, LiquidRealtimeCapturePolicy.stretchOpticalIntensity(1f), 0f)
-    }
-
-    @Test
-    fun `stretch feedback band stays inside the visible outer gutter`() {
-        assertEquals(0f, LiquidRealtimeCapturePolicy.stretchFeedbackBandDp(-1f), 0f)
-        assertEquals(8f, LiquidRealtimeCapturePolicy.stretchFeedbackBandDp(8f), 0f)
-        assertEquals(12f, LiquidRealtimeCapturePolicy.stretchFeedbackBandDp(34f), 0f)
     }
 }

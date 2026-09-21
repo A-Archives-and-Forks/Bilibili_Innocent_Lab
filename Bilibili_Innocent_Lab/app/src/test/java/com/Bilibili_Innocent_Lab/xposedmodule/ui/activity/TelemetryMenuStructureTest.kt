@@ -29,9 +29,14 @@ class TelemetryMenuStructureTest {
 
     @Test
     fun `new bubble shifts without moving GitHub and retains an outside hit target`() {
-        val badge = source.substringAfter("// 只占原图标的空间")
+        val badge = source.substringAfter(
+            "// The badge stays outside the circular button and does not change its anchor geometry.")
             .substringBefore("activationCardView = this")
-        assertTrue(badge.contains("LayoutParams(27.dp, 27.dp) { marginEnd = 5.dp }"))
+        // 圆形 GitHub 按钮固定 48dp，徽章只借用其右上角外飘，不改动按钮锚定几何。
+        assertTrue(badge.contains("LayoutParams(48.dp, 48.dp) { marginEnd = 5.dp }"))
+        // 负边距徽章要画出宿主外，宿主必须关掉裁剪。
+        assertTrue(badge.contains("clipChildren = false"))
+        assertTrue(badge.contains("clipToPadding = false"))
         assertTrue(badge.contains("LayoutParams(22.dp, 15.dp)"))
         assertTrue(badge.contains("marginEnd = -5.dp"))
         assertTrue(badge.contains("topMargin = -5.dp"))

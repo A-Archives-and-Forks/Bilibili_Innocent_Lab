@@ -2,11 +2,11 @@ package com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.runtime
 
 import android.content.res.Configuration
 import android.graphics.drawable.Drawable
-import android.graphics.drawable.GradientDrawable
 import android.view.View
 import androidx.annotation.MainThread
 import com.highcapable.betterandroid.ui.component.activity.AppViewsActivity
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid.LiquidActivityRenderer
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.material.FrostedMaterialRenderer
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.SkinId
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.SurfaceRole
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.UiTokens
@@ -32,7 +32,7 @@ internal data class SkinSessionDiagnostics(
 )
 
 /**
- * Activity 级皮肤会话：Material You 只提供既有令牌，Liquid 额外持有有界 renderer 生命周期。
+ * One Activity owns the shared static frost. Liquid adds its separately budgeted optical renderer.
  */
 internal class ActivitySkinSession private constructor(
     val requestedSkin: SkinId,
@@ -43,6 +43,7 @@ internal class ActivitySkinSession private constructor(
     private val activity: AppViewsActivity,
     private val liquidOwner: LiquidRenderSessionOwner?,
     private val liquidRenderer: LiquidActivityRenderer?,
+    private val materialRenderer: FrostedMaterialRenderer,
     private val initialLiquidFailure: Boolean
 ) : AutoCloseable, ModuleMemoryPressureListener {
 
@@ -86,9 +87,10 @@ internal class ActivitySkinSession private constructor(
         if (isClosed) return false
         this.onFailure = onFailure
         failureRoot = root
-        if (requestedSkin != SkinId.LIQUID) return true
+        if (requestedSkin != SkinId.LIQUID) return materialRenderer.bindRoot(root)
         val renderer = liquidRenderer
         if (renderer == null || effectiveSkin != SkinId.LIQUID) {
+            materialRenderer.bindRoot(root)
             scheduleFailureNotification()
             return false
         }
@@ -108,18 +110,8 @@ internal class ActivitySkinSession private constructor(
         role: SurfaceRole
     ): Drawable = if (!isClosed && effectiveSkin == SkinId.LIQUID) {
         liquidRenderer?.createSurfaceDrawable(fallbackColor, radiusDp, role)
-            ?: materialBackground(
-                fallbackColor,
-                radiusDp * activity.resources.displayMetrics.density,
-                materialOutline,
-                activity.resources.displayMetrics.density
-            )
-    } else materialBackground(
-        fallbackColor,
-        radiusDp * activity.resources.displayMetrics.density,
-        materialOutline,
-        activity.resources.displayMetrics.density
-    )
+            ?: materialRenderer.surface(fallbackColor, radiusDp, role)
+    } else materialRenderer.surface(fallbackColor, radiusDp, role)
 
     @MainThread
     fun installStretchViewport(
@@ -138,23 +130,34 @@ internal class ActivitySkinSession private constructor(
     }
 
     @MainThread
+    fun notifyPositionChanged() {
+        if (!isClosed && effectiveSkin == SkinId.LIQUID) liquidRenderer?.notifyPositionChanged()
+        if (!isClosed && effectiveSkin != SkinId.LIQUID) materialRenderer.notifyPositionChanged()
+    }
+
+    @MainThread
     fun onActivityStarted() {
         if (!isClosed) liquidRenderer?.onActivityStarted()
+        // Keep the dormant fallback's lifecycle current too; Liquid can fail later in this foreground session.
+        if (!isClosed) materialRenderer.resume()
     }
 
     @MainThread
     fun onActivityStopped() {
         if (!isClosed) liquidRenderer?.onActivityStopped()
+        if (!isClosed) materialRenderer.stop()
     }
 
     @MainThread
     fun onTrimMemory(level: Int) {
         if (!isClosed) liquidRenderer?.onTrimMemory(level)
+        if (!isClosed && level >= android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) materialRenderer.releaseMemory()
     }
 
     @MainThread
     fun onLowMemory() {
         if (!isClosed) liquidRenderer?.onLowMemory()
+        if (!isClosed) materialRenderer.releaseMemory()
     }
 
     @MainThread
@@ -192,6 +195,7 @@ internal class ActivitySkinSession private constructor(
         }
         effectiveSkin = SkinId.MATERIAL_YOU
         liquidRenderer?.close()
+        failureRoot?.let(materialRenderer::bindRoot)
         if (!staleOwner) scheduleFailureNotification()
     }
 
@@ -199,6 +203,7 @@ internal class ActivitySkinSession private constructor(
         rendererFailureHandled = true
         effectiveSkin = SkinId.MATERIAL_YOU
         liquidRenderer?.close()
+        failureRoot?.let(materialRenderer::bindRoot)
         liquidOwner?.let(SkinRepository::releaseLiquidRenderSession)
     }
 
@@ -223,6 +228,7 @@ internal class ActivitySkinSession private constructor(
         onFailure = null
         failureRoot = null
         liquidRenderer?.close()
+        materialRenderer.close()
         liquidOwner?.let(SkinRepository::releaseLiquidRenderSession)
     }
 
@@ -254,25 +260,10 @@ internal class ActivitySkinSession private constructor(
                 activity = activity,
                 liquidOwner = owner.takeIf { renderer != null },
                 liquidRenderer = renderer,
+                materialRenderer = FrostedMaterialRenderer(materialPalette, activity.resources.displayMetrics.density),
                 initialLiquidFailure = initializationFailed
             ).also(ModuleMemoryPressureHub::addListener)
         }
-    }
-}
-
-private fun materialBackground(
-    color: Int,
-    radiusPx: Float,
-    withOutline: Boolean,
-    density: Float
-) = GradientDrawable().apply {
-    cornerRadius = radiusPx.coerceAtLeast(0f)
-    setColor(color)
-    if (withOutline) {
-        setStroke(
-            density.toInt().coerceAtLeast(1),
-            androidx.core.graphics.ColorUtils.setAlphaComponent(android.graphics.Color.WHITE, 0x18)
-        )
     }
 }
 

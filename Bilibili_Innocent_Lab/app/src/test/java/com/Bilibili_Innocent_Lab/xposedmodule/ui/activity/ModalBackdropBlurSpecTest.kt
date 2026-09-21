@@ -154,7 +154,11 @@ class ModalBackdropBlurSpecTest {
             Regex("onFrame = \\{ progress ->[\\s\\S]{0,160}?backdropBlur\\?\\.apply\\(progress\\)")
                 .findAll(main).count()
         )
-        assertTrue(main.contains("setUpdateListener { backdropBlur?.apply(container.alpha) }"))
+        // 同一个监听器里还要顺带推 scrim 淡入，断言块内语义而不是单行写法。
+        assertTrue(
+            Regex("setUpdateListener \\{[\\s\\S]{0,160}?backdropBlur\\?\\.apply\\(container\\.alpha\\)")
+                .containsMatchIn(main)
+        )
         assertTrue(main.contains("backdropBlur?.clear()"))
     }
 

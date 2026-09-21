@@ -102,6 +102,7 @@ class LiquidRefreshOptimizationTest {
         val visibility = renderer.substringAfter("private fun isSurfacePotentiallyVisible").substringBefore("private fun configureRealtimeRefreshRate")
         assertTrue(visibility.contains("stretchOpticalIntensity > 1f"))
         assertTrue(visibility.contains("!ancestor.matrix.isIdentity"))
+        assertTrue(visibility.contains("LiquidRefreshVisibilityPolicy.isTranslationOnly(visibilityMatrix)"))
         assertTrue(visibility.contains("ancestor.animation != null"))
         assertTrue(visibility.contains("ancestor is LiquidMotionSurfaceFrameProvider"))
         assertTrue(visibility.contains("val windowRoot = view.rootView"))
@@ -110,7 +111,9 @@ class LiquidRefreshOptimizationTest {
         val capture = renderer.substringAfter("private fun requestRealtimeCapture(").substringBefore("private fun handleRealtimeCaptureResult")
         assertTrue(capture.indexOf("buildSuppressionMask(root, captureSource)") in 0 until capture.indexOf("PixelCopy.request("))
         val refresh = renderer.substringAfter("private fun invalidateMovedSurfaces").substringBefore("private fun isSurfacePotentiallyVisible")
-        assertEquals(2, Regex("refreshWindowRoot = null").findAll(refresh).count())
-        assertEquals(2, Regex("refreshState.shouldRefresh").findAll(refresh).count())
+        assertEquals(1, Regex("refreshWindowRoot = null").findAll(refresh).count())
+        assertEquals(1, Regex("refreshState.shouldRefresh").findAll(refresh).count())
+        assertTrue(refresh.contains("OnPreDrawListener"))
+        assertTrue(refresh.contains("if (changes == 0) return"))
     }
 }
