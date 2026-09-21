@@ -293,8 +293,8 @@ internal class ModernNavigationBar(
                 offsetVelocityY = ((nextY * bounded - offsetY) * 1000f / elapsed).coerceIn(-dp(240f), dp(240f))
                 offsetX = nextX * bounded; offsetY = nextY * bounded
                 lastMoveTime = event.eventTime
-                glowX = (downLocalX + dx).coerceIn(0f, width.toFloat())
-                glowY = (downLocalY + dy).coerceIn(0f, height.toFloat())
+                glowX = downLocalX + dx
+                glowY = downLocalY + dy
                 applyVisuals()
             }
             MotionEvent.ACTION_UP -> {

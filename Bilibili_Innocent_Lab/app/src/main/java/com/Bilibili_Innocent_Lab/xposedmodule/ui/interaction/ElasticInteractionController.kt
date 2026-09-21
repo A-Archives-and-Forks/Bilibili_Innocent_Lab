@@ -743,10 +743,10 @@ internal class ElasticInteractionController(
             setBounds(0, 0, view.width, view.height)
         }
 
-        /** 只记录触点（glow 中心）；每帧形状由 [update] 统一计算。 */
+        /** 只记录触点（glow 中心，不钳制——越界量由策略层换成贴边堆积）；每帧形状由 [update] 统一计算。 */
         fun moveTo(x: Float, y: Float) {
-            centerX = x.coerceIn(0f, width)
-            centerY = y.coerceIn(0f, height)
+            centerX = x
+            centerY = y
         }
 
         /**
