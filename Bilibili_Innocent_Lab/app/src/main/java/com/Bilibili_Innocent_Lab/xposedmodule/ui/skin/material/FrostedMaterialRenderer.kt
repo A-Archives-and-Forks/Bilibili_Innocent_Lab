@@ -34,7 +34,12 @@ import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import kotlin.math.roundToInt
 
-/** Background-only frost. It never captures text, other windows, or live page content. */
+/**
+ * Static ambient frost for every surface, plus a live lens sample for floating chrome.
+ *
+ * 静态部分只采窗口底图（不含文字、其他窗口）；悬浮/顶栏表面另由 [LiveBackdropSampler] 对宿主用
+ * [bindContentSource] 指定的内容层做低分辨率透镜采样，让从胶囊下方穿过的内容被模糊与折射。
+ */
 internal class FrostedMaterialRenderer(private val palette: MonetColors, private val density: Float) : AutoCloseable {
     private val dark = ColorUtils.calculateLuminance(palette.background) < .5
     private var root: View? = null
@@ -66,7 +71,15 @@ internal class FrostedMaterialRenderer(private val palette: MonetColors, private
     private var work: Future<*>? = null
     private val worker by lazy { Executors.newSingleThreadExecutor { task -> Thread(task, "BIL-SoftFrost").apply { isDaemon = true } } }
     private val handler = Handler(Looper.getMainLooper())
+    private val live = LiveBackdropSampler(density)
     private val layoutListener = View.OnLayoutChangeListener { _, l, t, r, b, _, _, _, _ -> requestBackdrop(r - l, b - t) }
+
+    /** 悬浮表面下方的内容层（表面的兄弟，不含表面自身）；未绑定则悬浮表面只有静态磨砂。 */
+    fun bindContentSource(view: View) {
+        if (closed) return
+        live.bindSource(view)
+        surfaces.keys.forEach(View::invalidate)
+    }
 
     fun bindRoot(view: View): Boolean {
         if (closed || (root != null && root !== view)) return false
@@ -153,6 +166,12 @@ internal class FrostedMaterialRenderer(private val palette: MonetColors, private
         return true
     }
 
+    internal fun drawLiveSample(canvas: Canvas, bounds: RectF, radius: Float, view: View?, opacity: Int): Boolean {
+        if (closed || view == null || !lifecycle.canWork) return false
+        live.register(view)
+        return live.draw(canvas, bounds, radius, view, opacity)
+    }
+
     internal fun register(view: View) {
         if (!lifecycle.canWork) return
         val position = surfaces[view] ?: SurfaceTransform().also { surfaces[view] = it }
@@ -169,6 +188,7 @@ internal class FrostedMaterialRenderer(private val palette: MonetColors, private
 
     fun notifyPositionChanged() {
         if (!lifecycle.canWork) return
+        live.invalidate()
         val source = root
         val sourceValid = source != null && samplingMatrices.localToScreen(source, sourceTransform)
         val iterator = surfaces.entries.iterator()
@@ -188,17 +208,20 @@ internal class FrostedMaterialRenderer(private val palette: MonetColors, private
         revealAnimator?.cancel(); revealAnimator = null; revealFraction = 0f
         // Never recycle a bitmap that can still be referenced by a hardware display list.
         frame = null; sampleShader = null; samplePaint.shader = null
+        live.releaseAll()
         root?.invalidate(); surfaces.keys.forEach(View::invalidate)
     }
 
     fun stop() {
         lifecycle.stop()
+        live.suspend()
         releaseMemory()
     }
 
     fun resume() {
         if (!lifecycle.resume()) return
         failedWidth = 0; failedHeight = 0
+        live.resume()
         root?.let { requestBackdrop(it.width, it.height) }
     }
 
@@ -206,6 +229,7 @@ internal class FrostedMaterialRenderer(private val palette: MonetColors, private
         if (closed) return
         lifecycle.close()
         releaseMemory()
+        live.close()
         root?.removeOnLayoutChangeListener(layoutListener)
         windows.forEach { (view, listener) ->
             view.viewTreeObserver.takeIf { it.isAlive }?.removeOnScrollChangedListener(listener)
@@ -311,7 +335,9 @@ private class ModernSurfaceDrawable(
         val overlayAlpha = tintAlpha * frameAlpha / 255
         // Preserve the host's ARGB opacity without allocating an offscreen saveLayer for each frame.
         val sampleAlpha = FrostedMotionSurfaceAlpha.sampleAlpha(frameAlpha, overlayAlpha)
-        val sampled = renderer?.drawSample(canvas, rect, drawRadius, view, sampleAlpha) == true
+        var sampled = renderer?.drawSample(canvas, rect, drawRadius, view, sampleAlpha) == true
+        // 悬浮表面再叠一层实时透镜采样：静态磨砂在下，穿过胶囊的内容在上，色罩最后。
+        if (style.live && renderer?.drawLiveSample(canvas, rect, drawRadius, view, sampleAlpha) == true) sampled = true
         fill.color = ColorUtils.setAlphaComponent(drawColor, if (sampled) overlayAlpha else frameAlpha)
         canvas.drawRoundRect(rect, drawRadius, drawRadius, fill)
         // Motion hosts own their collapsing stroke. A second full-opacity edge would flash at handoff.

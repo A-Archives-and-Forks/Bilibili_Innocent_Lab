@@ -262,6 +262,12 @@ abstract class SkinnedActivity : AppViewsActivity() {
         if (!lifecycleEnded) skinSessionOrNull?.notifyPositionChanged()
     }
 
+    /** 悬浮胶囊下方的内容层（必须是胶囊的兄弟而非祖先），供模糊/折射采样。 */
+    @MainThread
+    protected fun bindPreparedSkinContentSource(view: View) {
+        if (!lifecycleEnded) skinSessionOrNull?.bindContentSource(view)
+    }
+
     /** 当前持久化选择是否请求 Liquid；未准备会话时保持 false。 */
     // internal 而非 protected：同上，外移的摘要文案（SkinSummaryPresenter）是扩展函数，
     // 拿不到 protected。两者都是只读 val，放宽的是"读"而不是"写"，

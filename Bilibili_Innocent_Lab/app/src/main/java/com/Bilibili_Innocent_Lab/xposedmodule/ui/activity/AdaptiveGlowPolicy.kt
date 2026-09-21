@@ -4,6 +4,7 @@ import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.exp
+import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -19,8 +20,12 @@ import kotlin.math.PI
  * 前进方向聚集，尾侧衰减更长——"彗星"效果。无方向（正圆）时恒为 0，避免无端偏心头。
  * **仅取向模型（`GlowConfig.oriented = true`）会写它**；流动模型下恒为 0。
  *
- * [rotationDeg] 同理：流动模型恒为 0（没有长轴就没有取向），形变完全由
+ * [rotationDeg] 同理：流动模型在轮廓内恒为 0（没有长轴就没有取向），形变完全由
  * [radiusX]/[radiusY] 的**等向**胀缩表达，运动由 [centerX]/[centerY] 的流动滞后表达。
+ * 唯一例外是堆积（[pileUnit] > 0）：那时主轴转到轮廓法向——这是边的几何，不是手势方向。
+ *
+ * [pileUnit] 是"堆积量"：触点越出控件轮廓后，光晕不消失，而是钉在轮廓最近点、贴边
+ * 压扁并增亮——越往外拖越聚集。两支模型共用，见 [GlowState.update] 的堆积段。
  */
 internal class GlowShape {
     var centerX = 0f
@@ -29,7 +34,9 @@ internal class GlowShape {
     var radiusY = 0f
     var rotationDeg = 0f
     var coreOffsetX = 0f
-    /** 0..约 1.8。乘各表面基础 alpha；不设 clamp——上界由构造保证（见 [GlowState.update]）。 */
+    /** 0..1：触点越出轮廓的堆积程度（低通后）。0 = 在轮廓内。 */
+    var pileUnit = 0f
+    /** 0..约 3.4。乘各表面基础 alpha；不设 clamp——上界由构造保证（见 [GlowState.update]）。 */
     var alphaUnit = 0f
     var alphaByte = 0
     /** 唯一渲染门：alphaByte <= 0、半径为 0 或边界非法时不画。中间量归零全部连续，不另设开关。 */
@@ -42,6 +49,7 @@ internal class GlowShape {
         radiusY = 0f
         rotationDeg = 0f
         coreOffsetX = 0f
+        pileUnit = 0f
         alphaUnit = 0f
         alphaByte = 0
         visible = false
@@ -83,7 +91,8 @@ internal class GlowConfig(
     val tailMaxPx: Float,
     val axialBoost: Float,
     val coreShiftMaxPx: Float,
-    val oriented: Boolean = true
+    val oriented: Boolean = true,
+    val pileRefPx: Float = 0f
 ) {
     companion object {
         const val VELOCITY_EPS_DP_PER_SEC = 20f
@@ -110,6 +119,25 @@ internal class GlowConfig(
         const val PRESS_SHARE = 0.55f
         const val STRETCH_MAX = 0.45f
         const val EDGE_MIN_SCALE = 0.35f
+        /**
+         * 贴边 alpha 下限。旧实现在轮廓处衰减到 0，触点一出控件光晕就消失——正是要改掉的
+         * 现象（用户 2026-09-21："手势完全超出底栏它就不显示了"）。轮廓外的半个光晕由
+         * clipToOutline/clipPath 裁掉，本就只剩一半亮度，这里只需留住另一半的可读性。
+         */
+        const val EDGE_ALPHA_FLOOR = 0.62f
+        /** 堆积参考距离（dp）：触点越出轮廓这么远时堆积满额。 */
+        const val PILE_REF_DP = 72f
+        /** 堆积满额时的增亮：alpha 乘 (1 + PILE_GAIN·pile)。 */
+        const val PILE_GAIN = 0.95f
+        /**
+         * 堆积满额时的形变比：沿轮廓切向铺开 ×(1 + PILE_SPREAD)，沿法向同时压扁 ÷(1 + PILE_SPREAD)。
+         * 面积不变，所以 rx·ry ≤ r² 的渲染护栏不受影响。
+         */
+        const val PILE_SPREAD = 0.45f
+        /** 堆积满额时光团尺度至少回到基准半径的这么多（贴边收缩到 EDGE_MIN_SCALE 后由堆积重新撑起）。 */
+        const val PILE_RECOVER = 0.70f
+        /** 堆积量低通（秒）：跨过轮廓瞬间与手指抖动都不该让形状跳变。 */
+        const val TAU_PILE_SECONDS = 0.09f
         const val TAU_SPEED_SECONDS = 0.060f
         const val TAU_DIR_SECONDS = 0.025f
         const val TAU_TAIL_SECONDS = 0.040f
@@ -150,7 +178,8 @@ internal class GlowConfig(
             velocityRefPxPerSec: Float,
             edgeBandPx: Float,
             axialBoost: Float = AXIAL_BOOST,
-            oriented: Boolean = true
+            oriented: Boolean = true,
+            pileRefDp: Float = PILE_REF_DP
         ): GlowConfig {
             val scale = if (density.isFinite() && density > 0f) density else 1f
             return GlowConfig(
@@ -162,7 +191,8 @@ internal class GlowConfig(
                 tailMaxPx = TAIL_MAX_DP * scale,
                 axialBoost = axialBoost,
                 coreShiftMaxPx = CORE_SHIFT_MAX_DP * scale,
-                oriented = oriented
+                oriented = oriented,
+                pileRefPx = pileRefDp * scale
             )
         }
     }
@@ -189,6 +219,8 @@ internal class GlowState {
     private var tailLengthEma = 0f
     private var tailVecX = 0f
     private var tailVecY = 0f
+    private var pileEma = 0f
+    private val normal = FloatArray(2)
 
     val shape = GlowShape()
 
@@ -210,6 +242,7 @@ internal class GlowState {
         tailLengthEma = 0f
         tailVecX = 0f
         tailVecY = 0f
+        pileEma = 0f
         shape.reset()
     }
 
@@ -355,21 +388,24 @@ internal class GlowState {
         }
 
         // 边缘柔化：到圆角轮廓的精确距离（rounded-rect SDF），alpha 与尺寸双衰减。
-        // edgeBandPx <= 0 的表面（长按高亮）由 clipPath 负责轮廓裁剪，此因子必须直通——
-        // smoothStep(0,0,·) 是 0 处的硬阶跃，触点一落到圆角轮廓外 alpha 瞬间归零。
-        // 全圆角胶囊（r = h/2）最敏感：矩形四角本就在胶囊轮廓外，触点被钳进角区后
-        // 四个斜向的高光全部瞬间消失（2026-09-21 真机实证）。
-        val edge = if (config.edgeBandPx > 0f) {
-            val insideDistance =
-                -roundedRectSignedDistance(centerX, centerY, boundsWidth, boundsHeight, corner)
-            smoothStep(0f, config.edgeBandPx, insideDistance)
-        } else {
-            1f
-        }
-        val edgeScale = GlowConfig.EDGE_MIN_SCALE + (1f - GlowConfig.EDGE_MIN_SCALE) * edge
+        // alpha 只衰减到 EDGE_ALPHA_FLOOR 而不是 0：轮廓外的部分由裁剪负责，触点贴边/越界
+        // 时光晕仍在。edgeBandPx <= 0 的表面（长按高亮）由 clipPath 负责轮廓裁剪，此因子
+        // 必须直通——smoothStep(0,0,·) 是 0 处的硬阶跃。全圆角胶囊（r = h/2）最敏感：
+        // 矩形四角本就在胶囊轮廓外。
+        val signedDistance = roundedRectSignedDistance(centerX, centerY, boundsWidth, boundsHeight, corner)
+        val inside = if (config.edgeBandPx > 0f) smoothStep(0f, config.edgeBandPx, -signedDistance) else 1f
+        val edge = GlowConfig.EDGE_ALPHA_FLOOR + (1f - GlowConfig.EDGE_ALPHA_FLOOR) * inside
+        val edgeScale = GlowConfig.EDGE_MIN_SCALE + (1f - GlowConfig.EDGE_MIN_SCALE) * inside
         radiusX *= edgeScale
         radiusY *= edgeScale
         alphaUnit *= edge
+
+        // 堆积：触点越出轮廓的距离经 smoothStep 与低通得到 0..1 的堆积量。
+        // 边界有效且 pileRefPx > 0 才算；否则恒为 0，下面所有堆积项都退化为直通。
+        val overshoot = if (boundsWidth > 0f && boundsHeight > 0f) signedDistance.coerceAtLeast(0f) else 0f
+        val pileTarget = if (config.pileRefPx > 0f) smoothStep(0f, config.pileRefPx, overshoot) else 0f
+        pileEma += (pileTarget - pileEma) * blendFactor(dt, GlowConfig.TAU_PILE_SECONDS)
+        val pile = pileEma.coerceIn(0f, 1f)
 
         if (config.oriented) {
             // 亮核前移：与形变量成正比（越变形越朝形变方向聚集），无方向时为 0——否则正圆
@@ -394,6 +430,7 @@ internal class GlowState {
             renderY = centerY + tailVecY
         }
 
+        var rotationDeg = if (config.oriented && angleDeg.isFinite()) angleDeg else 0f
         if (boundsWidth > 0f && boundsHeight > 0f) {
             // 光心绝不被推出边界；band 大于边界时退化为夹在中心。
             renderX = renderX.coerceIn(
@@ -404,6 +441,29 @@ internal class GlowState {
                 minOf(config.edgeBandPx, boundsHeight * 0.5f),
                 maxOf(boundsHeight - config.edgeBandPx, boundsHeight * 0.5f)
             )
+            if (pile > 0f) {
+                // 堆积：光心从内侧夹持位置滑到轮廓最近点，椭圆转到以轮廓法向为主轴、
+                // 沿法向压扁、沿切向铺开，并整体增亮。全部按 pile 线性混合，跨界连续。
+                roundedRectOutwardNormal(centerX, centerY, boundsWidth, boundsHeight, corner, normal)
+                val pinnedX = finiteOr(centerX - signedDistance * normal[0], centerX).coerceIn(0f, boundsWidth)
+                val pinnedY = finiteOr(centerY - signedDistance * normal[1], centerY).coerceIn(0f, boundsHeight)
+                renderX += (pinnedX - renderX) * pile
+                renderY += (pinnedY - renderY) * pile
+                val normalDeg = toDegrees(atan2(normal[1].toDouble(), normal[0].toDouble())).toFloat()
+                rotationDeg += shortestAxisDeltaDeg(rotationDeg, normalDeg) * pile
+                if (radiusX > 0f && radiusY > 0f) {
+                    // 尺寸与长短轴比分开算：面积 = iso²（iso ≤ 基准半径），长短轴比在对数空间里
+                    // 从当前值滑向 1/spreadFactor——沿法向压扁、沿切向铺开。
+                    var iso = sqrt(radiusX) * sqrt(radiusY)
+                    iso = maxOf(iso, iso + (radius * GlowConfig.PILE_RECOVER - iso) * pile)
+                    val spreadFactor = 1f + GlowConfig.PILE_SPREAD * pile
+                    val aniso = sqrt(radiusX / radiusY).coerceIn(1e-3f, 1e3f).pow(1f - pile) / spreadFactor
+                    radiusX = iso * aniso
+                    radiusY = iso / aniso
+                }
+                coreOffsetX *= 1f - pile
+                alphaUnit *= 1f + GlowConfig.PILE_GAIN * pile
+            }
         }
 
         val alphaByte = (alphaUnit * alphaScale).roundToInt().coerceIn(0, 255)
@@ -411,8 +471,9 @@ internal class GlowState {
         shape.centerY = renderY
         shape.radiusX = radiusX
         shape.radiusY = radiusY
-        shape.rotationDeg = if (config.oriented && angleDeg.isFinite()) angleDeg else 0f
+        shape.rotationDeg = rotationDeg
         shape.coreOffsetX = coreOffsetX
+        shape.pileUnit = pile
         shape.alphaUnit = alphaUnit
         shape.alphaByte = alphaByte
         shape.visible = alphaByte > 0 && radius > RADIUS_EPS && boundsWidth > 0f && boundsHeight > 0f
@@ -452,6 +513,41 @@ internal fun shortestAngleDeltaDeg(fromDeg: Float, toDeg: Float): Float {
     return delta
 }
 
+/** 椭圆轴的最短角差：轴无方向（θ ≡ θ+180°），差取到 ±90°。 */
+internal fun shortestAxisDeltaDeg(fromDeg: Float, toDeg: Float): Float {
+    if (!fromDeg.isFinite() || !toDeg.isFinite()) return 0f
+    var delta = (toDeg - fromDeg) % 180f
+    if (delta > 90f) delta -= 180f
+    if (delta < -90f) delta += 180f
+    return delta
+}
+
+/**
+ * 圆角矩形 SDF 的外法向（单位向量），写入 [out]。轮廓外指向远离轮廓，内部指向最近边。
+ * 角区（q 非零）取到角圆心的方向；边区取 px/py 较大者对应的轴向；正中心退化为 +Y。
+ */
+internal fun roundedRectOutwardNormal(x: Float, y: Float, w: Float, h: Float, r: Float, out: FloatArray) {
+    if (w <= 0f || h <= 0f) { out[0] = 0f; out[1] = 1f; return }
+    val radius = r.coerceIn(0f, minOf(w, h) * 0.5f)
+    val dx = x - w * 0.5f
+    val dy = y - h * 0.5f
+    val sx = if (dx < 0f) -1f else 1f
+    val sy = if (dy < 0f) -1f else 1f
+    val px = abs(dx) - (w * 0.5f - radius)
+    val py = abs(dy) - (h * 0.5f - radius)
+    val qx = maxOf(px, 0f)
+    val qy = maxOf(py, 0f)
+    val q = length(qx, qy)
+    if (q > 1e-4f && q.isFinite()) {
+        out[0] = sx * qx / q
+        out[1] = sy * qy / q
+    } else if (px > py) {
+        out[0] = sx; out[1] = 0f
+    } else {
+        out[0] = 0f; out[1] = sy
+    }
+}
+
 /**
  * 圆角矩形有符号距离（SDF 惯例：内部为负、边界为 0、外部为正）。
  * 约 12 flop，per frame 无压力；[r] <= 0 时退化为矩形。
@@ -467,6 +563,8 @@ internal fun roundedRectSignedDistance(x: Float, y: Float, w: Float, h: Float, r
 }
 
 private fun finiteOrZero(value: Float): Float = if (value.isFinite()) value else 0f
+
+private fun finiteOr(value: Float, fallback: Float): Float = if (value.isFinite()) value else fallback
 
 private fun length(x: Float, y: Float): Float = sqrt(x * x + y * y)
 

@@ -188,7 +188,7 @@ class AdaptiveGlowPolicyTest {
     }
 
     @Test fun coreOffsetScalesDownNearTheEdge() {
-        // 贴边不可见 ⇒ 前移无视觉残留
+        // 贴边仍可见（alpha 只降到地板），但前移与半径一起收到 EDGE_MIN_SCALE
         val atEdge = GlowState()
         atEdge.update(centered {
             press = 1f
@@ -196,7 +196,8 @@ class AdaptiveGlowPolicyTest {
             offsetX = maxTravelPx
             centerY = 0f
         }, 1f / 120f, radiusPx, 72, config)
-        assertFalse(atEdge.shape.visible)
+        assertTrue(atEdge.shape.visible)
+        assertTrue("贴边前移必须随尺寸收缩", atEdge.shape.coreOffsetX <= config.coreShiftMaxPx * GlowConfig.EDGE_MIN_SCALE + 1e-3f)
 
         // 半 band 处稳定形变：前移与半径同乘 edgeScale（≈0.675），不到满额
         val nearEdge = GlowState()
@@ -229,14 +230,14 @@ class AdaptiveGlowPolicyTest {
         for (index in 1 until samples.size) {
             assertTrue("alpha 必须随边距单调不减", samples[index].second >= samples[index - 1].second - 1e-4f)
         }
-        assertEquals("贴边 alpha 为 0", 0f, samples.first().second, 1e-6f)
+        assertEquals("贴边 alpha 落在地板而不是 0", GlowConfig.EDGE_ALPHA_FLOOR, samples.first().second, 1e-4f)
         assertEquals("居中无衰减", 1f, samples.last().second, 1e-4f)
         val atEdge = GlowState()
         atEdge.update(centered {
             press = 1f
             centerY = 0f
         }, 1f / 120f, radiusPx, 72, config)
-        assertFalse("贴边不可见", atEdge.shape.visible)
+        assertTrue("贴边仍可见", atEdge.shape.visible)
     }
 
     @Test fun stretchGrowsFromZeroWhenTheDragStarts() {

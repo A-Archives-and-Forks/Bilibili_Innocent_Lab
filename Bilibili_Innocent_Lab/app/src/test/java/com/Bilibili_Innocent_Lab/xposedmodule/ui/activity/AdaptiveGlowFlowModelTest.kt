@@ -243,7 +243,7 @@ class AdaptiveGlowFlowModelTest {
         }
         assertTrue("触点钳在胶囊外的矩形角时高光不许熄灭", state.shape.visible)
         assertTrue(state.shape.alphaByte > 0)
-        // 对照：band > 0 的表面仍保留边缘衰减语义（底栏/scrub 条贴边淡出）。
+        // 对照：band > 0 的表面保留边缘衰减语义（底栏/scrub 条贴边变暗），但同样不许熄灭。
         val banded = GlowConfig.create(
             density = density, maxTravelPx = limitPx, travelEpsPx = 0f,
             velocityRefPxPerSec = velocityRefPx, edgeBandPx = 84f,
@@ -253,7 +253,8 @@ class AdaptiveGlowFlowModelTest {
         holder.cornerRadius = viewHeight * .5f
         holder.centerX = viewWidth; holder.centerY = 0f
         bandedState.update(holder, 1f / 120f, radiusPx, 32, banded)
-        assertFalse("band > 0 时轮廓外仍应衰减到不可见", bandedState.shape.visible)
+        assertTrue("band > 0 时轮廓外只变暗、不熄灭", bandedState.shape.visible)
+        assertTrue(bandedState.shape.alphaUnit < state.shape.alphaUnit)
     }
 
     @Test fun wildInputsStayFiniteInTheFlowingModel() {
@@ -284,7 +285,8 @@ class AdaptiveGlowFlowModelTest {
             assertTrue("radiusX", s.radiusX.isFinite() && s.radiusX >= 0f)
             assertTrue("radiusY", s.radiusY.isFinite() && s.radiusY >= 0f)
             assertTrue("alphaByte", s.alphaByte in 0..255)
-            assertEquals("流动模型无取向", 0f, s.rotationDeg, 0f)
+            assertTrue("rotationDeg", s.rotationDeg.isFinite())
+            if (s.pileUnit == 0f) assertEquals("流动模型轮廓内无取向", 0f, s.rotationDeg, 0f)
             assertEquals("流动模型无亮核前移", 0f, s.coreOffsetX, 0f)
         }
     }

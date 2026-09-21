@@ -4,7 +4,13 @@ import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.SurfaceRole
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
-internal data class ModernSurfaceStyle(val tintAlpha: Int, val upperEdgeAlpha: Int, val lowerEdgeAlpha: Int)
+/** [live]：表面下方的内容层要经 LiveBackdropSampler 透镜采样（悬浮胶囊/顶栏）。 */
+internal data class ModernSurfaceStyle(
+    val tintAlpha: Int,
+    val upperEdgeAlpha: Int,
+    val lowerEdgeAlpha: Int,
+    val live: Boolean = false
+)
 
 /** Pure appearance policy: caller-owned radii are deliberately never changed here. */
 internal object ModernMaterialPolicy {
@@ -27,8 +33,9 @@ internal object ModernMaterialPolicy {
     fun surface(role: SurfaceRole, dark: Boolean): ModernSurfaceStyle {
         val tint = when (role) {
             SurfaceRole.MODAL -> if (dark) 240 else 234
-            SurfaceRole.FLOATING -> if (dark) 190 else 180
-            SurfaceRole.TOP_BAR -> if (dark) 174 else 162
+            // 悬浮表面叠了实时透镜采样，色罩要更薄才"通透"；可读性由模糊与折射保证而非遮盖。
+            SurfaceRole.FLOATING -> if (dark) 156 else 144
+            SurfaceRole.TOP_BAR -> if (dark) 146 else 132
             SurfaceRole.SELECTED_ITEM -> if (dark) 218 else 210
             SurfaceRole.MOTION_SURFACE -> if (dark) 218 else 216
             SurfaceRole.FILLED_BUTTON -> 235
@@ -47,7 +54,8 @@ internal object ModernMaterialPolicy {
             SurfaceRole.SELECTED_ITEM -> if (dark) 5 else 12
             else -> if (dark) 10 else 24
         }
-        return ModernSurfaceStyle(tint, upper, lower)
+        val live = role == SurfaceRole.FLOATING || role == SurfaceRole.TOP_BAR
+        return ModernSurfaceStyle(tint, upper, lower, live)
     }
 
     fun blurRadius(sampleWidth: Int, fullWidth: Int, density: Float): Int =
