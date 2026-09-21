@@ -135,6 +135,12 @@ internal class ActivitySkinSession private constructor(
         if (!isClosed && effectiveSkin != SkinId.LIQUID) materialRenderer.notifyPositionChanged()
     }
 
+    /** 悬浮表面下方的内容层；静态磨砂皮肤据此做实时透镜采样，Liquid 自己抓屏不需要。 */
+    @MainThread
+    fun bindContentSource(view: View) {
+        if (!isClosed) materialRenderer.bindContentSource(view)
+    }
+
     @MainThread
     fun onActivityStarted() {
         if (!isClosed) liquidRenderer?.onActivityStarted()

@@ -5,7 +5,10 @@ import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
+import android.graphics.Outline
 import android.graphics.Paint
+import android.graphics.Path
+import android.graphics.Rect
 import android.graphics.Typeface
 import android.graphics.drawable.Drawable
 import android.text.TextUtils
@@ -273,8 +276,8 @@ class LogSegmentScrubBar(context: Context, attrs: AttributeSet?) : FrameLayout(c
                 offsetVelocityY = ((nextY * bounded - offsetY) * 1000f / elapsed).coerceIn(-dp(240f), dp(240f))
                 offsetX = nextX * bounded; offsetY = nextY * bounded
                 lastMoveTime = event.eventTime
-                glowX = (downLocalX + dx).coerceIn(0f, width.toFloat())
-                glowY = (downLocalY + dy).coerceIn(0f, height.toFloat())
+                glowX = downLocalX + dx
+                glowY = downLocalY + dy
                 applyVisuals()
             }
             MotionEvent.ACTION_UP -> {
@@ -486,8 +489,36 @@ class LogSegmentScrubBar(context: Context, attrs: AttributeSet?) : FrameLayout(c
         private var lastOffsetX = 0f
         private var lastOffsetY = 0f
         private val focusPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+        private val outline = Outline()
+        private val outlineRect = Rect()
+        private val clip = Path()
+        private var clipWidth = 0
+        private var clipHeight = 0
+        private var clipCorner = Float.NaN
 
         init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }
+
+        /** 轨道背景声明的圆角；未声明（空 outline / RADIUS_UNDEFINED）时按胶囊（h/2）。 */
+        private fun trackCorner(): Float {
+            val track = this@LogSegmentScrubBar.background
+            if (track != null) {
+                outline.setEmpty()
+                track.getOutline(outline)
+                if (outline.getRect(outlineRect) && outline.radius.isFinite() && outline.radius >= 0f) {
+                    return outline.radius.coerceAtMost(minOf(width, height) * .5f)
+                }
+            }
+            return height * .5f
+        }
+
+        private fun clipPath(corner: Float): Path {
+            if (clipWidth != width || clipHeight != height || clipCorner != corner) {
+                clipWidth = width; clipHeight = height; clipCorner = corner
+                clip.rewind()
+                clip.addRoundRect(0f, 0f, width.toFloat(), height.toFloat(), corner, corner, Path.Direction.CW)
+            }
+            return clip
+        }
 
         /** configure 时刷新配色；shader 依赖的 highlight 色在构造期尚不可知。仅配置期调用。 */
         fun updateColors(colors: ModernNavigationColors) {
@@ -525,7 +556,7 @@ class LogSegmentScrubBar(context: Context, attrs: AttributeSet?) : FrameLayout(c
             frame.centerY = centerY
             frame.boundsWidth = barWidth.toFloat()
             frame.boundsHeight = barHeight.toFloat()
-            frame.cornerRadius = 0f // 轨道背景的圆角未知其 outline，按矩形保守偏亮
+            frame.cornerRadius = trackCorner()
             state.update(frame, dt, radius, SCRUB_GLOW_BASE_ALPHA, config)
             invalidate()
         }
@@ -539,7 +570,14 @@ class LogSegmentScrubBar(context: Context, attrs: AttributeSet?) : FrameLayout(c
         }
 
         override fun onDraw(canvas: Canvas) {
-            renderer?.draw(canvas, state.shape)
+            val glowRenderer = renderer
+            if (glowRenderer != null && state.shape.visible && width > 0 && height > 0) {
+                // 越界堆积时光晕钉在轨道边缘，轮廓外的半边由这里裁掉。
+                val save = canvas.save()
+                canvas.clipPath(clipPath(trackCorner()))
+                glowRenderer.draw(canvas, state.shape)
+                canvas.restoreToCount(save)
+            }
             for (i in 0 until pills.size) {
                 val pill = pills[i]
                 if (pill.hasFocus()) {

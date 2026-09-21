@@ -35,6 +35,7 @@ internal class SettingsHomePresenter(
     private val installStretch: (View, () -> Boolean) -> View?,
     private val finishStretch: (View?) -> Unit,
     private val skinPositionChanged: () -> Unit,
+    private val skinContentSource: (View) -> Unit,
     private val navigationChanged: () -> Unit,
     private val navigationTouched: () -> Unit
 ) : SettingsFavoritesRepository.Observer {
@@ -166,6 +167,8 @@ internal class SettingsHomePresenter(
             addView(pager, FrameLayout.LayoutParams(-1, -1))
         }
         shell.addView(pageLayer, LinearLayout.LayoutParams(-1, 0, 1f))
+        // 底栏与顶部胶囊都是 pager 的兄弟，皮肤层可以安全地抓 pager 做透镜采样。
+        skinContentSource(pager)
         val icons = intArrayOf(R.drawable.ic_favorites, R.drawable.ic_purify, R.drawable.ic_enhancement, R.drawable.ic_science)
         val dock = ModernNavigationBar(
             context = activity,
