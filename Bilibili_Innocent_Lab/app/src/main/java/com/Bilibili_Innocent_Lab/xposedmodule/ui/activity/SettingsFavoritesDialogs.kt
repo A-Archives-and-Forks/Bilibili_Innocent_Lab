@@ -6,8 +6,10 @@ import android.text.TextWatcher
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.view.animation.PathInterpolator
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.view.HapticFeedbackConstants
@@ -20,6 +22,15 @@ import androidx.recyclerview.widget.SimpleItemAnimator
 import com.Bilibili_Innocent_Lab.xposedmodule.R
 import com.highcapable.betterandroid.ui.extension.view.textColor
 import com.highcapable.betterandroid.ui.extension.view.textToString
+import kotlin.math.hypot
+
+/** 拖拽拾起/放下的缓出曲线：快起缓落，落位末尾是减速而不是匀速急停。 */
+private val SETTLE_EASE = PathInterpolator(0.2f, 0f, 0f, 1f)
+
+/** 拖拽落位滑行：最短 220ms，随距离每像素 +0.16ms，封顶 420ms。 */
+private const val DROP_SETTLE_MIN_MS = 220L
+private const val DROP_SETTLE_PER_PX_MS = 0.16f
+private const val DROP_SETTLE_MAX_MS = 420L
 
 /** Edits arrangement only. Feature state always goes through the original page's controls. */
 internal fun MainActivity.showSettingsFavoritesDialog(anchor: View? = null) {
@@ -159,15 +170,36 @@ internal fun MainActivity.showSettingsFavoritesDialog(anchor: View? = null) {
                 viewHolder.itemView.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                 viewHolder.itemView.animate()
                     .scaleX(1.03f).scaleY(1.03f).alpha(0.9f)
-                    .setDuration(120).start()
+                    .setInterpolator(SETTLE_EASE)
+                    .setDuration(140).start()
             }
+        }
+
+        /**
+         * 松手回位滑行时长随距离走：默认实现只返回 itemAnimator 的固定 moveDuration，
+         * 长拖后的落位在同样的时长里"撞回去"显得生硬；给长距离留足缓冲、短距离不拖沓。
+         */
+        override fun getAnimationDuration(
+            recyclerView: RecyclerView,
+            animationType: Int,
+            animateDx: Float,
+            animateDy: Float
+        ): Long {
+            if (animationType != ItemTouchHelper.ANIMATION_TYPE_DRAG) {
+                return super.getAnimationDuration(recyclerView, animationType, animateDx, animateDy)
+            }
+            val distance = hypot(animateDx, animateDy)
+            return (DROP_SETTLE_MIN_MS +
+                (distance * DROP_SETTLE_PER_PX_MS).toLong())
+                .coerceAtMost(DROP_SETTLE_MAX_MS)
         }
 
         override fun clearView(recyclerView: RecyclerView, viewHolder: RecyclerView.ViewHolder) {
             super.clearView(recyclerView, viewHolder)
             viewHolder.itemView.animate()
                 .scaleX(1f).scaleY(1f).alpha(1f)
-                .setDuration(120).start()
+                .setInterpolator(SETTLE_EASE)
+                .setDuration(220).start()
             dragging = false
             val id = draggedId
             draggedId = null
@@ -226,7 +258,12 @@ internal fun MainActivity.showSettingsFavoritesDialog(anchor: View? = null) {
     render()
     container.addView(createPanelCloseButton { dismissWithAnimation(dialog, container) {} },
         LinearLayout.LayoutParams(-1, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(10) })
-    presentModalDialog(dialog, container, anchor)
+    // 弹窗必须给显式宽度：WRAP_CONTENT 容器会让列表和行全部拿到 AT_MOST 规格，
+    // 每行收缩成自己的内容宽，把手跟随文字长度漂移（真机实证四行宽 992/840/802/728）。
+    // 显式宽度使容器走 EXACTLY，行满宽、把手统一钉右缘（UpdateDialogs 同公式）。
+    val width = minOf(dp(440),
+        resources.displayMetrics.widthPixels - dp(64)).coerceAtLeast(1)
+    presentSizedModalDialog(dialog, container, width, anchor)
 }
 
 private sealed interface FavoriteRowItem {
@@ -310,9 +347,10 @@ private class FavoritesRowAdapter(
                 setPadding(0, dp(18), 0, dp(18))
             }) {}
         }
-        val row = LinearLayout(host).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+        // 行容器用 FrameLayout 而不是 LinearLayout+weight：勾选触发的重绑/移动动画会
+        // 在瞬态下把 CheckBox 量成文本包裹宽度，weight 第二遍测量补不回来，把手就贴到
+        // 文字尾巴上。END 重力钉在行右缘，与测量时序无关。
+        val row = FrameLayout(host).apply {
             layoutParams = RecyclerView.LayoutParams(-1, -2)
         }
         val check = CheckBox(host).apply {
@@ -320,7 +358,10 @@ private class FavoritesRowAdapter(
             textColor = host.getColor(R.color.colorTextGray)
             minHeight = dp(52)
         }
-        row.addView(check, LinearLayout.LayoutParams(0, -2, 1f))
+        row.addView(check, FrameLayout.LayoutParams(-1, -2, Gravity.CENTER_VERTICAL).apply {
+            // 勾选框占满把手左侧的全部宽度，文字永远不画进把手占位。
+            marginEnd = dp(30)
+        })
         // 拖拽把手常驻占位、只做 alpha 渐变：选中可排序时淡入提示"长按拖动"，
         // 不占交互空间——真正的手势是整行长按，把手只是状态提示。
         val grip = TextView(host).apply {
@@ -333,7 +374,8 @@ private class FavoritesRowAdapter(
             isFocusable = false
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
         }
-        row.addView(grip, LinearLayout.LayoutParams(dp(30), dp(48)))
+        row.addView(grip, FrameLayout.LayoutParams(dp(30), dp(48),
+            Gravity.END or Gravity.CENTER_VERTICAL))
         styleRow(row)
         return RowHolder(row, check, grip)
     }

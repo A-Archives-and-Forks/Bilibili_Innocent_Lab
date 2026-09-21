@@ -6,6 +6,7 @@ import android.view.View
 import androidx.annotation.MainThread
 import com.highcapable.betterandroid.ui.component.activity.AppViewsActivity
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid.LiquidActivityRenderer
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid.LiquidStretchViewport
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.material.FrostedMaterialRenderer
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.SkinId
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.SurfaceRole
@@ -117,16 +118,32 @@ internal class ActivitySkinSession private constructor(
     fun installStretchViewport(
         scrollTarget: View,
         isStretchAllowed: () -> Boolean
-    ): View? = if (!isClosed && effectiveSkin == SkinId.LIQUID) {
-        liquidRenderer?.installStretchViewport(
-            scrollTarget = scrollTarget,
-            isStretchAllowed = isStretchAllowed
-        )
-    } else null
+    ): View? {
+        if (isClosed) return null
+        return if (effectiveSkin == SkinId.LIQUID) {
+            liquidRenderer?.installStretchViewport(
+                scrollTarget = scrollTarget,
+                isStretchAllowed = isStretchAllowed
+            )
+        } else {
+            // 回弹视口与皮肤无关：视觉拉伸由平台 EdgeEffect 完成，距离回调只服务
+            // Liquid 光学高光，Material 皮肤下置空即可。
+            runCatching {
+                LiquidStretchViewport.installAround(
+                    scrollTarget = scrollTarget,
+                    isStretchAllowed = isStretchAllowed,
+                    onStretchDistance = { _, _ -> }
+                )
+            }.getOrNull()
+        }
+    }
 
     @MainThread
     fun finishStretchViewport(view: View?) {
-        if (!isClosed) liquidRenderer?.finishStretchViewport(view)
+        if (isClosed) return
+        val renderer = liquidRenderer
+        if (renderer != null) renderer.finishStretchViewport(view)
+        else (view as? LiquidStretchViewport)?.finishStretch()
     }
 
     @MainThread

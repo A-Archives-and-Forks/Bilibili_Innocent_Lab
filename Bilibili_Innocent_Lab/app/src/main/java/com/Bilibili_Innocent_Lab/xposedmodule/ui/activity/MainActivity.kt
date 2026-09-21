@@ -460,6 +460,10 @@ class MainActivity : SkinnedActivity() {
     private var compatibilityChevron: View? = null
     private var compatibilityExpanded = false
 
+    /** 各可展开分节的形变驱动器，以内容 View 为键；视图树重建时随清场一并释放。 */
+    private val sectionExpansionControllers =
+        HashMap<View, SectionExpansionController>()
+
     /** 两个按用途拆分的进阶菜单，沿用同一属性动画。 */
     private var purificationSettingsRoot: View? = null
     private var enhancementSettingsRoot: View? = null
@@ -3368,64 +3372,34 @@ class MainActivity : SkinnedActivity() {
     /**
      * 二级菜单公共动效。
      *
-     * 旧实现用 ValueAnimator 每帧写 layoutParams.height，大型进阶菜单会让整棵设置树在
-     * 每一帧重新 measure/layout。这里改为一次正常布局后只更新 alpha/translationY；
-     * 两者均不触发布局，快速反复点击时先清理旧 listener 再取消动画，避免旧收起回调
-     * 把刚展开的内容重新设为 GONE。
+     * 动画由 [SectionExpansionController] 驱动：单一进度弹簧统一控制卡片 clipBounds、
+     * 内容行级联显影、兄弟控件滑行与箭头转角；布局全程保持展开态，p→0 收尾时
+     * GONE 与同帧 offsets 复位互相抵消——不再出现"占位瞬移 + 内容事后淡入"的割裂。
+     * 旧 ValueAnimator 逐帧写 layoutParams.height 的方案会让整棵设置树每帧重新
+     * measure/layout，已被放弃。
      */
     private fun animateSecondarySection(
         content: View,
         chevron: View,
         expanded: Boolean
     ) {
-        val contentAnimator = content.animate()
-        contentAnimator.setListener(null)
-        contentAnimator.cancel()
-        chevron.animate().cancel()
-        val density = resources.displayMetrics.density
-
-        if (expanded) {
-            content.visibility = View.VISIBLE
-            content.alpha = 0f
-            content.translationY = -8f * density
-            contentAnimator
-                .alpha(1f)
-                .translationY(0f)
-                // 让首次 VISIBLE 布局先独占一帧，动画从下一帧稳定起步。
-                .setStartDelay(16L)
-                .setDuration(260L)
-                .setInterpolator(secondaryExpandInterpolator)
-                .start()
-            chevron.animate()
-                .rotation(180f)
-                .setStartDelay(16L)
-                .setDuration(260L)
-                .setInterpolator(secondaryExpandInterpolator)
-                .start()
-        } else {
-            contentAnimator
-                .alpha(0f)
-                .translationY(-5f * density)
-                // ViewPropertyAnimator 会保留上一次 startDelay，收起时必须显式清零。
-                .setStartDelay(0L)
-                .setDuration(200L)
-                .setInterpolator(secondaryCollapseInterpolator)
-                .setListener(object : AnimatorListenerAdapter() {
-                    override fun onAnimationEnd(animation: Animator) {
-                        content.visibility = View.GONE
-                        content.alpha = 1f
-                        content.translationY = 0f
-                        content.animate().setListener(null)
-                    }
-                })
-                .start()
-            chevron.animate()
-                .rotation(0f)
-                .setStartDelay(0L)
-                .setDuration(200L)
-                .setInterpolator(secondaryCollapseInterpolator)
-                .start()
+        val card = content.parent as? ViewGroup
+        val contentGroup = content as? ViewGroup
+        if (card == null || contentGroup == null) {
+            content.visibility = if (expanded) View.VISIBLE else View.GONE
+            chevron.rotation = if (expanded) 180f else 0f
+            return
         }
+        val controller = sectionExpansionControllers.getOrPut(content) {
+            SectionExpansionController(
+                card = card,
+                content = contentGroup,
+                chevron = chevron,
+                density = resources.displayMetrics.density,
+                notifyPositionChanged = ::notifyPreparedSkinPositionChanged
+            )
+        }
+        controller.setExpanded(expanded)
     }
 
     override fun onStart() {
@@ -3910,6 +3884,8 @@ class MainActivity : SkinnedActivity() {
         enhancementAdvancedContent?.animate()?.setListener(null)
         enhancementAdvancedContent?.animate()?.cancel()
         enhancementAdvancedChevron?.animate()?.cancel()
+        sectionExpansionControllers.values.forEach { it.cancel() }
+        sectionExpansionControllers.clear()
         advancedCategorySections.values.forEach { section ->
             section.content.animate().setListener(null)
             section.content.animate().cancel()

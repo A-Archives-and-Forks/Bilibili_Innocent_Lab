@@ -74,6 +74,50 @@ class ModalMotionRefinementTest {
         assertEquals(160f, ModalTitleMotionSpec.interpolate(24f, 160f, 2f), 0f)
     }
 
+    @Test fun carrierSurfaceFollowsTheAnimatedCardRectInsteadOfTheWindow() {
+        // 形变期间可见表面是承载层的 background（全屏 View bounds）。若 drawable 按
+        // 全屏矩形绘制，模态描边与顶沿高光会绕窗口计算再被 outline 裁掉——"通透
+        // 光泽"要等动画播完、交还卡片自身 drawable 才出现（真机实测 pf 帧对比）。
+        // 修复是两通道同步：Liquid 经 LiquidMotionSurfaceFrameProvider 读形变
+        // 边界，Material 的 Drawable 读 bounds。
+        val layer = source("IconAnchoredMotionLayer")
+        assertTrue(layer.contains("LiquidMotionSurfaceFrameProvider"))
+        assertTrue(layer.contains("override fun copyLiquidMotionBounds"))
+        assertTrue(layer.contains("override fun liquidMotionCornerRadiusPx"))
+        assertTrue(layer.contains("override fun liquidMotionFallbackColor"))
+        val applyFrame = layer.substringAfter("fun applyFrame(")
+            .substringBefore("fun clearShape(")
+        assertTrue(applyFrame.contains("background?.setBounds("))
+        // 收起形变后必须复位：残留卡片矩形会让"下次常驻表面"按旧边界画。
+        val clearShape = layer.substringAfter("fun clearShape(")
+            .substringBefore("private fun updateRestingSurface(")
+        assertTrue(clearShape.contains("background?.setBounds(0, 0, width, height)"))
+        // 未成形时 provider 必须回报空矩形，否则常驻态会拿着空 bounds 走运动分支。
+        val provider = layer.substringAfter("override fun copyLiquidMotionBounds")
+            .substringBefore("override fun liquidMotionCornerRadiusPx")
+        assertTrue(provider.contains("shaped"))
+        assertTrue(provider.contains("setEmpty()"))
+    }
+
+    @Test fun carrierActiveKeepsCardOwnBackgroundOutOfTheFrame() {
+        // 模态表面是半透明玻璃后，承载层 drawable 与卡片自身背景两张同色同矩形
+        // 叠画会让填充越叠越实、描边越叠越亮，落定摘层时通透度跳回来。承载层
+        // 在场期间 contentBackground 必须归 0，只在承载层缺席的兜底路径上才按
+        // strokeAlpha 渐出。
+        val controller = source("IconAnchoredMotionController")
+        val apply = controller.substringAfter("private fun apply(")
+            .substringBefore("private fun finish(")
+        assertTrue(apply.contains("layer.background == null"))
+        val prep = controller.substringAfter("fun prepareFirstFrame(")
+            .substringBefore("fun startEntry(")
+        assertTrue(prep.contains("contentBackground?.alpha = 0"))
+        val exit = controller.substringAfter("private fun prepareExitFrame(")
+            .substringBefore("private fun animateTo(")
+        assertTrue(exit.contains("contentBackground?.alpha = 0"))
+        // 稳定端与硬关都要把卡片背景恢复回 255，不能留着 0 给复用 container 的路径。
+        assertTrue(controller.contains("contentBackground?.alpha = 255"))
+    }
+
     private fun source(name: String): String {
         val path = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/$name.kt"
         return sequenceOf(File(path), File("app/$path")).first(File::isFile).readText()

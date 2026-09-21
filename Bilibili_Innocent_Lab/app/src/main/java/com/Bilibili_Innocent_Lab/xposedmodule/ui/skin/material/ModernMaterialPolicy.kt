@@ -32,9 +32,13 @@ internal object ModernMaterialPolicy {
 
     fun surface(role: SurfaceRole, dark: Boolean): ModernSurfaceStyle {
         val tint = when (role) {
-            SurfaceRole.MODAL -> if (dark) 240 else 234
+            // 呼出面板与浮动条同一套"映射+薄罩"语言：透镜采样给出真实内容映射，
+            // 色罩保持较厚一档——采样源是未压暗的 pager，罩厚一点近似 scrim 的
+            // 压暗效果，面板内映射的亮度才不会比周围底色亮一截。
+            SurfaceRole.MODAL -> if (dark) 208 else 210
             // 悬浮表面叠了实时透镜采样，色罩要更薄才"通透"；可读性由模糊与折射保证而非遮盖。
-            SurfaceRole.FLOATING -> if (dark) 156 else 144
+            // 再压薄一档：提亮后的透镜纹理要在暗色内容下也能被看见，61% 的罩会把它埋掉。
+            SurfaceRole.FLOATING -> if (dark) 120 else 112
             SurfaceRole.TOP_BAR -> if (dark) 146 else 132
             SurfaceRole.SELECTED_ITEM -> if (dark) 218 else 210
             SurfaceRole.MOTION_SURFACE -> if (dark) 218 else 216
@@ -46,15 +50,21 @@ internal object ModernMaterialPolicy {
             SurfaceRole.TOP_BAR -> 0
             SurfaceRole.MODAL -> if (dark) 34 else 120
             SurfaceRole.SELECTED_ITEM -> if (dark) 16 else 60
+            // 悬浮条多一档顶沿高光：透镜是"玻璃"不是"雾"，边沿需要看得见的受光。
+            SurfaceRole.FLOATING -> if (dark) 56 else 140
             else -> if (dark) 26 else 112
         }
         val lower = when (role) {
             SurfaceRole.TOP_BAR -> 0
             SurfaceRole.MODAL -> if (dark) 14 else 28
             SurfaceRole.SELECTED_ITEM -> if (dark) 5 else 12
+            SurfaceRole.FLOATING -> if (dark) 16 else 32
             else -> if (dark) 10 else 24
         }
-        val live = role == SurfaceRole.FLOATING || role == SurfaceRole.TOP_BAR
+        // 呼出面板同样参与实时透镜采样：面板正下方就是被 scrim 压暗的 pager 内容，
+        // 映射后经较厚色罩压回 scrim 亮度，读作"内容透进磨砂"而不是一块死灰。
+        val live = role == SurfaceRole.FLOATING || role == SurfaceRole.TOP_BAR ||
+            role == SurfaceRole.MODAL
         return ModernSurfaceStyle(tint, upper, lower, live)
     }
 

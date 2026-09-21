@@ -160,6 +160,7 @@ internal class LiveBackdropSampler(private val density: Float) {
             pixels, sampleWidth, sampleHeight, LensRefractionPolicy.blurRadius(scale, density)
         )
         LensRefractionPolicy.remap(blurred, sampleWidth, sampleHeight, margin, out, outWidth, outHeight)
+        LensRefractionPolicy.illuminate(out)
         LensRefractionPolicy.unpremultiply(out)
         entry.texture?.setPixels(out, 0, outWidth, 0, 0, outWidth, outHeight)
         entry.valid = true

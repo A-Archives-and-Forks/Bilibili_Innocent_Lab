@@ -80,7 +80,8 @@ internal object LiquidVisualTuningPolicy {
             cardGlassAlpha = 0.26f,
             // 模态表面在弹窗里采的是已过滤的光学底图（无锐利文字），不再需要高不透明度
             // 来压透字——降回通透区间，让渐变/预模糊底图的空间感透上来。
-            modalGlassAlpha = 0.62f,
+            // 再减一档：玻璃层本身已按 glassContentAlpha 透出 scrim 压暗的底页。
+            modalGlassAlpha = 0.55f,
             motionGlassAlpha = 0.36f,
             cardFallbackAlpha = 0.72f,
             modalFallbackAlpha = 0.93f,
@@ -90,7 +91,9 @@ internal object LiquidVisualTuningPolicy {
     } else {
         LiquidVisualTuning(
             cardGlassAlpha = 0.30f,
-            modalGlassAlpha = 0.64f,
+            // 亮色模式底页被 scrim 压暗后透入会拉低面板明度，色罩比暗色留厚一档
+            // 保住文本对比度；通透仍由 glassContentAlpha 承担。
+            modalGlassAlpha = 0.60f,
             motionGlassAlpha = 0.40f,
             cardFallbackAlpha = 0.78f,
             modalFallbackAlpha = 0.94f,
@@ -113,9 +116,11 @@ internal object LiquidSurfaceAlphaPolicy {
         role == SurfaceRole.MOTION_SURFACE && translucentFallback ->
             parameters.fallbackMotionSurfaceAlpha
         role == SurfaceRole.MOTION_SURFACE -> parameters.motionSurfaceAlpha
+        // 浮动条走"更高级"的取色：玻璃层已按 glassContentAlpha 让真实下层参与，
+        // 色罩只需要一层极薄的中性染色——罩厚了会把透入的清晰内容重新糊掉。
         role == SurfaceRole.FLOATING -> if (translucentFallback)
-            (parameters.fallbackSurfaceAlpha + .06f).coerceAtMost(1f)
-            else (parameters.surfaceAlpha + .08f).coerceAtMost(1f)
+            (parameters.fallbackSurfaceAlpha + .03f).coerceAtMost(1f)
+            else (parameters.surfaceAlpha + .02f).coerceAtMost(1f)
         role == SurfaceRole.TOP_BAR -> if (translucentFallback)
             parameters.fallbackSurfaceAlpha else parameters.surfaceAlpha * .8f
         role == SurfaceRole.SELECTED_ITEM -> if (translucentFallback)
@@ -132,7 +137,13 @@ internal object LiquidSurfaceAlphaPolicy {
      * 普通卡片与模态层保持 1：它们的下层就是窗口底色，全不透反而更干净。
      */
     fun glassContentAlpha(role: SurfaceRole): Float = when (role) {
-        SurfaceRole.FLOATING -> 0.60f
+        // 0.42：58% 的真实下层内容透入——"对下取色"要看得见锐利内容，
+        // 而不是只剩一团模糊折射；折射层保留折射/散射的高光质感。
+        SurfaceRole.FLOATING -> 0.42f
+        // 呼出面板参考浮动条同一套"透出下层"做法：弹窗下面是 scrim 压暗的
+        // 底页，38% 透入读作通透玻璃而非灰蒙遮罩；模态行文本的可读性由
+        // scrim 自身的压暗与色罩兜底，不需要把玻璃层糊满。
+        SurfaceRole.MODAL -> 0.62f
         SurfaceRole.SELECTED_ITEM -> 0.55f
         else -> 1f
     }

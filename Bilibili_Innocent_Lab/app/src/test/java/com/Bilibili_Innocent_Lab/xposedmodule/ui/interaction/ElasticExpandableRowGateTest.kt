@@ -117,6 +117,9 @@ class ElasticExpandableRowGateTest {
     private fun diagnostics(): String = source(
         "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/DiagnosticsActivity.kt")
 
+    // 归一化 CRLF：autocrlf 检出会把源码写成 CRLF，substringBefore("\n    }\n")
+    // 这类按行锚定的切片会失配、静默退化成整文件尾部（assertTrue 假性通过）。
     private fun source(relative: String): String =
-        sequenceOf(File(relative), File("app/$relative")).first(File::isFile).readText()
+        sequenceOf(File(relative), File("app/$relative")).first(File::isFile)
+            .readText().replace("\r\n", "\n")
 }

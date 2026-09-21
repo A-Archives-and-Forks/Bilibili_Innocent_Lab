@@ -427,7 +427,9 @@ class LogSegmentScrubBar(context: Context, attrs: AttributeSet?) : FrameLayout(c
             centerX = glowX,
             centerY = glowY,
             barWidth = width,
-            barHeight = height
+            barHeight = height,
+            viewShiftX = translationX - initialOffsetX,
+            viewShiftY = translationY - initialOffsetY
         )
     }
 
@@ -488,6 +490,7 @@ class LogSegmentScrubBar(context: Context, attrs: AttributeSet?) : FrameLayout(c
         private var lastUpdateNanos = 0L
         private var lastOffsetX = 0f
         private var lastOffsetY = 0f
+        private val screenLoc = IntArray(2)
         private val focusPaint = Paint(Paint.ANTI_ALIAS_FLAG)
         private val outline = Outline()
         private val outlineRect = Rect()
@@ -538,7 +541,9 @@ class LogSegmentScrubBar(context: Context, attrs: AttributeSet?) : FrameLayout(c
             centerX: Float,
             centerY: Float,
             barWidth: Int,
-            barHeight: Int
+            barHeight: Int,
+            viewShiftX: Float = 0f,
+            viewShiftY: Float = 0f
         ) {
             val now = System.nanoTime()
             val dt = if (lastUpdateNanos == 0L) GlowState.DEFAULT_DT_SECONDS
@@ -552,11 +557,25 @@ class LogSegmentScrubBar(context: Context, attrs: AttributeSet?) : FrameLayout(c
             frame.velocityY = (offsetY - lastOffsetY) / elapsed
             lastOffsetX = offsetX
             lastOffsetY = offsetY
-            frame.centerX = centerX
-            frame.centerY = centerY
+            // 触点换算到当前系：glowX/Y 是按下时刻坐标系，bar 自身已平移 viewShift——
+            // 与 TouchHighlight 同一修正，避免视图平移被重复计入越界量与 room。
+            val touchX = centerX - viewShiftX
+            val touchY = centerY - viewShiftY
+            frame.centerX = touchX
+            frame.centerY = touchY
             frame.boundsWidth = barWidth.toFloat()
             frame.boundsHeight = barHeight.toFloat()
             frame.cornerRadius = trackCorner()
+            // 可触达空间：scrub 条贴近屏幕边缘时触点走不满 pileRefPx——
+            // 剩余空间交给策略层压缩满额行程，贴屏方向也能堆出完整"集中"。
+            getLocationOnScreen(screenLoc)
+            val metrics = resources.displayMetrics
+            frame.pileRoomPx = reachablePileRoomPx(
+                screenLoc[0], screenLoc[1],
+                screenLoc[0] + width, screenLoc[1] + height,
+                metrics.widthPixels, metrics.heightPixels,
+                touchX, touchY, barWidth.toFloat(), barHeight.toFloat()
+            )
             state.update(frame, dt, radius, SCRUB_GLOW_BASE_ALPHA, config)
             invalidate()
         }

@@ -20,6 +20,9 @@ internal interface LiquidBackendDriver : AutoCloseable {
      * 不支持方向光效的后端直接忽略。
      * [contentAlpha]：玻璃层输出不透明度。< 1 时真实下层内容参与合成（浮动表面
      * 借此透出下方滚动内容）；1 为全不透明，行为与旧版一致。
+     * [motionLite]：位移抑制期置 true——此时绑定的本就是平滑稳定底图，多次散射
+     * 取样没有收益；后端只保留单次取样与边缘光项，外观与静止态一致但逐像素
+     * 纹理成本降到约 1/5。不支持的分级后端直接忽略。
      */
     fun drawBackdrop(
         canvas: Canvas,
@@ -29,7 +32,8 @@ internal interface LiquidBackendDriver : AutoCloseable {
         viewY: Int,
         opticalIntensity: Float,
         stretchDirY: Float,
-        contentAlpha: Float
+        contentAlpha: Float,
+        motionLite: Boolean
     )
 }
 
@@ -48,7 +52,8 @@ internal class LiquidTranslucentBackend : LiquidBackendDriver {
         viewY: Int,
         opticalIntensity: Float,
         stretchDirY: Float,
-        contentAlpha: Float
+        contentAlpha: Float,
+        motionLite: Boolean
     ) = Unit
 
     override fun close() = Unit

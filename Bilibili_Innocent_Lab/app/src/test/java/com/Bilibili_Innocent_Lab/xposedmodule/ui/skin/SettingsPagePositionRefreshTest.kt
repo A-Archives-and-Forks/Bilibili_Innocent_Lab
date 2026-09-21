@@ -50,13 +50,20 @@ class SettingsPagePositionRefreshTest {
     @Test fun positionBridgeReusesOriginComparisonWithoutRequestingPixelCopyOrRebuildingBackgrounds() {
         val renderer = source("skin/liquid/LiquidActivityRenderer")
         val notify = function(renderer, "fun notifyPositionChanged()")
-        assertEquals("{\n        invalidateMovedSurfaces()\n    }", notify.replace("\r\n", "\n"))
+        assertTrue(notify.contains("queueSurfaceRefresh(contentChanged = false)"))
+        // 显式变换回调不得直接抑制采样：按下缩放绕中心进行、表面原点不变，
+        // 此刻换底图只是白闪一次（2026-09-21 真机实证：点击也会出现高光重载）。
+        // 真实位移由 flushSurfaceRefresh 按原点变化门控后再触发抑制。
+        assertFalse(notify.contains("suppressRealtimeSamplingWhileScrolling"))
+        assertFalse(notify.contains("PixelCopy"))
+        assertFalse(notify.contains("rebuildBackdrop("))
         val moved = function(renderer, "private fun invalidateMovedSurfaces()")
         assertTrue(moved.contains("queueSurfaceRefresh(contentChanged = false)"))
         val flush = function(renderer, "private fun flushSurfaceRefresh(windowRoot: View)")
         assertTrue(flush.contains("if (closed) return"))
         assertTrue(flush.contains("isSurfacePotentiallyVisible(view)"))
-        assertTrue(flush.contains("originChanged = !entry.value.matchesOrigin("))
+        assertTrue(flush.contains("!entry.value.matchesOrigin("))
+        assertTrue(flush.contains("suppressRealtimeSamplingWhileScrolling()"))
         // 2026-09-20：回弹边界环移除，flush 不再刷新 stretch viewport 的边界记录。
         assertFalse(flush.contains("stretchViewports"))
         assertFalse(moved.contains("invalidateRegisteredSurfaces("))

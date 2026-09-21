@@ -199,7 +199,7 @@ class AdaptiveGlowPolicyTest {
         assertTrue(atEdge.shape.visible)
         assertTrue("贴边前移必须随尺寸收缩", atEdge.shape.coreOffsetX <= config.coreShiftMaxPx * GlowConfig.EDGE_MIN_SCALE + 1e-3f)
 
-        // 半 band 处稳定形变：前移与半径同乘 edgeScale（≈0.675），不到满额
+        // 半 band 处稳定形变：前移与半径同乘 edgeScale（≈0.85，下限已与堆积目标对齐），不到满额
         val nearEdge = GlowState()
         run(nearEdge, frames = 30, dt = 1f / 120f) { holder ->
             holder.press = 1f
@@ -212,8 +212,8 @@ class AdaptiveGlowPolicyTest {
             holder.cornerRadius = cornerPx
         }
         assertTrue(nearEdge.shape.visible)
-        assertTrue("贴边衰减必须同时收前移", nearEdge.shape.coreOffsetX < config.coreShiftMaxPx * 0.75f)
-        assertTrue(nearEdge.shape.coreOffsetX > config.coreShiftMaxPx * 0.5f)
+        assertTrue("贴边衰减必须同时收前移", nearEdge.shape.coreOffsetX < config.coreShiftMaxPx * 0.95f)
+        assertTrue(nearEdge.shape.coreOffsetX > config.coreShiftMaxPx * 0.72f)
     }
 
     @Test fun edgeProximityFadesAlphaContinuously() {

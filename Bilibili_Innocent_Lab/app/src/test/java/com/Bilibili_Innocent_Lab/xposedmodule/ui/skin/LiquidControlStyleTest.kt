@@ -71,7 +71,8 @@ class LiquidControlStyleTest {
         // 2026-09-20：液态玻璃并入柔光美学，「界面美学」单选弹窗被「高级材质」开关取代，
         // 弹窗总数 34 → 33。
         assertEquals(33, dialogs)
-        assertTrue(SettingsUiSource.function("showSettingsFavoritesDialog").contains("presentModalDialog(dialog, container, anchor)"))
+        // 「管理常用」改用定宽 presentSizedModalDialog（EXACTLY 行宽保证把手钉右缘）。
+        assertTrue(SettingsUiSource.function("showSettingsFavoritesDialog").contains("presentSizedModalDialog(dialog, container, width, anchor)"))
         val presenter = SettingsUiSource.function("presentSizedModalDialog")
         assertTrue(presenter.indexOf("stylePreparedSkinControls(container)") in 0 until presenter.indexOf("dialog.show()"))
         // 面板与底页分离：窗口内必须有随动画进度淡入的压暗层（平台 dim 不可动画，

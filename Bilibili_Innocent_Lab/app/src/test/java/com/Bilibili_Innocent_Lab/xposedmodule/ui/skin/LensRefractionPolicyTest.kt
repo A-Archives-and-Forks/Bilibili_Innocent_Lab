@@ -73,11 +73,25 @@ class LensRefractionPolicyTest {
         assertTrue((pixels[2] shr 16 and 0xFF) >= 0xFE)
     }
 
-    @Test fun onlyFloatingAndTopBarUseTheLiveBackdrop() {
+    @Test fun illuminateLiftsPremultipliedChannelsAndKeepsAlpha() {
+        val pixels = intArrayOf(0xFF102030.toInt(), 0x80FF0000.toInt(), 0x00000000, 0xFFF0F0F0.toInt())
+        LensRefractionPolicy.illuminate(pixels)
+        // 提亮只动预乘 RGB：alpha 通道原样保留，全透明像素不产出颜色。
+        assertEquals(0xFF, pixels[0] ushr 24)
+        assertTrue((pixels[0] ushr 16 and 255) > 0x10)
+        assertTrue((pixels[0] and 255) > 0x30)
+        assertEquals(0x80, pixels[1] ushr 24)
+        assertEquals(0, pixels[2])
+        // 接近满亮的像素被钳到 255，不溢出回绕。
+        assertEquals(0xFFFFFFFF.toInt(), pixels[3])
+    }
+
+    @Test fun onlyFloatingTopBarAndModalUseTheLiveBackdrop() {
         for (dark in listOf(false, true)) {
             for (role in SurfaceRole.values()) {
                 val style = ModernMaterialPolicy.surface(role, dark)
-                val expected = role == SurfaceRole.FLOATING || role == SurfaceRole.TOP_BAR
+                val expected = role == SurfaceRole.FLOATING || role == SurfaceRole.TOP_BAR ||
+                    role == SurfaceRole.MODAL
                 assertEquals(role.name, expected, style.live)
             }
         }

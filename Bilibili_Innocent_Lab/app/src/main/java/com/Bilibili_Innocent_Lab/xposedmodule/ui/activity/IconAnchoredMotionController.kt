@@ -102,6 +102,11 @@ internal class IconAnchoredMotionController(
         contentElevation = content.elevation
         content.elevation = 0f
         layer.background = if (layer.usesPersistentSurface) null else surfaceDrawable
+        // 承载层在场期间卡片自身背景必须彻底让位：模态表面已是半透明玻璃
+        // （glassContentAlpha<1），两张同色同矩形的 drawable 叠画会让填充/描边
+        // 在深动画后半程越叠越实，落定摘层时通透度"啪"地跳回来（实测内部亮度
+        // 动画期 ~50、终态 ~24）。描边由承载层按同一矩形同半径画出，交接无跳变。
+        contentBackground?.alpha = 0
         // 不要给承载层设 elevation。2026-09-17 真机实测：稳定态的卡片**根本不投影**
         // （底边外 0..60px 亮度恒为 70，与背景一致）——它的背景 drawable 没有提供 outline。
         // 而承载层有自绘 outline，一旦给它 elevation 就会在形变期间投出一片阴影，
@@ -280,6 +285,9 @@ internal class IconAnchoredMotionController(
         contentElevation = content.elevation.takeIf { it > 0f } ?: contentElevation
         content.elevation = 0f
         layer.background = if (layer.usesPersistentSurface) null else surfaceDrawable
+        // 与入场同一条纪律：承载层接管表面期间卡片自身背景归 0，否则收起起点
+        // （expansion=1）那一帧两张半透明表面叠满，比稳定态更不透。
+        contentBackground?.alpha = 0
         layer.blockInteraction = true
         titleMotion?.captureTargetPosition()
         titleMotion?.prepare(expansion)
@@ -354,7 +362,11 @@ internal class IconAnchoredMotionController(
         layer.applyFrame(frame.left, frame.top, frame.right, frame.bottom, frame.radiusPx)
         layer.alpha = frame.surfaceAlpha
         content.alpha = frame.contentAlpha
-        contentBackground?.alpha = (frame.strokeAlpha * 255f).roundToInt().coerceIn(0, 255)
+        // 承载层表面在场时卡片背景保持让位（半透明表面叠两层会明显更不透）；
+        // 承载层缺席的极端路径仍按 strokeAlpha 渐出，行为与旧版一致。
+        contentBackground?.alpha = if (layer.background == null) {
+            (frame.strokeAlpha * 255f).roundToInt().coerceIn(0, 255)
+        } else 0
         onFrame(clamped)
         content.translationX = frame.contentTranslationXPx
         content.translationY = frame.contentTranslationYPx

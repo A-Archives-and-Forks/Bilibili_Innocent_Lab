@@ -13,6 +13,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid.LiquidMotionSurfaceFrameProvider
 import com.highcapable.betterandroid.ui.extension.view.child
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -32,9 +33,9 @@ import kotlin.math.floor
 internal class IconAnchoredMotionLayer(
     context: Context,
     surfaceBackground: Drawable? = null,
-    fallbackColor: Int = 0,
+    private val fallbackColor: Int = 0,
     private val surfaceRadiusPx: Float = 0f
-) : FrameLayout(context) {
+) : FrameLayout(context), LiquidMotionSurfaceFrameProvider {
 
     // 覆盖式子面板始终由同一个表面画填充和描边；只裁正文，不裁表面自身的抗锯齿边缘。
     // 复用气泡的皮肤桥接，Liquid 仍从真实 View 取得位置与刷新登记。
@@ -101,6 +102,15 @@ internal class IconAnchoredMotionLayer(
         motionBounds.set(left, top, right, bottom)
         motionRadius = normalizedRadius
         shaped = true
+        // 表面 drawable 的绘制几何跟随形变矩形：挂在承载层上的 background 默认按
+        // 全屏 View bounds 绘制，模态描边/顶沿高光会绕窗口矩形计算再被 outline
+        // 裁掉——形变全程卡片上看不到边缘光，落定交还卡片自身 drawable 才出现
+        // （"通透效果等动画播完才加载"的割裂）。Liquid 经 provider 读同一份
+        // 形变边界，Material 的 Drawable 读 bounds，两条通道同步同一矩形。
+        background?.setBounds(
+            floor(motionBounds.left).toInt(), floor(motionBounds.top).toInt(),
+            ceil(motionBounds.right).toInt(), ceil(motionBounds.bottom).toInt()
+        )
         if (usesPersistentSurface) {
             // 表面直接画当前尺寸的圆角和描边，不能再被父层 outline 二次裁切。
             clipToOutline = false
@@ -130,6 +140,8 @@ internal class IconAnchoredMotionLayer(
         motionBounds.setEmpty()
         motionRadius = 0f
         contentClip.rewind()
+        // 形变矩形已摘下：表面 drawable 的几何回归 View bounds（若有残留 background）。
+        background?.setBounds(0, 0, width, height)
         updateRestingSurface()
         invalidateOutline()
         invalidate()
@@ -163,4 +175,16 @@ internal class IconAnchoredMotionLayer(
     }
 
     override fun onInterceptTouchEvent(event: MotionEvent): Boolean = blockInteraction
+
+    // LiquidMotionSurfaceFrameProvider：Liquid 表面 drawable 在 draw 时读取形变矩形，
+    // 描边、顶沿高光与光学采样原点都按运动中的卡片几何落位，而不是承载层全屏矩形。
+    // 未成形（shaped=false）时返回空矩形，drawable 退回 View bounds 的正常路径。
+    override fun copyLiquidMotionBounds(outBounds: RectF) {
+        if (shaped) outBounds.set(motionBounds) else outBounds.setEmpty()
+    }
+
+    override fun liquidMotionCornerRadiusPx(): Float =
+        if (shaped) motionRadius else surfaceRadiusPx
+
+    override fun liquidMotionFallbackColor(): Int = fallbackColor
 }

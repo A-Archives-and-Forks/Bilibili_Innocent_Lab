@@ -79,15 +79,22 @@ class LiquidTokenResolverTest {
     fun `floating surfaces composite over real content while solids stay opaque`() {
         // "对下取色"（2026-09-21）：底部导航胶囊/选中滑块这类浮在滚动内容上的表面，
         // 玻璃层必须以部分 alpha 输出，真实下层内容才能透入合成——只折射合成底图
-        // 永远拿不到底下的列表内容。卡片/模态层下层就是窗口底色，保持全不透明。
+        // 永远拿不到底下的列表内容。呼出面板同理透入 scrim 压暗的底页；
+        // 卡片/顶栏下层就是窗口底色，保持全不透明。
         assertTrue(LiquidSurfaceAlphaPolicy.glassContentAlpha(SurfaceRole.FLOATING) < 1f)
         assertTrue(LiquidSurfaceAlphaPolicy.glassContentAlpha(SurfaceRole.SELECTED_ITEM) < 1f)
+        // 呼出面板与浮动条同一套做法：透出 scrim 压暗后的底页，读作通透玻璃。
+        assertTrue(LiquidSurfaceAlphaPolicy.glassContentAlpha(SurfaceRole.MODAL) < 1f)
         assertEquals(1f, LiquidSurfaceAlphaPolicy.glassContentAlpha(SurfaceRole.CARD), 0f)
-        assertEquals(1f, LiquidSurfaceAlphaPolicy.glassContentAlpha(SurfaceRole.MODAL), 0f)
         assertEquals(1f, LiquidSurfaceAlphaPolicy.glassContentAlpha(SurfaceRole.TOP_BAR), 0f)
         // 透出量必须够明显——只留一层近乎不可见的膜不算"通透"。
         assertTrue(LiquidSurfaceAlphaPolicy.glassContentAlpha(SurfaceRole.FLOATING) <= 0.7f)
         assertTrue(LiquidSurfaceAlphaPolicy.glassContentAlpha(SurfaceRole.SELECTED_ITEM) <= 0.7f)
+        // 模态层透入的是被 scrim 压暗的内容，通透性可以比浮动条更收一些，
+        // 但要留下可读出的下层映射。
+        assertTrue(LiquidSurfaceAlphaPolicy.glassContentAlpha(SurfaceRole.MODAL) <= 0.75f)
+        assertTrue(LiquidSurfaceAlphaPolicy.glassContentAlpha(SurfaceRole.MODAL) >
+            LiquidSurfaceAlphaPolicy.glassContentAlpha(SurfaceRole.FLOATING))
     }
 
     @Test

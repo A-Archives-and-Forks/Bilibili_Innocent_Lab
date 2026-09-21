@@ -68,6 +68,31 @@ internal class GlowFrame {
     var boundsWidth = 0f
     var boundsHeight = 0f
     var cornerRadius = 0f
+    /**
+     * 越界方向上"控件边缘 → 屏幕边缘"的可触达空间（px），由 [reachablePileRoomPx] 计算。
+     * +∞（默认）= 不限空间，堆积满额行程就是 pileRefPx；控件贴屏幕边缘时调用方喂入
+     * 实际剩余空间，满额行程随之压缩——剩余空间内也能堆出完整"集中"。
+     */
+    var pileRoomPx = Float.POSITIVE_INFINITY
+}
+
+/**
+ * 触点已越界的各轴上"控件边缘 → 屏幕边缘"的可触达距离（px），取最小值；
+ * 触点仍在轮廓内时返回 +∞。斜向越界取两轴较小值（更近的屏幕缘先截断行程）。
+ * 仅做几何运算，不依赖 android 类型——可在 JVM 单测里直接跑。
+ */
+internal fun reachablePileRoomPx(
+    viewScreenLeft: Int, viewScreenTop: Int, viewScreenRight: Int, viewScreenBottom: Int,
+    screenWidth: Int, screenHeight: Int,
+    touchLocalX: Float, touchLocalY: Float,
+    boundsWidth: Float, boundsHeight: Float
+): Float {
+    var room = Float.POSITIVE_INFINITY
+    if (touchLocalX < 0f) room = minOf(room, viewScreenLeft.toFloat())
+    if (touchLocalX > boundsWidth) room = minOf(room, (screenWidth - viewScreenRight).toFloat())
+    if (touchLocalY < 0f) room = minOf(room, viewScreenTop.toFloat())
+    if (touchLocalY > boundsHeight) room = minOf(room, (screenHeight - viewScreenBottom).toFloat())
+    return room.coerceAtLeast(0f)
 }
 
 /**
@@ -92,7 +117,8 @@ internal class GlowConfig(
     val axialBoost: Float,
     val coreShiftMaxPx: Float,
     val oriented: Boolean = true,
-    val pileRefPx: Float = 0f
+    val pileRefPx: Float = 0f,
+    val pileGain: Float = PILE_GAIN
 ) {
     companion object {
         const val VELOCITY_EPS_DP_PER_SEC = 20f
@@ -118,7 +144,14 @@ internal class GlowConfig(
         const val SPD_GAIN = 0.15f
         const val PRESS_SHARE = 0.55f
         const val STRETCH_MAX = 0.45f
-        const val EDGE_MIN_SCALE = 0.35f
+        /**
+         * 贴边收缩下限。**必须等于 [PILE_RECOVER]**（由 `edgeFloorEqualsThePileTarget`
+         * 测试钉住）：越界堆积会把光团尺度收敛到 PILE_RECOVER·R，本值更低 ⇒ 跨界瞬间
+         * 等效半径先跌到下限、再由堆积拉回——正是"刚出界先缩小、再被集中放大"的 V 形
+         * 割裂（用户 2026-09-21 反馈）。相等 ⇒ 尺寸恰在轮廓处连续：界内 1.0→0.70
+         * 单调收缩，界外定住，堆积只改形状与亮度。
+         */
+        const val EDGE_MIN_SCALE = 0.70f
         /**
          * 贴边 alpha 下限。旧实现在轮廓处衰减到 0，触点一出控件光晕就消失——正是要改掉的
          * 现象（用户 2026-09-21："手势完全超出底栏它就不显示了"）。轮廓外的半个光晕由
@@ -134,10 +167,22 @@ internal class GlowConfig(
          * 面积不变，所以 rx·ry ≤ r² 的渲染护栏不受影响。
          */
         const val PILE_SPREAD = 0.45f
-        /** 堆积满额时光团尺度至少回到基准半径的这么多（贴边收缩到 EDGE_MIN_SCALE 后由堆积重新撑起）。 */
+        /**
+         * 堆积收敛目标：光团尺度（等效半径 iso = √rx·ry）向 R·PILE_RECOVER 收敛。
+         * 取向模型跨界前已由 EDGE_MIN_SCALE（同值）落在这个尺度上，堆积段只换形状；
+         * 流动模型界内半径更大（≈R·(1+0.45·stretch)），堆积时同步收小——"集中"
+         * 必须读得出聚拢，不能只靠压扁与增亮。
+         */
         const val PILE_RECOVER = 0.70f
         /** 堆积量低通（秒）：跨过轮廓瞬间与手指抖动都不该让形状跳变。 */
         const val TAU_PILE_SECONDS = 0.09f
+        /**
+         * 堆积满额行程低通（秒）。span 由"已越界轴集合的可触达空间 min"决定——弧形路径上
+         * 第二根轴越界/回界的瞬间集合成员变化会让 span 硬跳（如 216→40→216），pileTarget
+         * 跟着跳、靠 pileEma 快爬，读作一次强度跳变（用户 2026-09-21 抓帧实证）。span 本身
+         * 先低通，集合切换与 room 变化都铺成平滑滑动。
+         */
+        const val TAU_PILE_SPAN_SECONDS = 0.14f
         const val TAU_SPEED_SECONDS = 0.060f
         const val TAU_DIR_SECONDS = 0.025f
         const val TAU_TAIL_SECONDS = 0.040f
@@ -179,7 +224,8 @@ internal class GlowConfig(
             edgeBandPx: Float,
             axialBoost: Float = AXIAL_BOOST,
             oriented: Boolean = true,
-            pileRefDp: Float = PILE_REF_DP
+            pileRefDp: Float = PILE_REF_DP,
+            pileGain: Float = PILE_GAIN
         ): GlowConfig {
             val scale = if (density.isFinite() && density > 0f) density else 1f
             return GlowConfig(
@@ -192,7 +238,8 @@ internal class GlowConfig(
                 axialBoost = axialBoost,
                 coreShiftMaxPx = CORE_SHIFT_MAX_DP * scale,
                 oriented = oriented,
-                pileRefPx = pileRefDp * scale
+                pileRefPx = pileRefDp * scale,
+                pileGain = pileGain
             )
         }
     }
@@ -220,6 +267,7 @@ internal class GlowState {
     private var tailVecX = 0f
     private var tailVecY = 0f
     private var pileEma = 0f
+    private var pileSpanEma = Float.NaN
     private val normal = FloatArray(2)
 
     val shape = GlowShape()
@@ -243,6 +291,7 @@ internal class GlowState {
         tailVecX = 0f
         tailVecY = 0f
         pileEma = 0f
+        pileSpanEma = Float.NaN
         shape.reset()
     }
 
@@ -403,7 +452,16 @@ internal class GlowState {
         // 堆积：触点越出轮廓的距离经 smoothStep 与低通得到 0..1 的堆积量。
         // 边界有效且 pileRefPx > 0 才算；否则恒为 0，下面所有堆积项都退化为直通。
         val overshoot = if (boundsWidth > 0f && boundsHeight > 0f) signedDistance.coerceAtLeast(0f) else 0f
-        val pileTarget = if (config.pileRefPx > 0f) smoothStep(0f, config.pileRefPx, overshoot) else 0f
+        // 满额行程按可触达空间压缩：控件贴屏幕边缘时手指走不满 pileRefPx，
+        // 剩多少空间就用多少——贴边控件照样堆出完整"集中"，强弱不再随可用空间忽变
+        // （用户 2026-09-21：贴右侧屏缘拖拽时光效强弱随行程上限忽强忽弱）。
+        val room = if (frame.pileRoomPx.isFinite()) frame.pileRoomPx.coerceAtLeast(0f) else Float.POSITIVE_INFINITY
+        val spanTarget = minOf(config.pileRefPx, room).coerceAtLeast(MIN_PILE_SPAN_PX)
+        // span 过低通：room 由"已越界轴集合"的 min 给出，第二根轴越界/回界时集合成员
+        // 变化会让 span 硬跳（弧形路径上每周期 216↔40 实测），pileTarget 随之跳变。
+        if (!pileSpanEma.isFinite()) pileSpanEma = spanTarget
+        pileSpanEma += (spanTarget - pileSpanEma) * blendFactor(dt, GlowConfig.TAU_PILE_SPAN_SECONDS)
+        val pileTarget = if (config.pileRefPx > 0f) smoothStep(0f, pileSpanEma, overshoot) else 0f
         pileEma += (pileTarget - pileEma) * blendFactor(dt, GlowConfig.TAU_PILE_SECONDS)
         val pile = pileEma.coerceIn(0f, 1f)
 
@@ -455,14 +513,16 @@ internal class GlowState {
                     // 尺寸与长短轴比分开算：面积 = iso²（iso ≤ 基准半径），长短轴比在对数空间里
                     // 从当前值滑向 1/spreadFactor——沿法向压扁、沿切向铺开。
                     var iso = sqrt(radiusX) * sqrt(radiusY)
-                    iso = maxOf(iso, iso + (radius * GlowConfig.PILE_RECOVER - iso) * pile)
+                    // 双向收敛到 PILE_RECOVER·R：比目标小的（取向模型旧路径）撑起，
+                    // 比目标大的（流动模型界内光团）收拢——两个方向都是单调收敛，无回涨。
+                    iso += (radius * GlowConfig.PILE_RECOVER - iso) * pile
                     val spreadFactor = 1f + GlowConfig.PILE_SPREAD * pile
                     val aniso = sqrt(radiusX / radiusY).coerceIn(1e-3f, 1e3f).pow(1f - pile) / spreadFactor
                     radiusX = iso * aniso
                     radiusY = iso / aniso
                 }
                 coreOffsetX *= 1f - pile
-                alphaUnit *= 1f + GlowConfig.PILE_GAIN * pile
+                alphaUnit *= 1f + config.pileGain * pile
             }
         }
 
@@ -487,6 +547,8 @@ internal class GlowState {
         private const val UNIT_EPS = 1e-4f
         private const val ANGLE_UNIT_EPS = 1e-4f
         private const val RADIUS_EPS = 1e-3f
+        /** 可触达空间为 0 时 smoothStep 的退化护栏；此时越界物理上不可达，任意小值即可。 */
+        private const val MIN_PILE_SPAN_PX = 0.5f
     }
 }
 

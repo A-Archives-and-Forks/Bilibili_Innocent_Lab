@@ -159,6 +159,9 @@ abstract class SkinnedActivity : AppViewsActivity() {
                         .coerceIn((20 * density).toInt(), (26 * density).toInt())
                     view.buttonTintList = null
                     view.buttonDrawable = choice(size, size, checkbox = true)
+                    // 框架默认 background 是 40dp 的按压涟漪（control_background_40dp_material），
+                    // 勾选时会在按钮周围开一块浅色遮罩——皮肤接管视觉后这块就是杂讯，去掉。
+                    view.background = null
                 }
                 is EditText -> {
                     view.backgroundTintList = null

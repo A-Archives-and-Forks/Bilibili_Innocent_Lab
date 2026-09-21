@@ -31,6 +31,12 @@ internal object LensRefractionPolicy {
     const val RIM_START = 0.62f
     const val RIM_PUSH_X = 0.10f
     const val RIM_PUSH_Y = 0.34f
+    /**
+     * 磨砂提亮（预乘空间）：真实磨砂会把环境光散进表面，暗色内容下的映射才肉眼可辨；
+     * 底光按 alpha 缩放，保持预乘一致性。
+     */
+    const val LUMINANCE_GAIN = 1.08f
+    const val LUMINANCE_BIAS = 10f
 
     /** 整数缩放因子：表面越大缩得越狠，位图像素数恒有界。 */
     fun sampleScale(widthPx: Int, heightPx: Int): Int {
@@ -95,6 +101,20 @@ internal object LensRefractionPolicy {
             val r = ((c ushr 16) and 255) * a / 255
             val g = ((c ushr 8) and 255) * a / 255
             val b = (c and 255) * a / 255
+            pixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
+        }
+    }
+
+    /** 预乘 RGB 提亮：增益拉开明暗差，底光让纯暗区也带一点磨砂灰，输入输出同为预乘。 */
+    fun illuminate(pixels: IntArray) {
+        for (i in pixels.indices) {
+            val c = pixels[i]
+            val a = c ushr 24
+            if (a == 0) continue
+            val bias = LUMINANCE_BIAS * a / 255f
+            val r = ((c ushr 16 and 255) * LUMINANCE_GAIN + bias).toInt().coerceAtMost(255)
+            val g = ((c ushr 8 and 255) * LUMINANCE_GAIN + bias).toInt().coerceAtMost(255)
+            val b = ((c and 255) * LUMINANCE_GAIN + bias).toInt().coerceAtMost(255)
             pixels[i] = (a shl 24) or (r shl 16) or (g shl 8) or b
         }
     }

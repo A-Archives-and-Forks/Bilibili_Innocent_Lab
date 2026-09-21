@@ -170,6 +170,11 @@ internal class LiquidActivityRenderer(
         strokeWidth = parameters.highlightWidthDp * density
         shader = modalEdgeShader
     }
+    // 廉价路径的光晕带描边：无 shader 的均匀白，模拟折射 rim 的 Fresnel 圈。
+    private val edgeBandPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = Color.WHITE
+    }
     private val rootFallbackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = palette.background
     }
@@ -464,9 +469,11 @@ internal class LiquidActivityRenderer(
         if (abs(next - stretchOpticalIntensity) < 0.004f && nextDir == stretchEdgeDirY) return
         stretchOpticalIntensity = next
         stretchEdgeDirY = nextDir
-        // 拉伸同样在移动内容：已绑定的截屏帧立刻过期，按滚动同一规则抑制实时采样。
+        // 回弹不切换采样路径：玻璃覆盖区在截屏里本就被抑制遮罩换成稳定底图，过期
+        // 像素进不了表面；而切到光学直采会让整圈边缘光在两条路径间乒乓闪烁
+        // （2026-09-21 真机实证）。保持折射路径，方向性增益照常点亮回弹侧边缘。
+        // 位移时间戳照常更新：若页面滑动已使抑制生效，回弹位移会顺延静默窗口。
         lastContentShiftNanos = System.nanoTime()
-        suppressRealtimeSamplingWhileScrolling()
         invalidateRegisteredSurfaces()
     }
 
@@ -559,17 +566,31 @@ internal class LiquidActivityRenderer(
         // 弹窗等外部窗口里的表面不能折射实时截屏：PixelCopy 只抓 Activity 窗口，
         // 采样到的是未被压暗/模糊的锐利底页，文字会穿透面板与内部控件混排。
         // 改采稳定底图的光学副本（默认渐变或预模糊自定义图），得到干净的磨砂分层。
+        // 位移抑制期不走直采路径：驱动层已绑到稳定底图，shader 以 motionLite 单
+        // 取样模式跑——折射弯曲对平滑底图无收益，但边缘光/通透全程与静止态一致，
+        // 不再出现"切页瞬间高光消失再加载"的路径切换跳变（2026-09-21 真机实证）。
         val foreignWindow = host != null && host.rootView !== boundRoot?.rootView
+        if (role == SurfaceRole.MODAL) {
+            android.util.Log.d(
+                "ModalGlass",
+                "draw host=${host?.javaClass?.simpleName} bounds=$bounds " +
+                    "r=$effectiveRadiusPx alpha=$alpha foreign=$foreignWindow " +
+                    "off=${viewX - rootScreenLocation[0]},${viewY - rootScreenLocation[1]}"
+            )
+        }
         drawWithFallback { driver ->
             if (driver.backend != LiquidRenderBackend.TRANSLUCENT) {
                 if (foreignWindow) {
+                    // 填充透明度沿用折射路径的 glassContentAlpha：浮动条透出
+                    // 真实下层内容，"对下取色"与主窗口一致。
                     backdropSource?.takeIf { !it.isClosed }?.drawOpticalRegion(
                         canvas = canvas,
                         localBounds = bounds,
                         radiusPx = effectiveRadiusPx,
                         rootOffsetX = (viewX - rootScreenLocation[0]).toFloat(),
                         rootOffsetY = (viewY - rootScreenLocation[1]).toFloat(),
-                        alpha = 255
+                        alpha = (LiquidSurfaceAlphaPolicy.glassContentAlpha(role) * 255f)
+                            .roundToInt()
                     )
                 } else {
                     checkNotNull(realtimeBackdropSource ?: backdropSource) {
@@ -582,12 +603,17 @@ internal class LiquidActivityRenderer(
                         viewX - rootScreenLocation[0],
                         viewY - rootScreenLocation[1],
                         if (effectProfile == LiquidEffectProfile.REALTIME_CAPTURE) {
-                            stretchOpticalIntensity
+                            // 浮动条常驻一档折射强度：真实下层透入时折射弯曲可见，
+                            // 是"有光感的玻璃"而非磨砂贴片；回弹增益仍可继续叠上去。
+                            if (role == SurfaceRole.FLOATING) {
+                                maxOf(stretchOpticalIntensity, FLOATING_OPTICAL_FLOOR)
+                            } else stretchOpticalIntensity
                         } else 1f,
                         if (effectProfile == LiquidEffectProfile.REALTIME_CAPTURE) {
                             stretchEdgeDirY
                         } else 0f,
-                        LiquidSurfaceAlphaPolicy.glassContentAlpha(role)
+                        LiquidSurfaceAlphaPolicy.glassContentAlpha(role),
+                        motionLite = realtimeSamplingSuppressed
                     )
                 }
             }
@@ -598,7 +624,8 @@ internal class LiquidActivityRenderer(
                 alpha = alpha,
                 fallbackColor = fallbackColor,
                 role = role,
-                translucentFallback = driver.backend == LiquidRenderBackend.TRANSLUCENT
+                translucentFallback = driver.backend == LiquidRenderBackend.TRANSLUCENT,
+                luminousEdge = foreignWindow
             )
         }
         scheduleHealthConfirmationAfterDraw()
@@ -611,7 +638,8 @@ internal class LiquidActivityRenderer(
         alpha: Int,
         fallbackColor: Int,
         role: SurfaceRole,
-        translucentFallback: Boolean
+        translucentFallback: Boolean,
+        luminousEdge: Boolean = false
     ) {
         val surfaceFraction = LiquidSurfaceAlphaPolicy.resolve(
             role = role,
@@ -635,10 +663,20 @@ internal class LiquidActivityRenderer(
         val edgeAlpha = (parameters.highlightAlpha *
             LiquidSurfaceEdgePolicy.alphaMultiplier(role) * alpha).toInt().coerceIn(0, 255)
         val inset = outlinePaint.strokeWidth * 0.5f
-        if (role == SurfaceRole.MODAL) {
+        // 光学直采路径（位移抑制/外部窗口）不跑折射 shader：菲涅尔/镜面/焦散那条
+        // 边缘光晕带整条缺席，只剩细描边——切页瞬间所有控件"边缘高光消失再加载"
+        // 的观感正源于此。此路径统一改走顶沿提亮渐变描边，保留"边缘有光"的读感。
+        val useLuminousEdge = edgeAlpha > 0 &&
+            (luminousEdge || role == SurfaceRole.MODAL || role == SurfaceRole.FLOATING)
+        if (useLuminousEdge) {
             // 高光收进边框线条：顶沿提亮、固定行程内落回基础描边色。
             // paint.alpha 对 shader 输出整体缩放，逐帧只改 alpha 与平移。
-            modalEdgePaint.alpha = (edgeAlpha * MODAL_EDGE_TOP_BOOST).toInt().coerceIn(0, 255)
+            // 浮动条共享同一套"光从顶沿沉入边框"的语言，与模态、勾选控件一致。
+            // 廉价路径上普通角色的提亮收敛到 OPTICAL_EDGE_TOP_BOOST：真实折射 rim
+            // 只有 1~2% 白度，过强的顶沿高光会读成描边而不是光。
+            val topBoost = if (role == SurfaceRole.MODAL || role == SurfaceRole.FLOATING)
+                MODAL_EDGE_TOP_BOOST else OPTICAL_EDGE_TOP_BOOST
+            modalEdgePaint.alpha = (edgeAlpha * topBoost).toInt().coerceIn(0, 255)
             modalEdgeMatrix.setTranslate(0f, bounds.top.toFloat())
             modalEdgeShader.setLocalMatrix(modalEdgeMatrix)
             canvas.drawRoundRect(
@@ -648,6 +686,23 @@ internal class LiquidActivityRenderer(
                 (radiusPx - inset).coerceAtLeast(0f),
                 modalEdgePaint
             )
+            if (luminousEdge) {
+                // 折射 rim 的有效亮度只有 Fresnel≈0.025/specular≈0.06 量级——
+                // 光晕带只是一层极淡的内圈辉光，不是亮环。单层 10dp 描边内缩半宽
+                // 使外侧与表面边缘齐平（无需 clipPath），alpha 压到同一量级，
+                // 只保留"边缘微微泛光"的读感，避免出现硬边描边轮廓。
+                val bandW = OPTICAL_EDGE_BAND_DP * density
+                edgeBandPaint.strokeWidth = bandW
+                edgeBandPaint.alpha =
+                    (edgeAlpha * OPTICAL_EDGE_BAND_ALPHA).toInt().coerceIn(0, 255)
+                canvas.drawRoundRect(
+                    bounds.left + bandW * 0.5f, bounds.top + bandW * 0.5f,
+                    bounds.right - bandW * 0.5f, bounds.bottom - bandW * 0.5f,
+                    (radiusPx - bandW * 0.5f).coerceAtLeast(0f),
+                    (radiusPx - bandW * 0.5f).coerceAtLeast(0f),
+                    edgeBandPaint
+                )
+            }
         } else {
             outlinePaint.color = ColorUtils.setAlphaComponent(Color.WHITE, edgeAlpha)
             canvas.drawRoundRect(
@@ -847,10 +902,15 @@ internal class LiquidActivityRenderer(
         footprint.update(bounds, radiusPx, originX, originY)
     }
 
-    /** Explicit transform changes share the scroll-origin audit; no capture or backdrop rebuild. */
+    /**
+     * 显式变换回调（按下缩放、弹性拖拽、导航条指示器位移等）不等于内容位移：
+     * 按下缩放绕中心缩放、表面原点不变，此时抑制只会把底图 real→stable 白闪一下。
+     * 抑制交给 [flushSurfaceRefresh] 在确认表面原点真的变化后再触发。
+     */
     @MainThread
     fun notifyPositionChanged() {
-        invalidateMovedSurfaces()
+        lastContentShiftNanos = System.nanoTime()
+        queueSurfaceRefresh(contentChanged = false)
     }
 
     /**
@@ -861,6 +921,8 @@ internal class LiquidActivityRenderer(
      */
     private fun invalidateMovedSurfaces() {
         lastContentShiftNanos = System.nanoTime()
+        // OnScrollChangedListener 只在真实滚动位移时触发：内容已经在某个表面下方
+        // 滑动（哪怕表面自身没动，滞后截屏也会把旧位置像素折射进去），立即抑制。
         suppressRealtimeSamplingWhileScrolling()
         queueSurfaceRefresh(contentChanged = false)
     }
@@ -870,7 +932,10 @@ internal class LiquidActivityRenderer(
      * 滚动中不再折射旧位置像素，也不再为每一帧截图触发整组表面重录。
      */
     private fun suppressRealtimeSamplingWhileScrolling() {
-        if (closed || realtimeSamplingSuppressed || realtimeBackdropSource == null) return
+        // 只门控效果档位，不门控"是否已有实时缓冲"：首帧采集完成前就开始的滑动同样需要
+        // 抑制——否则那一小段手势既折射过期底图又继续触发每帧 PixelCopy。
+        if (closed || realtimeSamplingSuppressed ||
+            effectProfile != LiquidEffectProfile.REALTIME_CAPTURE) return
         val stable = backdropSource
         if (stable == null || stable.isClosed) return
         realtimeSamplingSuppressed = true
@@ -887,12 +952,20 @@ internal class LiquidActivityRenderer(
         scrollSettlePending = false
         if (closed || !realtimeSamplingSuppressed) return
         val quietNanos = System.nanoTime() - lastContentShiftNanos
-        if (quietNanos < LiquidRealtimeCapturePolicy.SCROLL_QUIET_MS * NANOS_PER_MILLISECOND) {
+        // 回弹形变未归零时同样保持抑制：按住不动没有新位移回调，静默窗口会自然
+        // 攒满——此时解除会让表面重录回折射路径，下一次位移又切回光学直采，
+        // 边缘光在两条路径之间闪烁。形变归零后（intensity 回落 1）才允许解除。
+        if (quietNanos < LiquidRealtimeCapturePolicy.SCROLL_QUIET_MS * NANOS_PER_MILLISECOND ||
+            stretchOpticalIntensity > 1f
+        ) {
             scrollSettlePending = true
             mainHandler.postDelayed(scrollSettleCheck, LiquidRealtimeCapturePolicy.SCROLL_QUIET_MS)
             return
         }
         realtimeSamplingSuppressed = false
+        // 抑制期录制的都是光学直采路径，解除后要重录回折射路径——实时模式下随后的
+        // 采集完成会再失效一次；采集已挂起（suspended）时则靠这次失效恢复玻璃观感。
+        invalidateRegisteredSurfaces()
         // 立刻排一次新采集；完成时 handleRealtimeCaptureResult 会把实时缓冲绑回去。
         realtimeNextCaptureNanos = 0L
         postRealtimeFrameCallback()
@@ -983,6 +1056,10 @@ internal class LiquidActivityRenderer(
         val changes = refreshWindows[windowRoot]?.batch?.take() ?: return
         if (changes == 0) return
         val contentChanged = changes and LiquidRefreshBatch.CONTENT != 0
+        // 位移门控：只有某个表面真的改了屏幕原点才算"内容位移"。点击、按键或
+        // 零位移的滚动回调同样会走这条链路，若在此刻切底图，所有玻璃会在一次
+        // 无事发生的回调里 real→stable 闪一下。
+        var surfaceMoved = false
         try {
             val surfaceIterator = surfaceViews.entries.iterator()
             while (surfaceIterator.hasNext()) {
@@ -991,11 +1068,19 @@ internal class LiquidActivityRenderer(
                 if (!view.isAttachedToWindow) { surfaceIterator.remove(); continue }
                 if (view.rootView !== windowRoot) continue
                 val visible = isSurfacePotentiallyVisible(view)
+                // 不可见表面的 movedSurfaceLocation 还是上一个表面的残留坐标，
+                // 原值比对结果无意义；shouldRefresh 对 !visible 本就会忽略该参数。
+                val originChanged = visible &&
+                    !entry.value.matchesOrigin(movedSurfaceLocation[0], movedSurfaceLocation[1])
+                if (originChanged) surfaceMoved = true
                 if (entry.value.refreshState.shouldRefresh(visible,
-                        originChanged = !entry.value.matchesOrigin(movedSurfaceLocation[0], movedSurfaceLocation[1]),
+                        originChanged = originChanged,
                         contentChanged = contentChanged)) view.invalidate()
             }
         } finally { refreshWindowRoot = null }
+        // 抑制在 preDraw 内、draw 前生效：本帧被失效的位移表面重录时已经读到
+        // motionLite + 稳定底图，不会产生"先按旧底图录一帧再切"的中间态。
+        if (surfaceMoved && !contentChanged) suppressRealtimeSamplingWhileScrolling()
     }
 
     /**
@@ -1495,6 +1580,9 @@ internal class LiquidActivityRenderer(
         ) {
             bindPreparedBackendsToBackdrop(stableBackdrop)
         }
+        // 抑制期录制的表面走的是光学直采路径；缓冲释放/挂起后必须重录回折射路径，
+        // 否则它们会一直重放旧 display list（玻璃停在磨砂观感直到下次自然失效）。
+        invalidateRegisteredSurfaces()
         realtimeCaptureSources.forEach(LiquidBackdropSource::close)
         realtimeCaptureSources = emptyList()
         realtimeCaptureNextIndex = 0
@@ -1691,6 +1779,22 @@ private const val MODAL_EDGE_FADE_DP = 64f
 private const val MODAL_EDGE_TOP_BOOST = 2.2f
 private const val MODAL_EDGE_BASE_RATIO = 0.45f
 
+/**
+ * 廉价路径光晕带与提亮：折射 rim 实测只有 Fresnel≈0.025 / specular≈0.06 的
+ * 白度提升，光晕带按同一量级取极淡单层（10dp × 0.35×edgeAlpha）；普通角色
+ * 的顶沿提亮也收敛到 1.6×——过强会读成描边环而不是光。
+ */
+private const val OPTICAL_EDGE_TOP_BOOST = 1.6f
+private const val OPTICAL_EDGE_BAND_DP = 10f
+private const val OPTICAL_EDGE_BAND_ALPHA = 0.35f
+
+/**
+ * 浮动条常驻的折射强度下限（驱动会钳到 1..1.85）：stretchDirY==0 时 shader 把
+ * 增益按全向处理，整圈边缘的焦散/菲涅尔/镜面随之下调增量点亮，静止也有凝光；
+ * 回弹方向出现后同一增益收拢到对应边缘。
+ */
+private const val FLOATING_OPTICAL_FLOOR = 1.15f
+
 private class LiquidRootDrawable(
     private val renderer: LiquidActivityRenderer,
     private val fallbackColor: Int
@@ -1760,8 +1864,11 @@ private class LiquidSurfaceDrawable(
                 drawBounds = motionBounds
                 drawRadiusPx = motionProvider.liquidMotionCornerRadiusPx()
                 drawFallbackColor = motionProvider.liquidMotionFallbackColor()
-                drawX += motionBounds.left
-                drawY += motionBounds.top
+                // drawX/drawY 保持 View 原点：两条采样链（drawOpticalRegion 的逆矩阵与折射
+                // shader 的 backdropOrigin）都把画布坐标当作"原点+局部坐标"解算根坐标，
+                // motionBounds 本身已是承载层画布内的绝对矩形，再叠 left/top 会让采样窗
+                // 二次偏移到卡片右下方——形变全程显示的是偏离真实位置的底图区域，落定
+                // 换回卡片 0 基 drawable 时采样区瞬移（"通透背景跳变加载"的来源）。
             }
         }
         if (view != null) {

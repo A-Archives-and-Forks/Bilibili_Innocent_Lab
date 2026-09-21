@@ -114,7 +114,8 @@ internal class LiquidRefractionBackendApi33(
         viewY: Int,
         opticalIntensity: Float,
         stretchDirY: Float,
-        contentAlpha: Float
+        contentAlpha: Float,
+        motionLite: Boolean
     ) {
         checkNotNull(source) { "Liquid refraction backdrop is not bound" }
         shader.setFloatUniform("size", bounds.width().toFloat(), bounds.height().toFloat())
@@ -123,6 +124,7 @@ internal class LiquidRefractionBackendApi33(
         shader.setFloatUniform("cornerRadii", radiusPx, radiusPx, radiusPx, radiusPx)
         shader.setFloatUniform("opticalIntensity", opticalIntensity.coerceIn(1f, 1.85f))
         shader.setFloatUniform("stretchDirY", stretchDirY.coerceIn(-1f, 1f))
+        shader.setFloatUniform("motionLite", if (motionLite) 1f else 0f)
         // paint.alpha 与 shader 输出 alpha 相乘：浮动表面借此透出真实下层内容，
         // 不需要 shader 侧再开一个 uniform。其余表面恒为 255，与旧版逐像素一致。
         paint.alpha = (contentAlpha.coerceIn(0f, 1f) * 255f).roundToInt()
@@ -184,6 +186,8 @@ uniform float innerShadowStrength;
 uniform float scatterTapMode;
 // 超出回弹方向：-1 = 顶部下拉（上边缘发光），+1 = 底部上拉，0 = 无回弹。
 uniform float stretchDirY;
+// 位移抑制期置 1：跳过多次散射取样，只保留单次取样与边缘光项。
+uniform float motionLite;
 
 const half3 rgbToY = half3(0.2126, 0.7152, 0.0722);
 
@@ -321,10 +325,14 @@ half4 main(float2 coord) {
     // 底部上拉 +1）做点积投影，面向回弹方向的边缘吃满 opticalIntensity 增益，
     // 对侧保持基准 1，侧缘随法线夹角无极过渡——不再是四边等亮的均匀描边。
     // 折射带宽度按同一投影加宽，"厚度"也随回弹力度连续变化。
-    float stretchFacing = clamp(
+    // stretchDirY==0（无回弹）时点积恒为 0，edgeBoost 会被钉死在 1——opticalIntensity
+    // 的常驻下限（浮动条凝光）静止时完全不生效。按 |dir| 在全向与定向间连续混合：
+    // 静止时增益均匀点亮整圈，回弹方向出现后平滑收拢到对应边缘。
+    float dirFacing = clamp(
         dot(safeNormalize(shapeGrad, float2(0.0, -1.0)), float2(0.0, stretchDirY)),
         0.0, 1.0
     );
+    float stretchFacing = mix(1.0, dirFacing, abs(stretchDirY));
     float edgeBoost = 1.0 + max(opticalIntensity - 1.0, 0.0) * stretchFacing;
     float edgeWidthBoost = 1.0 + 0.45 * max(opticalIntensity - 1.0, 0.0) * stretchFacing;
     float edgePhase = clamp(
@@ -360,10 +368,25 @@ half4 main(float2 coord) {
     float edgeReach = clamp(nearestMargin / sampleReach, 0.0, 1.0);
 
     float2 refractedCoord = coord + (interiorOffset + d * grad) * edgeReach;
-    half4 color = saturateColor(
-        sampleScattered(refractedCoord, direction, edgeWeight, interiorLens, edgeReach, edgeBoost),
-        chromaMultiplier
-    );
+    // 位移抑制期驱动层已把 content 换成平滑稳定底图，散射多抽样没有收益——
+    // 只保留单次取样；边缘光项（innerShadow/Fresnel/镜面/焦散）照常计算，
+    // 表面在运动中与静止态保持同一条 rim 光晕，不再"消失再加载"。
+    half4 color;
+    if (motionLite > 0.5) {
+        half4 lite = sampleContent(refractedCoord);
+        // 与 sampleScattered 同一条内容感知焦散：lite 省掉的是散射多抽样，
+        // 不是这道边缘亮度——缺了它，抑制/解除切换瞬间边缘高光会明暗一档。
+        float liteLuma = dot(lite.rgb, rgbToY);
+        float liteCaustic = edgeWeight * scatteringStrength * 0.075 * edgeBoost
+            * (1.0 + causticLuminanceGain * liteLuma);
+        lite.rgb = mix(lite.rgb, half3(1.0), clamp(liteCaustic, 0.0, 0.2));
+        color = saturateColor(lite, chromaMultiplier);
+    } else {
+        color = saturateColor(
+            sampleScattered(refractedCoord, direction, edgeWeight, interiorLens, edgeReach, edgeBoost),
+            chromaMultiplier
+        );
+    }
 
     // 折射带内侧的环境遮蔽：在带的中段最深、两端归零，制造"玻璃有厚度"的立体感。
     if (innerShadowStrength > 0.001) {

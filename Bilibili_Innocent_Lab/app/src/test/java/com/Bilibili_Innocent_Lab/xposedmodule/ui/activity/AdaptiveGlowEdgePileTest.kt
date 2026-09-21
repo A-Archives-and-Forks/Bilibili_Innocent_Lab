@@ -47,6 +47,113 @@ class AdaptiveGlowEdgePileTest {
         }
     }
 
+    /**
+     * 贴边收缩的下限必须等于堆积收敛目标：否则跨界瞬间等效半径先跌穿目标值、
+     * 再由堆积拉回——"刚出界先缩小、再集中放大"的 V 形割裂（用户 2026-09-21 反馈）。
+     * 这条不变式一旦破坏，下面的单调性用例会跟着失败。
+     */
+    @Test fun edgeFloorEqualsThePileTarget() {
+        assertEquals(
+            "EDGE_MIN_SCALE 必须等于 PILE_RECOVER，跨界尺寸才连续",
+            GlowConfig.PILE_RECOVER, GlowConfig.EDGE_MIN_SCALE, 0f
+        )
+    }
+
+    /**
+     * 从轮廓内侧一路拖到堆积饱和：等效半径 iso = √rx·ry 必须**单调不增**——
+     * 界内收缩到目标值后只能持平（取向模型）或继续收拢（流动模型），绝不允许回涨。
+     */
+    @Test fun sizeNeverRegrowsAcrossTheBoundary() {
+        for (cfg in listOf(oriented, flowing)) {
+            var lastIso = Float.MAX_VALUE
+            for (step in 0..48) {
+                val y = barHeight / 2f - step * (barHeight / 2f + cfg.pileRefPx * 1.5f) / 48f
+                val shape = settle(cfg, barWidth / 2f, y)
+                val iso = kotlin.math.sqrt(shape.radiusX * shape.radiusY)
+                assertTrue(
+                    "等效半径不得回涨（V 形割裂）@step=$step y=$y iso=$iso last=$lastIso",
+                    iso <= lastIso + 0.5f
+                )
+                lastIso = iso
+            }
+        }
+    }
+
+    /**
+     * 贴屏场景：可触达空间只剩 40px 时，满额堆积必须在 40px 内走完（而不是默认的
+     * pileRefPx）——否则屏幕边缘的控件永远堆不出完整"集中"（用户 2026-09-21：
+     * 贴屏拖拽时光效随可用空间忽强忽弱）。
+     */
+    @Test fun pileSaturatesWithinTheReachableRoom() {
+        for (cfg in listOf(oriented, flowing)) {
+            val nearEdge = GlowState()
+            val holder = GlowFrame()
+            holder.boundsWidth = barWidth
+            holder.boundsHeight = barHeight
+            holder.cornerRadius = cornerPx
+            holder.press = 1f
+            holder.centerX = barWidth / 2f
+            holder.centerY = -40f // 越出 40px
+            holder.pileRoomPx = 40f // 屏幕边缘只剩 40px 可用
+            repeat(120) { nearEdge.update(holder, 1f / 120f, radiusPx, 72, cfg) }
+            assertTrue("可触达空间内必须满额堆积", nearEdge.shape.pileUnit > 0.95f)
+
+            val unbounded = GlowState()
+            val open = GlowFrame()
+            open.boundsWidth = barWidth
+            open.boundsHeight = barHeight
+            open.cornerRadius = cornerPx
+            open.press = 1f
+            open.centerX = barWidth / 2f
+            open.centerY = -40f // 同样越出 40px，但空间不受限（默认 +∞）
+            repeat(120) { unbounded.update(open, 1f / 120f, radiusPx, 72, cfg) }
+            assertTrue("不限空间时同样越界量只能堆出一小截", unbounded.shape.pileUnit < 0.35f)
+        }
+    }
+
+    /**
+     * 弧形路径上第二根轴越界/回界的瞬间，room（对已越界轴取 min）会硬跳——span 必须先过
+     * 低通再进 smoothStep，否则 pileTarget 随之跳变，强度读作"瞬间减弱/增强"（用户
+     * 2026-09-21 抓帧实证）。断言：room 300→40 硬切后 pile 不得立刻上窜，但最终仍收敛满额。
+     */
+    @Test fun pileSpanSnapIsAbsorbedByTheLowpass() {
+        for (cfg in listOf(oriented, flowing)) {
+            val state = GlowState()
+            val holder = GlowFrame()
+            holder.press = 1f
+            holder.centerX = barWidth / 2f
+            holder.centerY = -60f // 恒越出 60px
+            holder.boundsWidth = barWidth
+            holder.boundsHeight = barHeight
+            holder.cornerRadius = cornerPx
+            holder.pileRoomPx = 300f // 初始只有一轴越界、空间充足
+            repeat(120) { state.update(holder, 1f / 120f, radiusPx, 72, cfg) }
+            assertTrue("room=300 时 60px 越界只能堆一小截", state.shape.pileUnit < 0.35f)
+
+            holder.pileRoomPx = 40f // 第二轴越界 → room 硬跳 300→40
+            repeat(8) { state.update(holder, 1f / 120f, radiusPx, 72, cfg) }
+            assertTrue("span 硬跳必须被低通吸收（8 帧内不得越过中点）",
+                state.shape.pileUnit < 0.5f)
+            repeat(80) { state.update(holder, 1f / 120f, radiusPx, 72, cfg) }
+            assertTrue("room 收缩完成后最终仍应饱和", state.shape.pileUnit > 0.9f)
+        }
+    }
+
+    @Test fun reachableRoomFollowsTheExceededAxes() {
+        val w = 200f; val h = 100f
+        // 控件位于屏幕中（四周 500px 空间）：向上越界 → 可用空间 = 上边到屏幕顶
+        assertEquals(500f, reachablePileRoomPx(500, 500, 700, 600, 1080, 2340, 100f, -10f, w, h), 1e-3f)
+        // 控件右缘距屏幕右缘只剩 30px：向右越界 → 30
+        assertEquals(30f, reachablePileRoomPx(850, 500, 1050, 600, 1080, 2340, 210f, 50f, w, h), 1e-3f)
+        // 斜向越界：取两轴较小值（更近的屏幕缘先截断行程）
+        assertEquals(30f, reachablePileRoomPx(850, 500, 1050, 600, 1080, 2340, 210f, -10f, w, h), 1e-3f)
+        // 控件未越界 → 不限空间
+        assertEquals(Float.POSITIVE_INFINITY,
+            reachablePileRoomPx(500, 500, 700, 600, 1080, 2340, 100f, 50f, w, h))
+        // 控件已在屏幕外（异常输入）→ 非负
+        assertTrue(reachablePileRoomPx(1200, 500, 1400, 600, 1080, 2340, 210f, 50f, w, h) >= 0f)
+    }
+
     @Test fun pileGrowsMonotonicallyWithOvershoot() {
         for (cfg in listOf(oriented, flowing)) {
             var lastAlpha = -1f

@@ -71,4 +71,26 @@ class AdaptiveGlowRenderGuardTest {
         assertTrue(source("ui/activity/LogSegmentScrubBar.kt").contains("TouchGlowRenderer"))
         assertTrue(source("ui/interaction/ElasticInteractionController.kt").contains("TouchGlowRenderer"))
     }
+
+    /**
+     * 触点坐标必须换算到当前系（减去视图自身平移）再喂 GlowFrame：downLocal + 原始 delta
+     * 是按下时刻坐标系，而 bounds/SDF/pileRoomPx 都在当前系——不换算会把视图平移同时
+     * 计入越界量（+|t|）与可触达空间（-|t|），堆积强度被弹簧振荡调制出跳变
+     * （用户 2026-09-21 抓帧实证）。三处宿主同一修正。
+     */
+    @Test fun touchPositionIsConvertedToTheCurrentFrame() {
+        val controller = source("ui/interaction/ElasticInteractionController.kt")
+        assertTrue("TouchHighlight 触点必须减去视图平移",
+            controller.contains("val touchX = centerX - viewShiftX"))
+        val nav = source("ui/activity/ModernNavigationBar.kt")
+        assertTrue("底栏 GlowView 触点必须减去视图平移",
+            nav.contains("val touchX = centerX - viewShiftX"))
+        assertTrue("底栏必须把应用平移增量传给 GlowView",
+            nav.contains("viewShiftX = x - initialOffsetX"))
+        val scrub = source("ui/activity/LogSegmentScrubBar.kt")
+        assertTrue("scrub 条 GlowView 触点必须减去视图平移",
+            scrub.contains("val touchX = centerX - viewShiftX"))
+        assertTrue("scrub 条必须把应用平移增量传给 GlowView",
+            scrub.contains("viewShiftX = translationX - initialOffsetX"))
+    }
 }

@@ -27,6 +27,7 @@ import androidx.appcompat.widget.SwitchCompat
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.activity.GlowConfig
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.activity.GlowFrame
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.activity.GlowState
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.activity.reachablePileRoomPx
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.widget.TouchGlowRenderer
 import com.highcapable.betterandroid.system.extension.utils.AndroidVersion
 import java.lang.ref.WeakReference
@@ -421,7 +422,8 @@ internal class ElasticInteractionController(
         view.translationY = ty
         view.scaleX = sx
         view.scaleY = sy
-        highlight?.update(pressAxis.value, xAxis.value, yAxis.value, xAxis.velocity, yAxis.velocity)
+        highlight?.update(pressAxis.value, xAxis.value, yAxis.value, xAxis.velocity, yAxis.velocity,
+            xAxis.value - grabbedX, yAxis.value - grabbedY)
         notifyPositionChanged(view)
     }
 
@@ -693,7 +695,7 @@ internal class ElasticInteractionController(
      * `edgeBandPx = 0`（clipPath 本就把高亮裁在控件圆角内，不需要第二道边缘衰减）、
      * `travelEpsPx = 0`（位移输入已减掉 touchSlop）。裁剪路径 [clip] 保持不变。
      */
-    private class TouchHighlight(view: View, density: Float, color: Int) : Drawable() {
+    private class TouchHighlight(private val view: View, density: Float, color: Int) : Drawable() {
         private val width = view.width.toFloat()
         private val height = view.height.toFloat()
         private val radius = maxOf(width, height) * .7f
@@ -712,13 +714,17 @@ internal class ElasticInteractionController(
             velocityRefPxPerSec = limitPx * VELOCITY_REF_FACTOR,
             edgeBandPx = 0f,
             axialBoost = 0f,
-            oriented = false
+            oriented = false,
+            // 基准 alpha 只有 32（底栏/scrub 是 72）：越界堆积的增亮增益加大，
+            // 否则钉在边缘的光团在小控件上亮度不足以读出"集中"——顶栏/弹窗行同款诉求。
+            pileGain = 2.0f
         )
         private var centerX = width * .5f
         private var centerY = height * .5f
         private var lastUpdateNanos = 0L
         private var corner = Float.NaN
         private val clip = Path()
+        private val screenLoc = IntArray(2)
 
         init {
             // 高光必须沿控件的显示边缘裁剪。半径依次取背景、前景的 outline；
@@ -753,7 +759,8 @@ internal class ElasticInteractionController(
          * 每个动画帧与每次拖动调用一次。速度直接用弹性轴自身的速度（拖动与回弹
          * 两条路径都在更新它），不需要第二套差分估计。
          */
-        fun update(press: Float, offsetX: Float, offsetY: Float, velocityX: Float, velocityY: Float) {
+        fun update(press: Float, offsetX: Float, offsetY: Float, velocityX: Float, velocityY: Float,
+                   viewShiftX: Float, viewShiftY: Float) {
             val now = System.nanoTime()
             val dt = if (lastUpdateNanos == 0L) GlowState.DEFAULT_DT_SECONDS
             else ((now - lastUpdateNanos).coerceAtLeast(0L)) / 1_000_000_000f
@@ -763,11 +770,28 @@ internal class ElasticInteractionController(
             frame.offsetY = offsetY
             frame.velocityX = velocityX
             frame.velocityY = velocityY
-            frame.centerX = centerX
-            frame.centerY = centerY
+            // 触点坐标换算到当前系：centerX/Y 记录的是"按下时刻坐标系"（downLocal + 原始
+            // delta），而宿主视图随平移组移动了 viewShift——不换算会把视图平移重复计入
+            // 越界量（+|t|），同时 room（实时屏位）收缩 |t|：堆积量被双向放大成弹簧的
+            // 函数，回弹瞬间强度骤降（用户 2026-09-21 抓帧实证）。
+            val touchX = centerX - viewShiftX
+            val touchY = centerY - viewShiftY
+            frame.centerX = touchX
+            frame.centerY = touchY
             frame.boundsWidth = width
             frame.boundsHeight = height
             frame.cornerRadius = corner
+            // 可触达空间：控件贴屏幕边缘时触点走不满 pileRefPx——把剩余空间交给策略层
+            // 压缩满额行程，贴边控件也能堆出完整"集中"。getLocationOnScreen 取实时屏位
+            // （含当前平移），与当前系触点自洽：最大可达越界 = 当前边→屏缘距离。
+            view.getLocationOnScreen(screenLoc)
+            val metrics = view.resources.displayMetrics
+            frame.pileRoomPx = reachablePileRoomPx(
+                screenLoc[0], screenLoc[1],
+                screenLoc[0] + view.width, screenLoc[1] + view.height,
+                metrics.widthPixels, metrics.heightPixels,
+                touchX, touchY, width, height
+            )
             state.update(frame, dt, radius, HIGHLIGHT_BASE_ALPHA, config)
             invalidateSelf()
         }

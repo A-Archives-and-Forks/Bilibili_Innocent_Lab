@@ -3,6 +3,7 @@ package com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Canvas
+import android.os.Build
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
@@ -187,10 +188,14 @@ internal class LiquidStretchViewport private constructor(
         )
         super.draw(canvas)
         var continueDrawing = false
-        if (!topEffect.isFinished) {
+        // 实时取样（LiveBackdropSampler）会把内容根重绘进软件 Canvas；Android 12+ 的
+        // stretch EdgeEffect 在非 RecordingCanvas 上 draw() 会直接清零并放弃效果，
+        // 取样路径必须跳过效果绘制，否则每一帧都会把正在累积的形变量抹掉。
+        val effectsDrawable = Build.VERSION.SDK_INT < 31 || canvas.isHardwareAccelerated
+        if (!topEffect.isFinished && effectsDrawable) {
             continueDrawing = topEffect.draw(canvas) || continueDrawing
         }
-        if (!bottomEffect.isFinished) {
+        if (!bottomEffect.isFinished && effectsDrawable) {
             canvas.withRotation(
                 degrees = 180f,
                 pivotX = width * 0.5f,
