@@ -81,6 +81,34 @@ class LiquidFeedbackIsolationTest {
         assertTrue(refraction.contains("dot("))
     }
 
+    /**
+     * 滚动/位移活跃期玻璃必须改采稳定底图（2026-09-21 用户实证：快速滑动时滞后一帧的
+     * 实时截屏把旧位置文字折射进表面，形成沿滑动方向偏移的残影）。链路要求：位移回调
+     * 触发抑制 → 抑制期间不再发起新采集、迟到的回读不绑定 → 静默窗口后才放行。
+     */
+    @Test fun scrollingSuppressesStaleRealtimeSampling() {
+        val renderer = source("LiquidActivityRenderer")
+        val moved = renderer.substringAfter("private fun invalidateMovedSurfaces()")
+            .substringBefore("private fun invalidateRegisteredSurfaces()")
+        assertTrue(moved.contains("lastContentShiftNanos"))
+        assertTrue(moved.contains("suppressRealtimeSamplingWhileScrolling()"))
+
+        val suppress = renderer.substringAfter("private fun suppressRealtimeSamplingWhileScrolling()")
+            .substringBefore("private fun onScrollSettleCheck()")
+        assertTrue(suppress.contains("bindPreparedBackendsToBackdrop(stable)"))
+
+        val request = renderer.substringAfter("private fun requestRealtimeCapture(")
+            .substringBefore("private fun handleRealtimeCaptureResult")
+        assertTrue(request.contains("realtimeSamplingSuppressed"))
+
+        val result = renderer.substringAfter("private fun handleRealtimeCaptureResult")
+            .substringBefore("private fun applyCaptureThroughputSample")
+        assertTrue(result.contains("if (!realtimeSamplingSuppressed)"))
+
+        assertTrue(renderer.contains("SCROLL_QUIET_MS"))
+        assertTrue(Policy.SCROLL_QUIET_MS in 48L..240L)
+    }
+
     private fun source(name: String): String = sequenceOf(
         File("src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/liquid/$name.kt"),
         File("app/src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/liquid/$name.kt")

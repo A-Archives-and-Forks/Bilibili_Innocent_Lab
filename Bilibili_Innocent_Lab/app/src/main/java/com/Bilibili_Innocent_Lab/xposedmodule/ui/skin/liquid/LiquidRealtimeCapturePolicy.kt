@@ -51,6 +51,13 @@ internal object LiquidRealtimeCapturePolicy {
     const val BASE_SUPPRESSION_ALPHA = 0xFF
 
     /**
+     * 内容位移静默窗口：PixelCopy 单飞回读至少滞后一帧，滚动/形变中展示实时截屏会把
+     * 旧位置的文字折射进玻璃表面，形成沿滑动方向偏移的残影。位移活跃期间玻璃改采稳定
+     * 底图；最后一次位移回调后超过该时长未再位移，才放行下一次实时采集。
+     */
+    const val SCROLL_QUIET_MS = 96L
+
+    /**
      * 采样像素预算。
      *
      * 旧实现用固定 `0.72` 倍率，在 1440×3200 面板上会产出 2,389,248 像素——正好顶到当时的

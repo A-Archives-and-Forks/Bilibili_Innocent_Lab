@@ -245,6 +245,16 @@ internal class LiquidActivityRenderer(
     private var realtimeCaptureSuspended = false
     private var realtimeFrameCallbackPosted = false
     private var realtimeNextCaptureNanos = Long.MAX_VALUE
+
+    /**
+     * 内容位移静默判定：滚动回调/显式位移会把已绑定的实时截屏变成过期采样源——PixelCopy
+     * 至少滞后一帧，继续折射它会把旧位置的文字透进玻璃，形成沿滑动方向偏移的残影。
+     * 位移活跃期间玻璃改采稳定底图，静止 [SCROLL_QUIET_MS] 后由下一次采集自动切回。
+     */
+    private var lastContentShiftNanos = 0L
+    private var realtimeSamplingSuppressed = false
+    private var scrollSettlePending = false
+    private val scrollSettleCheck = Runnable { onScrollSettleCheck() }
     private var realtimeFrameIntervalNanos =
         LiquidRealtimeCapturePolicy.frameIntervalNanos(60f)
     private var realtimeTargetRefreshRate = 60f
@@ -393,6 +403,7 @@ internal class LiquidActivityRenderer(
     fun onActivityStopped() {
         activityVisible = false
         captureRequests.invalidate()
+        clearScrollSuppression()
         removeRealtimeFrameCallback()
         performanceController?.stop()
         restorePreferredRefreshRate()
@@ -453,6 +464,9 @@ internal class LiquidActivityRenderer(
         if (abs(next - stretchOpticalIntensity) < 0.004f && nextDir == stretchEdgeDirY) return
         stretchOpticalIntensity = next
         stretchEdgeDirY = nextDir
+        // 拉伸同样在移动内容：已绑定的截屏帧立刻过期，按滚动同一规则抑制实时采样。
+        lastContentShiftNanos = System.nanoTime()
+        suppressRealtimeSamplingWhileScrolling()
         invalidateRegisteredSurfaces()
     }
 
@@ -846,7 +860,50 @@ internal class LiquidActivityRenderer(
      * 重录，也不会重跑折射 shader。
      */
     private fun invalidateMovedSurfaces() {
+        lastContentShiftNanos = System.nanoTime()
+        suppressRealtimeSamplingWhileScrolling()
         queueSurfaceRefresh(contentChanged = false)
+    }
+
+    /**
+     * 位移活跃期把玻璃采样从滞后截屏切到稳定底图：表面立刻按正确原点重录一次，
+     * 滚动中不再折射旧位置像素，也不再为每一帧截图触发整组表面重录。
+     */
+    private fun suppressRealtimeSamplingWhileScrolling() {
+        if (closed || realtimeSamplingSuppressed || realtimeBackdropSource == null) return
+        val stable = backdropSource
+        if (stable == null || stable.isClosed) return
+        realtimeSamplingSuppressed = true
+        driverBoundSources.clear()
+        bindPreparedBackendsToBackdrop(stable)
+        invalidateRegisteredSurfaces()
+        if (!scrollSettlePending) {
+            scrollSettlePending = true
+            mainHandler.postDelayed(scrollSettleCheck, LiquidRealtimeCapturePolicy.SCROLL_QUIET_MS)
+        }
+    }
+
+    private fun onScrollSettleCheck() {
+        scrollSettlePending = false
+        if (closed || !realtimeSamplingSuppressed) return
+        val quietNanos = System.nanoTime() - lastContentShiftNanos
+        if (quietNanos < LiquidRealtimeCapturePolicy.SCROLL_QUIET_MS * NANOS_PER_MILLISECOND) {
+            scrollSettlePending = true
+            mainHandler.postDelayed(scrollSettleCheck, LiquidRealtimeCapturePolicy.SCROLL_QUIET_MS)
+            return
+        }
+        realtimeSamplingSuppressed = false
+        // 立刻排一次新采集；完成时 handleRealtimeCaptureResult 会把实时缓冲绑回去。
+        realtimeNextCaptureNanos = 0L
+        postRealtimeFrameCallback()
+    }
+
+    private fun clearScrollSuppression() {
+        realtimeSamplingSuppressed = false
+        if (scrollSettlePending) {
+            scrollSettlePending = false
+            mainHandler.removeCallbacks(scrollSettleCheck)
+        }
     }
 
     private fun invalidateRegisteredSurfaces() {
@@ -1095,7 +1152,7 @@ internal class LiquidActivityRenderer(
         val root = boundRoot ?: return
         if (closed || !activityVisible || realtimeCaptureSuspended ||
             effectProfile != LiquidEffectProfile.REALTIME_CAPTURE ||
-            realtimeCaptureInFlight != null
+            realtimeCaptureInFlight != null || realtimeSamplingSuppressed
         ) {
             return
         }
@@ -1167,7 +1224,11 @@ internal class LiquidActivityRenderer(
                     // 采用；把它计入熔断计数会让长列表滚动 33ms 就永久关掉整个实时效果。
                     realtimeCaptureFailureCount = 0
                     realtimeBackdropSource = captureSource
-                    bindPreparedBackendsToBackdrop(captureSource)
+                    // 截图发起后开始的滚动会把这帧变成过期采样：保留缓冲但暂不绑定，
+                    // 等位移静默后的下一帧采集再切回实时。
+                    if (!realtimeSamplingSuppressed) {
+                        bindPreparedBackendsToBackdrop(captureSource)
+                    }
                     invalidateRegisteredSurfaces()
                     return
                 }
@@ -1413,6 +1474,7 @@ internal class LiquidActivityRenderer(
 
     private fun suspendRealtimeCapture(releaseBuffers: Boolean) {
         realtimeCaptureSuspended = true
+        clearScrollSuppression()
         removeRealtimeFrameCallback()
         performanceController?.stop()
         restorePreferredRefreshRate()
@@ -1421,6 +1483,7 @@ internal class LiquidActivityRenderer(
 
     private fun releaseRealtimeCaptureSources(rebindStableBackdrop: Boolean) {
         captureRequests.invalidate()
+        clearScrollSuppression()
         val stableBackdrop = backdropSource
         realtimeBackdropSource = null
         driverBoundSources.clear()
@@ -1551,6 +1614,7 @@ internal class LiquidActivityRenderer(
         closed = true
         activityVisible = false
         realtimeCaptureSuspended = true
+        clearScrollSuppression()
         removeRealtimeFrameCallback()
         performanceController?.close()
         captureRequests.invalidate()

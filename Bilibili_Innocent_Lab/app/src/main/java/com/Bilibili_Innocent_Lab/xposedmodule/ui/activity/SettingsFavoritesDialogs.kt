@@ -39,6 +39,8 @@ internal fun MainActivity.showSettingsFavoritesDialog(anchor: View? = null) {
         textSize = 14f
         setSingleLine(true)
         textColor = getColor(R.color.colorTextDark)
+        // 与"搜索设置"气泡同一套内边距——玻璃描边贴边的提示文字会显得贴框。
+        setPadding(dp(14), dp(11), dp(14), dp(11))
     }
     container.addView(search, LinearLayout.LayoutParams(-1, -2))
     lateinit var render: () -> Unit
