@@ -74,6 +74,10 @@ class MaterialSwitch(context: Context, attrs: AttributeSet?) : SwitchCompat(cont
         thumbDrawable = choice(thumbSize, thumbSize, thumb = true)
         trackDrawable = choice(thumbSize * 2, thumbSize, thumb = false)
         splitTrack = false
+        // 新装的 drawable 起始状态为空，`setThumbDrawable`/`setTrackDrawable` 都不推状态；
+        // 不显式刷新就要等下一次 drawableStateChanged()——换皮肤的 recreate() 发生在已获焦
+        // 的窗口里，那一次根本不会来，已开启的开关于是停在未选中的灰色配色。
+        refreshDrawableState()
         // 整行按压涟漪：primary 低透明度 + 圆角 mask，按压时光晕铺满整个控件而非只有轨道。
         val rippleMask = GradientDrawable().apply {
             cornerRadius = 10f * density

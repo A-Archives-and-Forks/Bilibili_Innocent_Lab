@@ -25,9 +25,13 @@ class LiquidFeedbackIsolationTest {
         val request = renderer.substringAfter("private fun requestRealtimeCapture(").substringBefore("private fun handleRealtimeCaptureResult")
         assertTrue(request.indexOf("buildSuppressionMask") < request.indexOf("PixelCopy.request"))
         val result = renderer.substringAfter("private fun handleRealtimeCaptureResult").substringBefore("private fun applyCaptureThroughputSample")
-        assertTrue(result.indexOf("sanitizeRealtimeCapture") < result.indexOf("bindPreparedBackendsToBackdrop"))
-        val mask = renderer.substringAfter("private fun buildSuppressionMask(").substringBefore("private fun sanitizeRealtimeCapture")
-        assertTrue(mask.contains("realtimeCaptureMask.addRoundRect"))
+        // 2026-09-23 抑制在截图线程完成；提交端必须先看它的结论再绑定。
+        assertTrue(result.indexOf("request.outcome") in 0 until result.indexOf("bindPreparedBackendsToBackdrop"))
+        assertTrue(renderer.substringAfter("private fun postProcessRealtimeCapture(").contains("sanitizeRealtimeCapture"))
+        // 2026-09-23 遮罩构建随抑制器拆到 LiquidFeedbackSuppressor（凝光视效引擎重构）。
+        val mask = source("LiquidFeedbackSuppressor").substringAfter("fun buildSuppressionMask(")
+            .substringBefore("fun sanitizeRealtimeCapture")
+        assertTrue(mask.contains("mask.addRoundRect"))
         // 未绘制边界环的 viewport 不进入抑制遮罩：遮罩只覆盖真实玻璃表面。
         assertFalse(mask.contains("stretchViewports"))
     }
@@ -136,6 +140,9 @@ class LiquidFeedbackIsolationTest {
         assertNotEquals("MISSING", optical)
         assertTrue(optical.contains("drawOpticalRegion("))
         assertTrue(draw.contains("motionLite = realtimeSamplingSuppressed"))
+        // 回弹期一并降级：lite 是同一条 shader 少取样，边缘光逐项保留；只有**切换绘制
+        // 路径**才会被看成跳变（2026-09-21（九）），这里没有切路径。
+        assertTrue(draw.contains("stretchOpticalIntensity > 1f"))
 
         val backend = source("LiquidRefractionBackendApi33")
         assertTrue(backend.contains("uniform float motionLite"))
@@ -147,6 +154,69 @@ class LiquidFeedbackIsolationTest {
         // 切换瞬间边缘高光亮度差一档，表现为滑动起止处的轻微闪动。
         assertTrue(lite.contains("liteCaustic"))
         assertTrue(lite.contains("causticLuminanceGain"))
+    }
+
+    /**
+     * 深内部早退的三条前提缺一不可（2026-09-22）。
+     *
+     * `interiorDistortion` 驱动 interiorOffset；`scatteringStrength` 的散射项在
+     * edgeWeight=0 时仍由 interiorLens 供权（**不是** 0）；`chromaticShift` 在限域之前
+     * 无视 edgeWeight。三者同时为零，下面整段才逐项含 edgeWeight 因子而恒等于原始采样。
+     * 还必须保留 `saturateColor`——chromaMultiplier 是 0.98，直接返回原样本会让内面
+     * 少掉 2% 去饱和、与边缘带接不上。
+     */
+    @Test fun theInteriorFastPathOnlyFiresWhereItIsProvablyEquivalent() {
+        val backend = source("LiquidRefractionBackendApi33")
+        val main = backend.substringAfter("half4 main(float2 coord)", "MISSING")
+            .substringBefore("float smoothRadius")
+        assertNotEquals("MISSING", main)
+        val guard = main.substringAfter("if (interiorDistortion <= 0.001", "MISSING")
+        assertNotEquals("MISSING", guard)
+        assertTrue("判据要用 edgeWidthBoost 的上界（stretchFacing≤1），只准少退出",
+            main.contains("edgeWidthBoostMax") && main.contains("bool deepInterior"))
+        assertTrue("散射在 edgeWeight=0 时仍由 interiorLens 供权，必须一并要求为 0",
+            guard.contains("scatteringStrength <= 0.001"))
+        assertTrue("色散在限域前无视 edgeWeight，必须一并要求为 0",
+            guard.contains("chromaticShift <= 0.001"))
+        assertTrue("早退必须保留 saturateColor，否则内面少掉 chromaMultiplier 那一档",
+            guard.contains("return saturateColor(sampleContent(coord), chromaMultiplier)"))
+    }
+
+    /**
+     * 运动降级档的深内部快路径（2026-09-22 性能整改）。
+     *
+     * lite 本来就只取一次样，而 edgeWeight==0 让折射位移/焦散/内阴影/菲涅尔/镜面逐项归零，
+     * 结果恒等于"按 interiorOffset 取一次样再调饱和"。省掉 SDF 梯度与三段边缘光的 ALU——
+     * 卡片内面占玻璃像素的绝大多数，而运动期正是 GPU 最紧的时候（真机：高级材质手风琴
+     * GPU 50th 7ms / 90th 9ms，Slow issue draw commands 占掉帧 46/47）。
+     */
+    @Test fun theMotionLiteInteriorSkipsTheEdgeMath() {
+        val backend = source("LiquidRefractionBackendApi33")
+        val fast = backend.substringAfter("if (motionLite > 0.5 && deepInterior)", "MISSING")
+            .substringBefore("float smoothRadius")
+        assertNotEquals("MISSING", fast)
+        assertTrue("必须仍按 interiorOffset 取样（realtime 档 interiorDistortion≠0）",
+            fast.contains("interiorOffset * liteReach"))
+        assertTrue("必须保留饱和调整", fast.contains("saturateColor("))
+        assertTrue("越界收敛不能丢：贴页面边缘时位移仍要收敛，否则平铺模式会横向抹开",
+            fast.contains("backdropExtent"))
+    }
+
+    /**
+     * 色散必须限域在 rim 带内（2026-09-22）。旧实现全域等量位移，内部高对比文字
+     * 也会裂成红蓝边——那正是它当初被整条关闭的原因。限域后才允许重新开启。
+     */
+    @Test fun chromaticDispersionIsConfinedToTheRimBand() {
+        val backend = source("LiquidRefractionBackendApi33")
+        val fn = backend.substringAfter("half4 sampleRefracted(", "MISSING")
+            .substringBefore("half4 sampleScattered(")
+        assertNotEquals("MISSING", fn)
+        assertTrue("位移必须乘 edgeWeight", fn.contains("chromaticShift * edgeBoost * edgeWeight"))
+        assertTrue("亚像素位移直接跳过两次取样", fn.contains("if (shift < 0.02) return center;"))
+        // 抖动与双叶镜面都必须被 uniform / edgeWeight 门掉，标准档零额外开销。
+        assertTrue(backend.contains("uniform float dither"))
+        assertTrue(backend.contains("if (dither > 0.0)"))
+        assertTrue(backend.contains("facingBack"))
     }
 
     /**
@@ -224,7 +294,8 @@ class LiquidFeedbackIsolationTest {
      * 就是"面板跳变加载通透背景"（rec.mp4 f259 实测：rim +4、内衬亮度重分布）。
      */
     @Test fun motionSurfaceSamplingOriginStaysAtViewOrigin() {
-        val renderer = source("LiquidActivityRenderer")
+        // 2026-09-23 表面 Drawable 拆到 LiquidSurfaceDrawables（凝光视效引擎重构）。
+        val renderer = source("LiquidSurfaceDrawables")
         val provider = renderer.substringAfter("val motionProvider = view as? LiquidMotionSurfaceFrameProvider")
             .substringBefore("if (view != null) {", "MISSING")
         assertNotEquals("MISSING", provider)
@@ -233,6 +304,62 @@ class LiquidFeedbackIsolationTest {
         assertFalse(provider.contains("drawX += "))
         assertFalse(provider.contains("drawY += "))
     }
+
+    /**
+     * 玻璃填充必须随 drawable 自身 alpha 衰减（2026-09-22 真机实证）。
+     *
+     * `contentBackground.alpha = 0` 是承载层在场期间隐藏卡片自身背景的唯一手段，
+     * 但原来只有 `drawSurfaceLayers` 的色罩/描边读 alpha——`drawOpticalRegion` 按
+     * `glassContentAlpha*255` 恒强度直采、`drawBackdrop` 的 `contentAlpha` 也只取
+     * `glassContentAlpha`。结果：形变全程卡片那张 drawable 的光学填充仍在画，
+     * 与承载层填充叠成 ~86% 覆盖，面板近乎实心；落定摘层后回到单层才透出底页——
+     * 现场就是"呼出动画没有通透，播完突然加载"（g_1 ghost_std≈1 → g_2 ≈7.5）。
+     */
+    @Test fun drawableAlphaScalesTheGlassFillOnBothPaths() {
+        val renderer = source("LiquidActivityRenderer")
+        val draw = renderer.substringAfter("internal fun drawSurface(")
+            .substringBefore("private fun drawSurfaceLayers(", "MISSING")
+        assertNotEquals("MISSING", draw)
+        assertTrue("optical region must scale with drawable alpha",
+            draw.contains("glassContentAlpha(role) * alpha.toFloat()"))
+        assertTrue("backdrop shader fill must scale with drawable alpha",
+            draw.contains("glassContentAlpha(role) * (alpha / 255f)"))
+    }
+
+    /**
+     * 抑制解除不许落在手指按着的时段（2026-09-22 用户报告 + 脚本 A/B）。
+     *
+     * 解除是一次重同步：整组表面重录回折射路径 + 立刻排一次全屏 PixelCopy，采集完成后
+     * 再整组失效一次。它撞上新手势的头几帧就是可感知的迟滞，最容易复现的姿势是
+     * "回弹刚结束立刻反向滑"——回弹把静默窗口一路顺延，手一松窗口到点，解除正好撞上
+     * 下一次按下。脚本对比：掉帧 1.80% → 1.09%，95 分位 17ms → 13ms。
+     *
+     * 上界必须存在：长按不动本来就该恢复实时档，不能因为手指贴着就无限停在磨砂观感。
+     */
+    @Test fun theSuppressionReleaseWaitsOutAnActiveGesture() {
+        val renderer = source("LiquidActivityRenderer")
+        val settle = renderer.substringAfter("private fun onScrollSettleCheck()", "MISSING")
+            .substringBefore("private fun clearScrollSuppression()")
+        assertNotEquals("MISSING", settle)
+        assertTrue("按着时必须推迟解除", settle.contains("gestureHoldsRelease("))
+        assertTrue("推迟后要继续排查，不能丢掉这次解除", settle.contains("scrollSettlePending = true"))
+        val hold = renderer.substringAfter("private fun gestureHoldsRelease(")
+            .substringBefore("private fun onScrollSettleCheck()")
+        assertTrue("推迟必须有上界", hold.contains("GESTURE_RELEASE_HOLD_MS"))
+        assertTrue(renderer.contains("private const val GESTURE_RELEASE_HOLD_MS"))
+
+        // 手势起止由 Activity 的 dispatchTouchEvent 统一转发，覆盖所有滚动容器。
+        val activity = source2("ui/skin/activity/SkinnedActivity.kt")
+        val dispatch = activity.substringAfter("override fun dispatchTouchEvent(")
+            .substringBefore("protected fun clearElasticInteractions()")
+        assertTrue(dispatch.contains("MotionEvent.ACTION_DOWN -> skinSessionOrNull?.notifyGestureActive(true)"))
+        assertTrue(dispatch.contains("notifyGestureActive(false)"))
+    }
+
+    private fun source2(relative: String): String = sequenceOf(
+        java.io.File("src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/$relative"),
+        java.io.File("app/src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/$relative")
+    ).first(java.io.File::isFile).readText()
 
     private fun source(name: String): String = sequenceOf(
         File("src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/liquid/$name.kt"),

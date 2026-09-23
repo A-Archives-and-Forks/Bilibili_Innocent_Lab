@@ -3,6 +3,7 @@ package com.Bilibili_Innocent_Lab.xposedmodule.ui.activity
 import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
+import kotlin.math.ln
 import kotlin.math.exp
 import kotlin.math.pow
 import kotlin.math.roundToInt
@@ -34,6 +35,8 @@ internal class GlowShape {
     var radiusY = 0f
     var rotationDeg = 0f
     var coreOffsetX = 0f
+    /** 局部坐标换基后的 Y 分量，防止形状过渡时把亮核跟着旋转。 */
+    var coreOffsetY = 0f
     /** 0..1：触点越出轮廓的堆积程度（低通后）。0 = 在轮廓内。 */
     var pileUnit = 0f
     /** 0..约 3.4。乘各表面基础 alpha；不设 clamp——上界由构造保证（见 [GlowState.update]）。 */
@@ -49,6 +52,7 @@ internal class GlowShape {
         radiusY = 0f
         rotationDeg = 0f
         coreOffsetX = 0f
+        coreOffsetY = 0f
         pileUnit = 0f
         alphaUnit = 0f
         alphaByte = 0
@@ -118,7 +122,9 @@ internal class GlowConfig(
     val coreShiftMaxPx: Float,
     val oriented: Boolean = true,
     val pileRefPx: Float = 0f,
-    val pileGain: Float = PILE_GAIN
+    val pileGain: Float = PILE_GAIN,
+    /** 底栏：保持贴边前的光团尺度，直接过渡到聚拢，避免先淡出缩小再恢复。 */
+    val continuousEdgePile: Boolean = false
 ) {
     companion object {
         const val VELOCITY_EPS_DP_PER_SEC = 20f
@@ -225,7 +231,8 @@ internal class GlowConfig(
             axialBoost: Float = AXIAL_BOOST,
             oriented: Boolean = true,
             pileRefDp: Float = PILE_REF_DP,
-            pileGain: Float = PILE_GAIN
+            pileGain: Float = PILE_GAIN,
+            continuousEdgePile: Boolean = false
         ): GlowConfig {
             val scale = if (density.isFinite() && density > 0f) density else 1f
             return GlowConfig(
@@ -239,7 +246,8 @@ internal class GlowConfig(
                 coreShiftMaxPx = CORE_SHIFT_MAX_DP * scale,
                 oriented = oriented,
                 pileRefPx = pileRefDp * scale,
-                pileGain = pileGain
+                pileGain = pileGain,
+                continuousEdgePile = continuousEdgePile
             )
         }
     }
@@ -412,6 +420,7 @@ internal class GlowState {
         var radiusX: Float
         var radiusY: Float
         var coreOffsetX = 0f
+        var coreOffsetY = 0f
         var renderX: Float
         var renderY: Float
         if (config.oriented) {
@@ -443,8 +452,10 @@ internal class GlowState {
         // 矩形四角本就在胶囊轮廓外。
         val signedDistance = roundedRectSignedDistance(centerX, centerY, boundsWidth, boundsHeight, corner)
         val inside = if (config.edgeBandPx > 0f) smoothStep(0f, config.edgeBandPx, -signedDistance) else 1f
-        val edge = GlowConfig.EDGE_ALPHA_FLOOR + (1f - GlowConfig.EDGE_ALPHA_FLOOR) * inside
-        val edgeScale = GlowConfig.EDGE_MIN_SCALE + (1f - GlowConfig.EDGE_MIN_SCALE) * inside
+        val edge = if (config.continuousEdgePile) 1f
+            else GlowConfig.EDGE_ALPHA_FLOOR + (1f - GlowConfig.EDGE_ALPHA_FLOOR) * inside
+        val edgeScale = if (config.continuousEdgePile) 1f
+            else GlowConfig.EDGE_MIN_SCALE + (1f - GlowConfig.EDGE_MIN_SCALE) * inside
         radiusX *= edgeScale
         radiusY *= edgeScale
         alphaUnit *= edge
@@ -508,21 +519,46 @@ internal class GlowState {
                 renderX += (pinnedX - renderX) * pile
                 renderY += (pinnedY - renderY) * pile
                 val normalDeg = toDegrees(atan2(normal[1].toDouble(), normal[0].toDouble())).toFloat()
-                rotationDeg += shortestAxisDeltaDeg(rotationDeg, normalDeg) * pile
+                if (!config.continuousEdgePile) rotationDeg += shortestAxisDeltaDeg(rotationDeg, normalDeg) * pile
                 if (radiusX > 0f && radiusY > 0f) {
                     // 尺寸与长短轴比分开算：面积 = iso²（iso ≤ 基准半径），长短轴比在对数空间里
                     // 从当前值滑向 1/spreadFactor——沿法向压扁、沿切向铺开。
                     var iso = sqrt(radiusX) * sqrt(radiusY)
                     // 双向收敛到 PILE_RECOVER·R：比目标小的（取向模型旧路径）撑起，
                     // 比目标大的（流动模型界内光团）收拢——两个方向都是单调收敛，无回涨。
-                    iso += (radius * GlowConfig.PILE_RECOVER - iso) * pile
+                    val recovery = if (config.continuousEdgePile) 1f else GlowConfig.PILE_RECOVER
+                    iso += (radius * recovery - iso) * pile
                     val spreadFactor = 1f + GlowConfig.PILE_SPREAD * pile
-                    val aniso = sqrt(radiusX / radiusY).coerceIn(1e-3f, 1e3f).pow(1f - pile) / spreadFactor
-                    radiusX = iso * aniso
-                    radiusY = iso / aniso
+                    if (config.continuousEdgePile) {
+                        // 在同一坐标系混合对数形状（迹为0 => 面积守恒），不能先转到法线再换长短轴。
+                        // 水平光团贴上/下边时起终长轴都是水平，旧角度插值却会在中途扫过斜角。
+                        val relative = toRadians((normalDeg - rotationDeg).toDouble())
+                        val from = ln(radiusX / radiusY) * 0.5f
+                        val to = -ln(spreadFactor)
+                        val xx = from * (1f - pile) + to * cos(2.0 * relative).toFloat() * pile
+                        val xy = to * sin(2.0 * relative).toFloat() * pile
+                        val magnitude = sqrt(xx * xx + xy * xy)
+                        val turn = if (magnitude > 1e-6f) 0.5 * atan2(xy.toDouble(), xx.toDouble()) else 0.0
+                        val aniso = exp(magnitude)
+                        radiusX = iso * aniso
+                        radiusY = iso / aniso
+                        rotationDeg += toDegrees(turn).toFloat()
+                        // 只换形状坐标系；亮核的屏幕方向不变，继续按原轨迹向中心收拢。
+                        coreOffsetY = -coreOffsetX * sin(turn).toFloat()
+                        coreOffsetX *= cos(turn).toFloat()
+                    } else {
+                        val aniso = sqrt(radiusX / radiusY).coerceIn(1e-3f, 1e3f).pow(1f - pile) / spreadFactor
+                        radiusX = iso * aniso
+                        radiusY = iso / aniso
+                    }
                 }
                 coreOffsetX *= 1f - pile
-                alphaUnit *= 1f + config.pileGain * pile
+                coreOffsetY *= 1f - pile
+                // 去掉贴边衰减后保持旧的满额亮度，避免将尺度修复变成额外的强光。
+                val pileGain = if (config.continuousEdgePile)
+                    (GlowConfig.EDGE_ALPHA_FLOOR * (1f + config.pileGain) - 1f).coerceAtLeast(0f)
+                else config.pileGain
+                alphaUnit *= 1f + pileGain * pile
             }
         }
 
@@ -533,6 +569,7 @@ internal class GlowState {
         shape.radiusY = radiusY
         shape.rotationDeg = rotationDeg
         shape.coreOffsetX = coreOffsetX
+        shape.coreOffsetY = coreOffsetY
         shape.pileUnit = pile
         shape.alphaUnit = alphaUnit
         shape.alphaByte = alphaByte

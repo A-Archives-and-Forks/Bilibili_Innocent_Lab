@@ -19,6 +19,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.R
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid.LiquidChoiceDrawable
 import androidx.annotation.MainThread
 import com.highcapable.betterandroid.ui.component.activity.AppViewsActivity
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.engine.GlowEngine
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.runtime.ActivitySkinSession
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.runtime.SkinSessionDiagnostics
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.SkinId
@@ -45,6 +46,13 @@ abstract class SkinnedActivity : AppViewsActivity() {
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         if (lifecycleEnded) return super.dispatchTouchEvent(event)
+        // 手势起止转给皮肤会话：抑制解除是一次"两次整组表面重录 + 一次全屏 PixelCopy"的
+        // 重同步，落在新手势的头几帧上就是可感知的迟滞（回弹刚结束立刻反向滑最容易撞上）。
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> skinSessionOrNull?.notifyGestureActive(true)
+            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                skinSessionOrNull?.notifyGestureActive(false)
+        }
         val controller = elasticInteraction ?: ElasticInteractionController(
             root = window.decorView,
             notifyPositionChanged = { notifyPreparedSkinPositionChanged() },
@@ -151,6 +159,12 @@ abstract class SkinnedActivity : AppViewsActivity() {
                     view.thumbDrawable = choice(width, height, thumb = true)
                     view.trackDrawable = choice(width * 2, height)
                     view.splitTrack = false
+                    // 新装的 drawable 起始状态是空的：`setThumbDrawable`/`setTrackDrawable`
+                    // 都不会把 View 当前状态推给它，框架只在下一次 drawableStateChanged()
+                    // 时推。冷启动时窗口获焦会补上那一次，而换皮肤走 recreate()——新视图
+                    // 在**已获焦**的窗口里挂载，state_window_focused 没有变化，于是补不上：
+                    // 已开启的开关滑块在右边、配色却停在未选中的灰（2026-09-22 真机实证）。
+                    view.refreshDrawableState()
                 }
                 is CheckBox -> {
                     // 框架默认按钮在各 ROM 上尺寸发散（本机 ~32dp），钳到一个小区间：
@@ -159,6 +173,9 @@ abstract class SkinnedActivity : AppViewsActivity() {
                         .coerceIn((20 * density).toInt(), (26 * density).toInt())
                     view.buttonTintList = null
                     view.buttonDrawable = choice(size, size, checkbox = true)
+                    // 与开关同理：新 drawable 必须立刻拿到当前状态，否则已勾选的复选框
+                    // 会画成未勾选配色。
+                    view.refreshDrawableState()
                     // 框架默认 background 是 40dp 的按压涟漪（control_background_40dp_material），
                     // 勾选时会在按钮周围开一块浅色遮罩——皮肤接管视觉后这块就是杂讯，去掉。
                     view.background = null
@@ -271,6 +288,13 @@ abstract class SkinnedActivity : AppViewsActivity() {
         if (!lifecycleEnded) skinSessionOrNull?.bindContentSource(view)
     }
 
+    /**
+     * 当前在画的凝光引擎，供悬浮栏可读性（`GlowFloatingChrome`）现取现用；生命周期结束或
+     * 没有会话时为 null。调用方不得缓存——Liquid 失败回落后会换成柔光。
+     */
+    internal val glowEngine: GlowEngine?
+        get() = if (lifecycleEnded) null else skinSessionOrNull?.engine
+
     /** 当前持久化选择是否请求 Liquid；未准备会话时保持 false。 */
     // internal 而非 protected：同上，外移的摘要文案（SkinSummaryPresenter）是扩展函数，
     // 拿不到 protected。两者都是只读 val，放宽的是"读"而不是"写"，
@@ -321,6 +345,11 @@ abstract class SkinnedActivity : AppViewsActivity() {
 
     internal fun skinSelectionBackground(color: Int, radiusDp: Float = 22f): Drawable =
         skinBackground(color, radiusDp, materialOutline = true, role = SurfaceRole.SELECTED_ITEM)
+
+    internal fun skinChromeOverlayBackground(color: Int, radiusDp: Float, selected: Boolean = false): Drawable =
+        ModernMaterialDrawables.chromeOverlay(color, radiusDp * resources.displayMetrics.density,
+            resources.displayMetrics.density, if (selected) SurfaceRole.SELECTED_ITEM else SurfaceRole.FLOATING,
+            ColorUtils.calculateLuminance(monetColors.background) < .5)
 
     /** 模态表面语义背景；保留既有 28dp 默认圆角。 */
     protected fun skinModalBackground(

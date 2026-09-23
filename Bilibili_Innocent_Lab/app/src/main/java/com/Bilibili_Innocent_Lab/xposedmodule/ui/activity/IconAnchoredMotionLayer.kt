@@ -19,11 +19,12 @@ import kotlin.math.ceil
 import kotlin.math.floor
 
 /**
- * 图标锚点形变承载层：普通路径裁剪卡片，覆盖路径分开绘制表面与卡片内容。
+ * 图标锚点形变承载层：覆盖路径分开绘制表面与卡片内容。
  *
- * 普通弹窗沿用 outline 裁剪。覆盖式子面板复用气泡的有界皮肤表面并持续持有背景，
- * 取代卡片背景与全屏动画背景；只裁正文，避免终点切换两套描边与抗锯齿边缘。
- * 承载层不接管 elevation，不为原本没有阴影的表面新增阴影。
+ * 所有锚点弹窗复用气泡的有界皮肤表面并持续持有背景，取代卡片背景与全屏动画
+ * 背景；只裁正文，形变首尾与落定态画的是**同一个 Drawable**，没有 drawable 交接，
+ * 也就没有两套描边与抗锯齿边缘在终点互跳。卡片 elevation 移交到表面 View，
+ * 投影随帧矩形生长，落定不再整圈弹出。承载层自身不接管 elevation。
  *
  * 与 `SettingsBackupMotionHost` 的关系：两者共用"可变 outline 裁剪"这一个原语，但那个 host
  * 还要承担 backdrop、标题副本、跨窗口坐标和页面替换；图标锚点一条都不需要，所以单独实现，
@@ -34,7 +35,8 @@ internal class IconAnchoredMotionLayer(
     context: Context,
     surfaceBackground: Drawable? = null,
     private val fallbackColor: Int = 0,
-    private val surfaceRadiusPx: Float = 0f
+    private val surfaceRadiusPx: Float = 0f,
+    surfaceElevation: Float = 0f
 ) : FrameLayout(context), LiquidMotionSurfaceFrameProvider {
 
     // 覆盖式子面板始终由同一个表面画填充和描边；只裁正文，不裁表面自身的抗锯齿边缘。
@@ -72,20 +74,37 @@ internal class IconAnchoredMotionLayer(
         clipChildren = true
         clipToPadding = false
         persistentSurface?.let { addView(it, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)) }
+        // 卡片阴影由本层持有：elevation 是层在 root 里的兄弟 Z 序（不影响子 View
+        // 顺序——表面在下、卡片在上），outline 决定投影形状。形变期 outline=形变
+        // 矩形，落定后 outline=卡片矩形，阴影全程连续、落定不弹出。表面 View 不能
+        // 带 elevation（Z>0 的子 View 会排到最后绘制，半透明表面会盖住正文）。
+        elevation = surfaceElevation
         outlineProvider = object : ViewOutlineProvider() {
             override fun getOutline(view: View, outline: Outline) {
-                if (!shaped || motionBounds.isEmpty) {
+                if (shaped && !motionBounds.isEmpty) {
+                    outline.setRoundRect(
+                        floor(motionBounds.left).toInt(),
+                        floor(motionBounds.top).toInt(),
+                        ceil(motionBounds.right).toInt(),
+                        ceil(motionBounds.bottom).toInt(),
+                        motionRadius
+                    )
+                    outline.alpha = 1f
+                } else if (!motionBounds.isEmpty) {
+                    // 落定态：updateRestingSurface 已把卡片矩形写回 motionBounds，
+                    // 圆角回卡片固定半径——阴影贴着稳定卡片，不随覆盖正文伸缩。
+                    outline.setRoundRect(
+                        floor(motionBounds.left).toInt(),
+                        floor(motionBounds.top).toInt(),
+                        ceil(motionBounds.right).toInt(),
+                        ceil(motionBounds.bottom).toInt(),
+                        surfaceRadiusPx
+                    )
+                    outline.alpha = 1f
+                } else {
                     outline.setRect(0, 0, view.width, view.height)
                     outline.alpha = 0f
-                    return
                 }
-                outline.setRoundRect(
-                    floor(motionBounds.left).toInt(),
-                    floor(motionBounds.top).toInt(),
-                    ceil(motionBounds.right).toInt(),
-                    ceil(motionBounds.bottom).toInt(),
-                    motionRadius
-                )
             }
         }
     }
@@ -113,10 +132,12 @@ internal class IconAnchoredMotionLayer(
         )
         if (usesPersistentSurface) {
             // 表面直接画当前尺寸的圆角和描边，不能再被父层 outline 二次裁切。
+            // 但 outline 仍要逐帧刷新——本层的 elevation 投影形状就是它。
             clipToOutline = false
             contentClip.rewind()
             contentClip.addRoundRect(motionBounds, motionRadius, motionRadius, Path.Direction.CW)
             persistentSurface?.updateFrame(motionBounds, motionRadius, 1f)
+            invalidateOutline()
             invalidate()
         } else {
             clipToOutline = true
@@ -153,6 +174,8 @@ internal class IconAnchoredMotionLayer(
         val card = child<View>(1)
         motionBounds.set(card.left.toFloat(), card.top.toFloat(), card.right.toFloat(), card.bottom.toFloat())
         surface.updateFrame(motionBounds, surfaceRadiusPx, 1f)
+        // 落定矩形同时是投影轮廓：卡片重排版后阴影跟着走，不留旧形。
+        invalidateOutline()
     }
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {

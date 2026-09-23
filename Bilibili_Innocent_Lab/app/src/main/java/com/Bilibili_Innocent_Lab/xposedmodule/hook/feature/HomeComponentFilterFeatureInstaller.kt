@@ -76,8 +76,7 @@ internal class HomeComponentFilterFeatureInstaller(
         var current: Any? = invokeParent(parentGetter, fragment)
         repeat(MAX_PARENT_DEPTH) {
             val parent = current ?: return false
-            val name = parent.javaClass.name.lowercase()
-            if (HOME_CONTAINER_MARKERS.any(name::contains)) return true
+            if (isHomeContainer(parent.javaClass)) return true
             current = invokeParent(parentGetter, parent)
         }
         return false
@@ -154,6 +153,24 @@ internal class HomeComponentFilterFeatureInstaller(
             "mine",
             "mainfragment"
         )
+
+        /**
+         * 父 Fragment 的**类继承链**里任一类名命中容器标记即算首页容器。
+         *
+         * 只看运行时类名会漏掉新首页框架：那边首页页面的运行时类是
+         * `tv.danmaku.bili.home.tab.page.HomeFragment`，标记 `basehomefragment` 对应的是它的
+         * 父类 `BaseHomeFragment`（8.92.1–9.12.0 全宿主里唯一名字含它的类）。
+         * 旧框架的 `HomeFragmentV2` 父链上没有别的类名会因此新命中。
+         */
+        internal fun isHomeContainer(type: Class<*>): Boolean =
+            generateSequence(type) { it.superclass }
+                .take(MAX_CONTAINER_HIERARCHY)
+                .any { owner ->
+                    val name = owner.name.lowercase()
+                    HOME_CONTAINER_MARKERS.any(name::contains)
+                }
+
+        private const val MAX_CONTAINER_HIERARCHY = 8
 
         internal fun isClassMatched(rules: String, className: String): Boolean =
             isStaticCandidate(className) && RuleSetCodec.matches(

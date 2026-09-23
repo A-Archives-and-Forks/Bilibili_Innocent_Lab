@@ -109,11 +109,80 @@ class LiquidRefreshOptimizationTest {
         assertTrue(visibility.contains("parameters.effectPaddingDp * density"))
         assertTrue(renderer.contains("addOnScrollChangedListener(scrollListener)"))
         val capture = renderer.substringAfter("private fun requestRealtimeCapture(").substringBefore("private fun handleRealtimeCaptureResult")
-        assertTrue(capture.indexOf("buildSuppressionMask(root, captureSource)") in 0 until capture.indexOf("PixelCopy.request("))
+        assertTrue(capture.indexOf("feedback.buildSuppressionMask(") in 0 until capture.indexOf("PixelCopy.request("))
         val refresh = renderer.substringAfter("private fun invalidateMovedSurfaces").substringBefore("private fun isSurfacePotentiallyVisible")
         assertEquals(1, Regex("refreshWindowRoot = null").findAll(refresh).count())
         assertEquals(1, Regex("refreshState.shouldRefresh").findAll(refresh).count())
         assertTrue(refresh.contains("OnPreDrawListener"))
         assertTrue(refresh.contains("if (changes == 0) return"))
+    }
+
+    /**
+     * 实时采集静止门控的接线（2026-09-23）。静止空转既让 GPU 持续 30% 占空，又把"采集管线节奏"
+     * 喂给吞吐统计，误判跟不上而把窗口压到 60Hz。
+     */
+    @Test fun `realtime capture idles on identical frames without breaking triple buffering`() {
+        val renderer = source("LiquidActivityRenderer")
+        val result = renderer.substringAfter("private fun handleRealtimeCaptureResult(")
+            .substringBefore("private fun applyCaptureThroughputSample(")
+        val unchanged = result.substringAfter("if (unchanged) {").substringBefore("identicalCaptureStreak = 0")
+        assertTrue("相同截图不得绑定、不得失效表面", !unchanged.contains("bindPreparedBackendsToBackdrop") &&
+            !unchanged.contains("invalidateRegisteredSurfaces"))
+        assertTrue("轮转必须退回这块未绑定的缓冲，下一次探测不能写到被显示列表引用的那块",
+            unchanged.contains("realtimeCaptureNextIndex = realtimeCaptureSources.indexOf(captureSource)"))
+        assertTrue("相同截图必须重置吞吐统计，否则空转节奏会被误判为跟不上而降到 60Hz",
+            unchanged.contains("refreshRate.resetThroughput()"))
+        // 2026-09-23 逐像素比较移到截图线程，基准在发起时冻结；提交时基准必须仍是绑定源。
+        val postProcess = renderer.substringAfter("private fun postProcessRealtimeCapture(").substringBefore("\n}")
+        assertTrue("逐像素比较在 PixelCopy 回调里，异常只能当作有变化",
+            postProcess.contains("runCatching { request.source.bitmap.sameAs(baseline.bitmap) }.getOrDefault(false)"))
+        assertTrue("基准换了就不能采信后台比较结论", result.contains("bound === request.baseline"))
+        val frame = renderer.substringAfter("private fun onRealtimeFrame(").substringBefore("private fun requestRealtimeCapture(")
+        assertTrue("静止期不得继续逐帧回调", frame.contains("|| realtimeIdle"))
+        assertTrue("窗口任何绘制都必须唤醒采集", renderer.contains("addOnDrawListener(realtimeDrawListener)"))
+        assertTrue("静止判定只和真正绑定给后端的底图比", renderer.contains("lastBoundBackdrop === bound"))
+    }
+    /**
+     * 实时截图后处理移出 UI 线程（2026-09-23 动画性能第二批）。反馈抑制（约 1,000,000 px 的软件
+     * 路径填充）与整图 `sameAs` 原来在 PixelCopy 的主线程回调里；现在回调投到截图线程，主线程只做
+     * 验票与提交。单飞必须覆盖"截图 → 后处理 → 提交"全程，否则下一次请求会在后台还在读时改写遮罩。
+     */
+    @Test fun `realtime capture post-processing runs off the ui thread under one flight`() {
+        val renderer = source("LiquidActivityRenderer")
+        val request = renderer.substringAfter("private fun requestRealtimeCapture(")
+            .substringBefore("private fun handleRealtimeCaptureResult(")
+        assertTrue("PixelCopy 回调不得再投到主线程", request.contains("callbackHandler\n") &&
+            request.contains("val callbackHandler = captureWorker() ?: mainHandler"))
+        assertTrue("后处理在回调线程执行、之后才回主线程提交",
+            request.indexOf("postProcessRealtimeCapture(suppressor, request, result)") in
+                0 until request.indexOf("mainHandler.post { recipient.get()?.handleRealtimeCaptureResult(request, result) }"))
+        assertTrue("回调不得强引用渲染器", !request.substringAfter("OnPixelCopyFinishedListener").substringBefore("val requested")
+            .contains("feedback."))
+        assertTrue("基准在发起时冻结", request.indexOf("val baseline = realtimeBackdropSource") in
+            0 until request.indexOf("LiquidCaptureRequest(ticket"))
+
+        val postProcess = renderer.substringAfter("@AnyThread\nprivate fun postProcessRealtimeCapture(").substringBefore("\n}")
+        assertTrue(postProcess.contains("sanitizeRealtimeCapture"))
+        assertTrue("失败结果不得做逐像素比较", postProcess.indexOf("outcome == LiquidCaptureOutcome.FAILED") in
+            0 until postProcess.indexOf("sameAs("))
+
+        val result = renderer.substringAfter("private fun handleRealtimeCaptureResult(")
+            .substringBefore("private fun applyCaptureThroughputSample(")
+        assertFalse("主线程提交不得再做抑制或逐像素比较",
+            result.contains("sanitizeRealtimeCapture") || result.contains("sameAs("))
+        assertTrue("单飞只在主线程提交时结束", result.indexOf("realtimeCaptureInFlight = null") in
+            0 until result.indexOf("request.outcome"))
+        assertEquals("在飞标记只能由提交清除", 1, Regex("realtimeCaptureInFlight = null").findAll(renderer).count())
+
+        // 抑制器的截图侧状态只在截图线程上改：主线程的释放必须投递过去，关闭时排在在飞后处理之后。
+        assertFalse(renderer.contains("feedback.releaseSuppressionUnderlay()"))
+        assertTrue(renderer.contains("onCaptureWorker(feedback::releaseSuppressionUnderlay)"))
+        val close = renderer.substringAfter("override fun close()")
+        assertTrue(close.indexOf("onCaptureWorker(feedback::close)") in 0 until close.indexOf("captureThread?.quitSafely()"))
+        val suppressor = source("LiquidFeedbackSuppressor")
+        assertFalse("抑制器不能再整体标成主线程类",
+            Regex("@MainThread\\s+internal class").containsMatchIn(suppressor))
+        assertTrue(suppressor.substringBefore("fun sanitizeRealtimeCapture(").trimEnd().endsWith("@AnyThread"))
+        assertTrue(suppressor.substringBefore("fun buildSuppressionMask(").trimEnd().endsWith("@MainThread"))
     }
 }

@@ -35,7 +35,8 @@ internal object VersionAdapterContract {
      * 拿不到详情页播放量链，该维度会静默变成"从不命中"。
      * 首页封面文案走运行期 Class 缓存，不进适配 JSON。
      */
-    const val RULE_VERSION = 62
+    /** 62 → 63（2026-09-23）：9.13.0(9130300) 更新/默认画质 owner 搬迁；JSON 形状不变。 */
+    const val RULE_VERSION = 63
 
     /**
      * 51 → 52（2026-09-11，9.11.0(9110400) 适配）：

@@ -79,14 +79,43 @@ class ExpansionMotionPolicyTest {
     @Test
     fun rowRevealFollowsTheClipEdge() {
         val feather = 66f
-        assertEquals(0f, ExpansionMotionPolicy.rowReveal(clipY = 100f, rowTop = 200f, featherPx = feather), 1e-4f)
-        assertEquals(0f, ExpansionMotionPolicy.rowReveal(clipY = 200f, rowTop = 200f, featherPx = feather), 1e-4f)
-        assertEquals(0.5f, ExpansionMotionPolicy.rowReveal(clipY = 233f, rowTop = 200f, featherPx = feather), 1e-3f)
-        assertEquals(1f, ExpansionMotionPolicy.rowReveal(clipY = 266f, rowTop = 200f, featherPx = feather), 1e-4f)
-        assertEquals(1f, ExpansionMotionPolicy.rowReveal(clipY = 999f, rowTop = 200f, featherPx = feather), 1e-4f)
+        assertEquals(0f, ExpansionMotionPolicy.rowReveal(clipY = 100f, drawnTop = 200f, featherPx = feather), 1e-4f)
+        assertEquals(0f, ExpansionMotionPolicy.rowReveal(clipY = 200f, drawnTop = 200f, featherPx = feather), 1e-4f)
+        assertEquals(0.5f, ExpansionMotionPolicy.rowReveal(clipY = 233f, drawnTop = 200f, featherPx = feather), 1e-3f)
+        assertEquals(1f, ExpansionMotionPolicy.rowReveal(clipY = 266f, drawnTop = 200f, featherPx = feather), 1e-4f)
+        assertEquals(1f, ExpansionMotionPolicy.rowReveal(clipY = 999f, drawnTop = 200f, featherPx = feather), 1e-4f)
         // 退化输入：feather<=0 时退化为硬切换
-        assertEquals(1f, ExpansionMotionPolicy.rowReveal(clipY = 200f, rowTop = 200f, featherPx = 0f), 1e-4f)
-        assertEquals(0f, ExpansionMotionPolicy.rowReveal(clipY = 199f, rowTop = 200f, featherPx = 0f), 1e-4f)
+        assertEquals(1f, ExpansionMotionPolicy.rowReveal(clipY = 200f, drawnTop = 200f, featherPx = 0f), 1e-4f)
+        assertEquals(0f, ExpansionMotionPolicy.rowReveal(clipY = 199f, drawnTop = 200f, featherPx = 0f), 1e-4f)
+    }
+
+    @Test
+    fun foldedRowsStackAtHeaderAndNeverCross() {
+        // p=0 时各行折成等差牌堆；p=1 归位；任意中间态行序严格单调（永不互穿）。
+        val tops = floatArrayOf(0f, 210f, 395f, 560f, 760f)
+        val peek = 54f
+        for (i in tops.indices) {
+            assertEquals(
+                i * peek,
+                ExpansionMotionPolicy.rowFoldedTop(i, tops[i], 0f, peek),
+                1e-3f
+            )
+            assertEquals(
+                tops[i],
+                ExpansionMotionPolicy.rowFoldedTop(i, tops[i], 1f, peek),
+                1e-3f
+            )
+        }
+        var p = 0.13f
+        while (p < 1f) {
+            var prev = -1f
+            for (i in tops.indices) {
+                val t = ExpansionMotionPolicy.rowFoldedTop(i, tops[i], p, peek)
+                assertTrue("row $i must stay below row ${i - 1} at p=$p", t > prev)
+                prev = t
+            }
+            p += 0.13f
+        }
     }
 
     @Test
@@ -94,5 +123,42 @@ class ExpansionMotionPolicyTest {
         assertEquals(0f, ExpansionMotionPolicy.contentAlpha(0f), 1e-4f)
         assertEquals(1f, ExpansionMotionPolicy.contentAlpha(0.55f), 1e-4f)
         assertEquals(1f, ExpansionMotionPolicy.contentAlpha(1f), 1e-4f)
+    }
+
+    /**
+     * 静止阈值必须按真实像素行程换算：归一化阈值乘上长行程就是可见的一次性位移。
+     * 真机实测——视角跟随让 p 同时驱动 1700px 滚动，0.003×1700≈5px 在最后一帧走完，
+     * 而此前每帧只走 1px。
+     */
+    @Test
+    fun restThresholdsShrinkOnLongTravelAndStayPutOnShortOnes() {
+        val (shortP, shortV) = ExpansionMotionPolicy.restThresholds(200f)
+        assertEquals("短行程换算值高于原常量，必须钳回原值（行为逐字不变）",
+            ExpansionMotionPolicy.REST_P, shortP, 1e-6f)
+        assertEquals(ExpansionMotionPolicy.REST_V, shortV, 1e-6f)
+
+        val (longP, longV) = ExpansionMotionPolicy.restThresholds(1700f)
+        assertTrue("长行程必须收紧位置阈值", longP < ExpansionMotionPolicy.REST_P)
+        assertTrue("收尾残差不得超过 1px", longP * 1700f <= ExpansionMotionPolicy.REST_TOLERANCE_PX + 1e-3f)
+        assertTrue("长行程必须收紧速度阈值", longV < ExpansionMotionPolicy.REST_V)
+
+        val (floorP, floorV) = ExpansionMotionPolicy.restThresholds(1_000_000f)
+        assertEquals("阈值有下界，超长行程不能拖成无限爬行",
+            ExpansionMotionPolicy.MIN_REST_P, floorP, 1e-9f)
+        assertEquals(ExpansionMotionPolicy.MIN_REST_V, floorV, 1e-9f)
+
+        val (zeroP, zeroV) = ExpansionMotionPolicy.restThresholds(0f)
+        assertEquals(ExpansionMotionPolicy.REST_P, zeroP, 1e-6f)
+        assertEquals(ExpansionMotionPolicy.REST_V, zeroV, 1e-6f)
+    }
+
+    /** 收紧阈值只延长尾段，不能把整段动画拖长到另一个量级。 */
+    @Test
+    fun tighterThresholdsOnlyExtendTheTail() {
+        val loose = ExpansionMotionPolicy.Spring(p = 0f, target = 1f)
+        val tight = ExpansionMotionPolicy.Spring(p = 0f, target = 1f).apply { adoptTravel(1700f) }
+        val looseFrames = stepUntilRest(loose)
+        val tightFrames = stepUntilRest(tight)
+        assertTrue("收紧后仍必须收敛", tightFrames in (looseFrames + 1)..(looseFrames * 2 + 12))
     }
 }

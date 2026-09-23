@@ -1,7 +1,13 @@
 package com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.material
 
+import android.annotation.SuppressLint
+import android.os.Build
+import android.util.Log
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.engine.GlowBackdropTarget
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.engine.GlowChromeGlassApi31
 import android.graphics.Bitmap
 import android.animation.ValueAnimator
+import android.content.ComponentCallbacks2
 import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Color
@@ -23,6 +29,9 @@ import android.view.ViewTreeObserver
 import androidx.core.graphics.ColorUtils
 import androidx.core.graphics.createBitmap
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.background.AmbientBackdropScene
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.engine.GlowEngine
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.engine.GlowEngineCallbacks
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.SkinId
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid.LiquidMotionSurfaceFrameProvider
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.geometry.SamplingMatrixMath
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.geometry.ViewSamplingMatrix
@@ -36,11 +45,14 @@ import kotlin.math.roundToInt
 
 /**
  * Static ambient frost for every surface, plus a live lens sample for floating chrome.
+ * 柔光材质的 [GlowEngine] 实现；高级材质会话里它同时是休眠的回退引擎。
  *
  * 静态部分只采窗口底图（不含文字、其他窗口）；悬浮/顶栏表面另由 [LiveBackdropSampler] 对宿主用
  * [bindContentSource] 指定的内容层做低分辨率透镜采样，让从胶囊下方穿过的内容被模糊与折射。
  */
-internal class FrostedMaterialRenderer(private val palette: MonetColors, private val density: Float) : AutoCloseable {
+internal class FrostedMaterialRenderer(private val palette: MonetColors, private val density: Float) : GlowEngine {
+    override val skin: SkinId get() = SkinId.MATERIAL_YOU
+
     private val dark = ColorUtils.calculateLuminance(palette.background) < .5
     private var root: View? = null
     private var frame: ModernBackdropFrame? = null
@@ -59,7 +71,14 @@ internal class FrostedMaterialRenderer(private val palette: MonetColors, private
         val source = FloatArray(9)
     }
     private val surfaces = WeakHashMap<View, SurfaceTransform>()
-    private val windows = WeakHashMap<View, ViewTreeObserver.OnScrollChangedListener>()
+    private class RefreshWindow(
+        val observer: WeakReference<ViewTreeObserver>,
+        val batch: FrostedRefreshBatch,
+        val scroll: ViewTreeObserver.OnScrollChangedListener,
+        val preDraw: ViewTreeObserver.OnPreDrawListener,
+        val draw: ViewTreeObserver.OnDrawListener
+    )
+    private val windows = WeakHashMap<View, RefreshWindow>()
     private val lifecycle = FrostedMaterialLifecycle()
     private val generation: Long get() = lifecycle.generation
     private val closed: Boolean get() = lifecycle.isClosed
@@ -71,15 +90,31 @@ internal class FrostedMaterialRenderer(private val palette: MonetColors, private
     private var work: Future<*>? = null
     private val worker by lazy { Executors.newSingleThreadExecutor { task -> Thread(task, "BIL-SoftFrost").apply { isDaemon = true } } }
     private val handler = Handler(Looper.getMainLooper())
-    private val live = LiveBackdropSampler(density)
+    // 与透镜采集共用矩阵工具：采集录制里每张卡片的静态磨砂映射都走这里，采集期间的祖先备忘才能生效。
+    private val live = LiveBackdropSampler(density, samplingMatrices)
     private val layoutListener = View.OnLayoutChangeListener { _, l, t, r, b, _, _, _, _ -> requestBackdrop(r - l, b - t) }
 
+    /**
+     * 悬浮栏宿主 → 内容节点玻璃（C 期，API 31+，见 [FrostedChromeGlassApi31]）。登记后该栏不再走
+     * [LiveBackdropSampler] 的主线程录制 + 后台软件模糊。glass 为 GlowChromeGlassApi31，声明成
+     * Any 以免 API 31 以下加载本类时解析它。
+     */
+    private class ChromeGlass(val target: GlowBackdropTarget, val glass: Any)
+    private val chromeGlass = WeakHashMap<View, ChromeGlass>()
+    private val chromeTransform = Matrix()
+    private val chromeBounds = Rect()
+    /** 节点路径任一次出错即永久停用，退回软件透镜。 */
+    private var chromeGlassBroken = false
+
     /** 悬浮表面下方的内容层（表面的兄弟，不含表面自身）；未绑定则悬浮表面只有静态磨砂。 */
-    fun bindContentSource(view: View) {
+    override fun bindContentSource(view: View) {
         if (closed) return
         live.bindSource(view)
         surfaces.keys.forEach(View::invalidate)
     }
+
+    /** 柔光不会失败：没有健康确认，也没有致命回退。 */
+    override fun bindRoot(root: View, callbacks: GlowEngineCallbacks): Boolean = bindRoot(root)
 
     fun bindRoot(view: View): Boolean {
         if (closed || (root != null && root !== view)) return false
@@ -107,8 +142,8 @@ internal class FrostedMaterialRenderer(private val palette: MonetColors, private
         return true
     }
 
-    fun surface(color: Int, radiusDp: Float, role: SurfaceRole): Drawable =
-        ModernSurfaceDrawable(this, color, radiusDp * density, density, ModernMaterialPolicy.surface(role, dark))
+    override fun surface(fallbackColor: Int, radiusDp: Float, role: SurfaceRole): Drawable =
+        ModernSurfaceDrawable(this, fallbackColor, radiusDp * density, density, ModernMaterialPolicy.surface(role, dark))
 
     private fun requestBackdrop(newWidth: Int, newHeight: Int) {
         if (!lifecycle.canWork || newWidth <= 0 || newHeight <= 0 || (width == newWidth && height == newHeight && (frame != null || work != null))) return
@@ -168,47 +203,186 @@ internal class FrostedMaterialRenderer(private val palette: MonetColors, private
 
     internal fun drawLiveSample(canvas: Canvas, bounds: RectF, radius: Float, view: View?, opacity: Int): Boolean {
         if (closed || view == null || !lifecycle.canWork) return false
+        val chrome = chromeGlass[view]
+        if (chrome != null && canvas.isHardwareAccelerated && drawChromeGlass(chrome, canvas, bounds, radius, view, opacity)) {
+            // 节点玻璃接管后，软件采样不能再为这个栏录制。
+            live.unregister(view)
+            return true
+        }
         live.register(view)
         return live.draw(canvas, bounds, radius, view, opacity)
+    }
+
+    override val supportsSurfaceBackdrop: Boolean
+        @SuppressLint("ReplaceWithAndroidVersion")
+        get() = !closed && !chromeGlassBroken && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
+    override val supportsDescendantSurfaceBackdrop: Boolean
+        get() = supportsSurfaceBackdrop
+
+    @SuppressLint("ReplaceWithAndroidVersion")
+    override fun setSurfaceBackdrop(host: View, target: GlowBackdropTarget?) {
+        if (closed) return
+        if (target == null || !supportsSurfaceBackdrop || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            chromeGlass.remove(host)?.let { entry ->
+                closeChromeGlass(entry)
+                host.invalidate()
+            }
+            return
+        }
+        val existing = chromeGlass[host]
+        if (existing?.target === target) return
+        existing?.let(::closeChromeGlass)
+        // 构造里会编译 AGSL：失败即永久停用节点路径，不能抛进调用方的 pre-draw。
+        val glass = runCatching { FrostedChromeGlassApi31.create(density) }.getOrElse { error ->
+            chromeGlassBroken = true
+            Log.w(TAG, "chrome glass unavailable", error)
+            chromeGlass.remove(host)
+            host.invalidate()
+            return
+        }
+        chromeGlass[host] = ChromeGlass(target, glass)
+        host.invalidate()
+    }
+
+    @SuppressLint("ReplaceWithAndroidVersion")
+    private fun closeChromeGlass(entry: ChromeGlass) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) (entry.glass as GlowChromeGlassApi31).close()
+    }
+
+    /** 返回 false 表示本次不可用（内容节点尚未录制、宿主脱离容器），调用方照常走软件透镜。 */
+    @SuppressLint("ReplaceWithAndroidVersion")
+    private fun drawChromeGlass(
+        entry: ChromeGlass,
+        canvas: Canvas,
+        bounds: RectF,
+        radius: Float,
+        view: View,
+        opacity: Int
+    ): Boolean {
+        if (chromeGlassBroken || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
+        val content = entry.target.recordedCapture() ?: return false
+        if (!entry.target.matrixTo(view, chromeTransform)) return false
+        bounds.roundOut(chromeBounds)
+        return runCatching {
+            (entry.glass as GlowChromeGlassApi31).draw(
+                canvas = canvas,
+                bounds = chromeBounds,
+                radiusPx = radius,
+                content = content,
+                contentOffsetX = 0f,
+                contentOffsetY = 0f,
+                alpha = opacity / 255f,
+                opticalIntensity = 1f,
+                stretchDirY = 0f,
+                underlay = null,
+                contentToHost = chromeTransform
+            )
+        }.onFailure { error ->
+            chromeGlassBroken = true
+            Log.w(TAG, "chrome glass disabled", error)
+            chromeGlass.values.forEach(::closeChromeGlass)
+            chromeGlass.clear()
+        }.isSuccess
     }
 
     internal fun register(view: View) {
         if (!lifecycle.canWork) return
         val position = surfaces[view] ?: SurfaceTransform().also { surfaces[view] = it }
-        if (!samplingMatrices.localToScreen(view, position.target)) position.target.fill(Float.NaN)
-        val source = root
-        if (source == null || !samplingMatrices.localToScreen(source, position.source)) position.source.fill(Float.NaN)
-        val windowRoot = view.rootView
-        if (!windows.containsKey(windowRoot)) {
-            val observer = ViewTreeObserver.OnScrollChangedListener(::notifyPositionChanged)
-            windowRoot.viewTreeObserver.addOnScrollChangedListener(observer)
-            windows[windowRoot] = observer
+        // 与批量比对使用相同的自上而下乘法次序，避免浮点结合顺序差异把静止表面误判为移动。
+        samplingMatrices.withAncestorMemo {
+            if (!samplingMatrices.localToScreen(view, position.target)) position.target.fill(Float.NaN)
+            val source = root
+            if (source == null || !samplingMatrices.localToScreen(source, position.source)) position.source.fill(Float.NaN)
+        }
+        registerRefreshWindow(view.rootView)
+    }
+
+    private fun registerRefreshWindow(windowRoot: View) {
+        val observer = windowRoot.viewTreeObserver
+        val existing = windows[windowRoot]
+        if (existing?.observer?.get() === observer && observer.isAlive) return
+        existing?.let(::removeRefreshWindow)
+        val reference = WeakReference(windowRoot)
+        val batch = FrostedRefreshBatch()
+        val scroll = ViewTreeObserver.OnScrollChangedListener {
+            live.invalidate()
+            if (lifecycle.canWork && batch.request()) reference.get()?.let(::flushPositionChanges)
+        }
+        val preDraw = ViewTreeObserver.OnPreDrawListener {
+            if (batch.beforeDraw() && lifecycle.canWork) reference.get()?.let(::flushPositionChanges)
+            true
+        }
+        val draw = ViewTreeObserver.OnDrawListener { batch.drawn() }
+        windows[windowRoot] = RefreshWindow(WeakReference(observer), batch, scroll, preDraw, draw)
+        observer.addOnScrollChangedListener(scroll)
+        observer.addOnPreDrawListener(preDraw)
+        observer.addOnDrawListener(draw)
+    }
+
+    private fun removeRefreshWindow(state: RefreshWindow) {
+        state.batch.clear()
+        state.observer.get()?.takeIf { it.isAlive }?.let { observer ->
+            observer.removeOnScrollChangedListener(state.scroll)
+            observer.removeOnPreDrawListener(state.preDraw)
+            observer.removeOnDrawListener(state.draw)
         }
     }
 
-    fun notifyPositionChanged() {
+    /**
+     * 显式动画/形变的位移通知（`ActivitySkinSession.notifyPositionChanged` 转发）。
+     *
+     * 与滚动走同一条路径、同一个采样节奏：显式动画期曾经整段冻结透镜采样，顶栏/底栏
+     * 透出的背景要等动画播完才跳变（2026-09-23 用户报告）。尖刺改由后台线程消化。
+     */
+    override fun notifyPositionChanged() = onPositionChanged()
+
+    private fun onPositionChanged() {
         if (!lifecycle.canWork) return
         live.invalidate()
-        val source = root
-        val sourceValid = source != null && samplingMatrices.localToScreen(source, sourceTransform)
-        val iterator = surfaces.entries.iterator()
+        val iterator = windows.entries.iterator()
         while (iterator.hasNext()) {
-            val (view, position) = iterator.next()
-            if (!view.isAttachedToWindow) { iterator.remove(); continue }
-            if (!view.isShown) continue
-            if (!sourceValid || !samplingMatrices.localToScreen(view, movedTransform) ||
-                !SamplingMatrixMath.equal(position.target, movedTransform) ||
-                !SamplingMatrixMath.equal(position.source, sourceTransform)) view.invalidate()
+            val (windowRoot, state) = iterator.next()
+            if (!windowRoot.isAttachedToWindow) {
+                removeRefreshWindow(state)
+                iterator.remove()
+            } else if (state.batch.request()) {
+                // 手风琴等可能在本监听之后的 pre-draw 才写回属性；同帧补刷，绝不推迟一帧。
+                flushPositionChanges(windowRoot)
+            }
         }
     }
 
+    private fun flushPositionChanges(windowRoot: View) {
+        if (!lifecycle.canWork) return
+        // 本段只读几何；所有可见表面共用祖先前缀，备忘严格不跨回调保存。
+        samplingMatrices.withAncestorMemo {
+            val source = root
+            val sourceValid = source != null && samplingMatrices.localToScreen(source, sourceTransform)
+            val iterator = surfaces.entries.iterator()
+            while (iterator.hasNext()) {
+                val (view, position) = iterator.next()
+                if (!view.isAttachedToWindow) { iterator.remove(); continue }
+                if (view.rootView !== windowRoot || !view.isShown) continue
+                if (!sourceValid || !samplingMatrices.localToScreen(view, movedTransform) ||
+                    !SamplingMatrixMath.equal(position.target, movedTransform) ||
+                    !SamplingMatrixMath.equal(position.source, sourceTransform)) view.invalidate()
+            }
+        }
+    }
+
+    @SuppressLint("ReplaceWithAndroidVersion")
     fun releaseMemory() {
         lifecycle.invalidate()
+        windows.values.forEach { it.batch.clear() }
         work?.cancel(true); work = null
         revealAnimator?.cancel(); revealAnimator = null; revealFraction = 0f
         // Never recycle a bitmap that can still be referenced by a hardware display list.
         frame = null; sampleShader = null; samplePaint.shader = null
         live.releaseAll()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            chromeGlass.values.forEach { (it.glass as GlowChromeGlassApi31).releaseDisplayList() }
+        }
         root?.invalidate(); surfaces.keys.forEach(View::invalidate)
     }
 
@@ -225,19 +399,33 @@ internal class FrostedMaterialRenderer(private val palette: MonetColors, private
         root?.let { requestBackdrop(it.width, it.height) }
     }
 
+    // 作为高级材质的休眠回退时同样跟随生命周期：Liquid 可能在本次前台会话中途失败并切过来。
+    override fun onStart() = resume()
+    override fun onStop() = stop()
+
+    // 阈值沿用会话层原实现；API 34 起平台不再下发 RUNNING_* 级别，更高的级别照样满足条件。
+    @Suppress("DEPRECATION")
+    override fun onTrimMemory(level: Int) {
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) releaseMemory()
+    }
+
+    override fun onLowMemory() = releaseMemory()
+
     override fun close() {
         if (closed) return
         lifecycle.close()
         releaseMemory()
         live.close()
         root?.removeOnLayoutChangeListener(layoutListener)
-        windows.forEach { (view, listener) ->
-            view.viewTreeObserver.takeIf { it.isAlive }?.removeOnScrollChangedListener(listener)
-        }
+        windows.values.forEach(::removeRefreshWindow)
         windows.clear(); surfaces.clear(); root = null
+        chromeGlass.values.forEach(::closeChromeGlass)
+        chromeGlass.clear()
         if (workerStarted) worker.shutdownNow()
     }
 }
+
+private const val TAG = "BIL-SoftFrost"
 
 /** Prepared allows bind-before-onStart. Stopped and closed states cannot create or accept work. */
 internal class FrostedMaterialLifecycle {
@@ -293,7 +481,8 @@ private class ModernSurfaceDrawable(
     private val color: Int,
     private val radius: Float,
     private val density: Float,
-    private val style: ModernSurfaceStyle
+    private val style: ModernSurfaceStyle,
+    private val tintOnly: Boolean = false
 ) : Drawable() {
     private val rect = RectF()
     private val edgeRect = RectF()
@@ -330,12 +519,16 @@ private class ModernSurfaceDrawable(
         // ARGB belongs to every caller, including ordinary diagnostic entry Views without a motion provider.
         val frameAlpha = FrostedMotionSurfaceAlpha.frameAlpha(drawColor, drawingAlpha)
         if (frameAlpha <= 0) return
-        if (view != null) renderer?.register(view)
-        val tintAlpha = (255 + (style.tintAlpha - 255) * (renderer?.revealFraction ?: 0f)).toInt()
+        // register 记录的是"上一次**硬件**绘制时"的位置，供位移通知判断要不要重录显示列表。
+        // 透镜采集的离屏软件回放不能写它：既是每表面 60–90µs 的重复矩阵计算，又会用当前位置
+        // 覆盖掉显示列表真正录制时的位置——滚动通知在 pre-draw 之后才发，比对就会误判"没动"。
+        if (view != null && canvas.isHardwareAccelerated) renderer?.register(view)
+        val tintAlpha = if (tintOnly) style.tintAlpha
+            else (255 + (style.tintAlpha - 255) * (renderer?.revealFraction ?: 0f)).toInt()
         val overlayAlpha = tintAlpha * frameAlpha / 255
         // Preserve the host's ARGB opacity without allocating an offscreen saveLayer for each frame.
         val sampleAlpha = FrostedMotionSurfaceAlpha.sampleAlpha(frameAlpha, overlayAlpha)
-        var sampled = renderer?.drawSample(canvas, rect, drawRadius, view, sampleAlpha) == true
+        var sampled = tintOnly || renderer?.drawSample(canvas, rect, drawRadius, view, sampleAlpha) == true
         // 悬浮表面再叠一层实时透镜采样：静态磨砂在下，穿过胶囊的内容在上，色罩最后。
         if (style.live && renderer?.drawLiveSample(canvas, rect, drawRadius, view, sampleAlpha) == true) sampled = true
         fill.color = ColorUtils.setAlphaComponent(drawColor, if (sampled) overlayAlpha else frameAlpha)
@@ -387,6 +580,10 @@ internal object FrostedMotionSurfaceAlpha {
 }
 
 internal object ModernMaterialDrawables {
+    /** 胶囊内部只叠着色和边框，继承父胶囊的实时光学图，不另采静态/旧帧背景。 */
+    fun chromeOverlay(color: Int, radiusPx: Float, density: Float, role: SurfaceRole, dark: Boolean): Drawable =
+        ModernSurfaceDrawable(null, color, radiusPx, density, ModernMaterialPolicy.surface(role, dark), tintOnly = true)
+
     // 与 ModernBackdropFactory 同一套色阶语言：顶部向 surface 轻抬、底部沉向
     // surfaceVariant——条款同意页等无皮肤兜底背景也不再是一块纯色。
     fun neutralWindow(palette: MonetColors): Drawable = GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,

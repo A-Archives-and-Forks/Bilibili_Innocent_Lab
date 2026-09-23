@@ -12,7 +12,9 @@ import com.Bilibili_Innocent_Lab.xposedmodule.runtime.HostRuntimeDiagnosticsQuer
 import com.Bilibili_Innocent_Lab.xposedmodule.runtime.HostRuntimeDiagnosticsSnapshot
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.runtime.SkinSessionDiagnostics
 import java.io.ByteArrayOutputStream
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.RejectedExecutionException
 import java.util.concurrent.atomic.AtomicLong
 
 internal sealed interface DiagnosticsScreenState {
@@ -28,13 +30,44 @@ internal sealed interface DiagnosticsExportState {
     data class Failed(val reasonCode: String) : DiagnosticsExportState
 }
 
+/**
+ * 关闭后提交即丢弃的单线程执行器。
+ *
+ * ViewModel 在 [ViewModel.onCleared] 里关闭执行器，但宿主诊断查询是异步回调，可能在关闭之后才
+ * 送达主线程；直接 `submit` 会抛 [RejectedExecutionException] 并杀掉整个进程（2026-09-23 真机
+ * logcat：快速进出诊断页即可触发）。页面已经销毁，这类迟到的工作没有任何接收方，丢弃即可。
+ */
+internal class ShutdownSafeExecutor(threadName: String) {
+    private val executor: ExecutorService = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, threadName).apply { isDaemon = true }
+    }
+
+    @Volatile
+    var isShutdown = false
+        private set
+
+    /** @return false 表示已关闭、任务被丢弃。 */
+    fun submit(task: () -> Unit): Boolean {
+        if (isShutdown) return false
+        return try {
+            executor.submit(task)
+            true
+        } catch (_: RejectedExecutionException) {
+            false
+        }
+    }
+
+    fun shutdownNow() {
+        isShutdown = true
+        executor.shutdownNow()
+    }
+}
+
 internal class DiagnosticsViewModel : ViewModel() {
     val screenState = MutableLiveData<DiagnosticsScreenState>(DiagnosticsScreenState.Loading)
     val exportState = MutableLiveData<DiagnosticsExportState>(DiagnosticsExportState.Idle)
 
-    private val worker = Executors.newSingleThreadExecutor { runnable ->
-        Thread(runnable, "module-diagnostics").apply { isDaemon = true }
-    }
+    private val worker = ShutdownSafeExecutor("module-diagnostics")
     private val generation = AtomicLong(0L)
 
     fun refresh(
@@ -48,6 +81,8 @@ internal class DiagnosticsViewModel : ViewModel() {
         }
         val appContext = context.applicationContext ?: context
         HostRuntimeDiagnosticsQueryClient.query(appContext) { queryResult ->
+            // 回调可能在页面销毁、执行器关闭之后才送达；那时没有任何接收方。
+            if (worker.isShutdown) return@query
             val hostRuntime = queryResult.snapshot
                 .takeIf { queryResult.status == HostRuntimeDiagnosticsQueryClient.Status.READY }
             collectAsync(

@@ -140,7 +140,9 @@ internal class ElasticInteractionController(
             // The original dispatcher may synchronously clear this controller, detach the source,
             // or start a transition; never install visuals into a superseded preparation.
             if (target !== preparedTarget || lease !== preparedLease) return handled
-            if (!handled || !validGeometry()) clear() else activatePreparedPress()
+            // 祖先容器已把整段手势接管（回弹视口接住回弹）：内容没收到按下，不点亮高光。
+            val claimed = preparedTarget != null && ElasticGestureClaim.claimedAbove(preparedTarget)
+            if (!handled || !validGeometry() || claimed) clear() else activatePreparedPress()
             return handled
         }
 

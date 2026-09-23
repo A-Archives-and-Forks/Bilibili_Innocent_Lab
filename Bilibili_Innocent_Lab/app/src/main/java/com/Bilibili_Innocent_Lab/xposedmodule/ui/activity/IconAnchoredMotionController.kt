@@ -20,8 +20,9 @@ import com.Bilibili_Innocent_Lab.xposedmodule.ui.activity.NavigationMotionPhase 
  *
  * @param layer 全屏承载层，形状由它的 outline 表达。
  * @param content 弹窗卡片本体，只被改 alpha 与 elevation，绝不缩放（缩放会把文字压扁）。
- * @param surfaceDrawable 形变期间的表面背景；抵达展开端后摘掉，交还给卡片自己的背景，
- *   否则全屏 layer 的不透明背景会在裁剪关闭后铺满整屏。
+ * @param surfaceDrawable 仅 `usesPersistentSurface=false` 的兜底路径使用：形变期间挂到
+ *   承载层、抵达展开端摘掉。持久表面路径下卡片表面常驻 `persistentSurface`，
+ *   没有 drawable 交接，本参数不被引用。
  * @param resolveGeometry 每次进入形变时重新解析，旋转/分屏后不沿用旧矩形。
  * @param onClosed 收缩到来源端后真正 dismiss。
  */
@@ -107,10 +108,8 @@ internal class IconAnchoredMotionController(
         // 在深动画后半程越叠越实，落定摘层时通透度"啪"地跳回来（实测内部亮度
         // 动画期 ~50、终态 ~24）。描边由承载层按同一矩形同半径画出，交接无跳变。
         contentBackground?.alpha = 0
-        // 不要给承载层设 elevation。2026-09-17 真机实测：稳定态的卡片**根本不投影**
-        // （底边外 0..60px 亮度恒为 70，与背景一致）——它的背景 drawable 没有提供 outline。
-        // 而承载层有自绘 outline，一旦给它 elevation 就会在形变期间投出一片阴影，
-        // 到 settleExpanded 交还给卡片时又无影可接，表现为"阴影闪一下"。
+        // 阴影归承载层（构造期 elevation 常量 + 形变 outline），随 layer.alpha
+        // 淡入；卡片 elevation 已在挂持久表面时清零，这里只是兜底路径的复位。
         layer.blockInteraction = true
         titleMotion?.captureTargetPosition()
         apply(0f)
@@ -265,6 +264,9 @@ internal class IconAnchoredMotionController(
         // 硬关（activeConfirmDialog?.dismiss()）会停在半路，卡片背景不能留着半透明的 alpha：
         // 这张 drawable 属于被关掉的弹窗，但复用同一个 container 的路径会看到残留。
         contentBackground?.alpha = 255
+        // elevation 同理：形变期卡片归零，硬关要归位（承载层 elevation 是构造期
+        // 常量，随窗口一起销毁，无需复位）。
+        content.elevation = contentElevation
     }
 
     /**
@@ -284,6 +286,7 @@ internal class IconAnchoredMotionController(
         contentTiming = timing
         contentElevation = content.elevation.takeIf { it > 0f } ?: contentElevation
         content.elevation = 0f
+        // 收起时阴影仍归承载层（构造期常量），随形变矩形一起缩小消失。
         layer.background = if (layer.usesPersistentSurface) null else surfaceDrawable
         // 与入场同一条纪律：承载层接管表面期间卡片自身背景归 0，否则收起起点
         // （expansion=1）那一帧两张半透明表面叠满，比稳定态更不透。
@@ -354,8 +357,23 @@ internal class IconAnchoredMotionController(
     }
 
     private fun apply(value: Float) {
-        val current = geometry ?: return
+        val base = geometry ?: return
         val clamped = value.coerceIn(0f, 1f)
+        // 展开端目标逐帧对齐卡片的**当前** layout 矩形：几何在形变开始前解析一次，
+        // 之后卡片仍可能被重排版（insets 落定、搜索框展开等），陈旧的 expandedBounds
+        // 会让承载层最后一帧与卡片错位 ~1px——交接瞬间整圈描边与光学采样区平移一档，
+        // 表现为"落定瞬间边缘光跳变"。卡片矩形读取是零成本字段，逐帧刷新没有开销。
+        val liveExpanded = SettingsBackupMotionRect(
+            left = content.left.toFloat(),
+            top = content.top.toFloat(),
+            right = content.right.toFloat(),
+            bottom = content.bottom.toFloat()
+        )
+        val current = if (!liveExpanded.isValid || liveExpanded == base.expandedBounds) {
+            base
+        } else {
+            base.copy(expandedBounds = liveExpanded)
+        }
         expansion = clamped
         session.sample(clamped, SystemClock.uptimeMillis())
         IconAnchoredMotionSpec.fillFrame(frame, clamped, current, contentTiming)

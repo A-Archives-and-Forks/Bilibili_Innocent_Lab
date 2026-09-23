@@ -118,6 +118,36 @@ class ModalMotionRefinementTest {
         assertTrue(controller.contains("contentBackground?.alpha = 255"))
     }
 
+    @Test fun expansionTargetTracksTheLiveCardRectEveryFrame() {
+        // 几何在形变开始前解析一次，之后卡片仍可能被重排版（insets 落定/标题交接），
+        // 陈旧的 expandedBounds 会让承载层最后一帧与卡片错位 ~1px——交接瞬间整圈
+        // 描边与光学采样区平移一档（"落定瞬间边缘光跳变"）。apply() 必须用卡片
+        // 当前 left/top/right/bottom 重建展开端目标。
+        val controller = source("IconAnchoredMotionController")
+        val apply = controller.substringAfter("private fun apply(")
+            .substringBefore("private fun finish(", "MISSING")
+        assertTrue(apply != "MISSING")
+        assertTrue(apply.contains("content.left.toFloat()"))
+        assertTrue(apply.contains("expandedBounds = liveExpanded"))
+    }
+
+    /**
+     * 覆盖式子面板淡出的必须是父面板的**卡片层**，不是整张 decorView（2026-09-22 真机实证）。
+     *
+     * 父面板的压暗层就在 decorView 里，跟着淡到 0 就等于背景压暗消失；而子面板按
+     * "父面板那层还在"的前提**故意不加自己的 scrim**，两条假设一撞，开子面板时整屏变亮
+     * （实测面板外背景 BGR 25.7/29.3/26.1 → 42.0/48.0/42.7，底页文字透出）。
+     */
+    @Test fun coveringASubPanelKeepsTheParentScrimAlive() {
+        val present = SettingsUiSource.function("presentSizedModalDialog")
+        assertTrue("必须从 dialogScrims 认出父面板的压暗层", present.contains("dialogScrims[parent]"))
+        assertTrue("淡出目标必须是非 scrim 的那个卡片层",
+            present.contains("firstOrNull { it !== parentScrim }"))
+        val coveredIndex = present.indexOf("val coveredContent")
+        val decorIndex = present.indexOf("parent.window?.decorView", coveredIndex)
+        assertTrue("decorView 只能作为拿不到卡片层时的兜底", coveredIndex in 0 until decorIndex)
+    }
+
     private fun source(name: String): String {
         val path = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/$name.kt"
         return sequenceOf(File(path), File("app/$path")).first(File::isFile).readText()
@@ -163,17 +193,34 @@ class ModalMotionRefinementTest {
         assertEquals(1, Regex("NavigationMotionPolicy.remainingDuration\\(").findAll(controller).count())
     }
 
-    @Test fun theMorphLayerNeverCastsAShadowTheRestingCardCannotInherit() {
-        // 2026-09-17 真机实测：稳定态卡片**根本不投影**——底边外 0..60px 亮度恒为 70，
-        // 与背景完全一致（它的背景 drawable 不提供 outline）。而承载层有自绘 outline，
-        // 一旦给它 elevation，形变期间会投出一片阴影，settleExpanded 交还给卡片时无影可接，
-        // 现场就是"阴影闪一下"。这条用例钉住"别再想当然地给承载层补阴影"。
+    @Test fun theMotionLayerOwnsTheShadowAcrossMorphAndRest() {
+        // 2026-09-22 逐帧实测：落定瞬间卡片外 12px 环带暗 ~2 档——12dp elevation
+        // 阴影在形变期被裁掉、落定一帧弹出。最终方案：阴影归承载层（构造期
+        // elevation 常量），outline 形变期=形变矩形、落定后=卡片矩形，阴影全程
+        // 连续。表面 View 绝不能带 elevation——ViewGroup 按 Z 排序绘制，Z>0 的
+        // 表面会排到卡片之后，半透明玻璃盖住正文（实测行文字 211→66）。
+        val layer = source("IconAnchoredMotionLayer")
+        assertTrue(layer.contains("surfaceElevation: Float = 0f"))
+        assertTrue(layer.contains("elevation = surfaceElevation"))
+        // outline 三分支：形变矩形（alpha 1）→ 落定卡片矩形（alpha 1）→ 无（alpha 0）。
+        val provider = layer.substringAfter("outlineProvider =")
+            .substringBefore("fun applyFrame(")
+        assertEquals(2, Regex("outline\\.alpha = 1f").findAll(provider).count())
+        assertTrue(provider.contains("surfaceRadiusPx"))
+        // 持久分支逐帧刷新投影轮廓；落定矩形回写时也刷新。
+        val applyFrame = layer.substringAfter("fun applyFrame(").substringBefore("fun clearShape(")
+        assertTrue(applyFrame.contains("invalidateOutline()"))
+        assertTrue(layer.substringAfter("private fun updateRestingSurface(").contains("invalidateOutline()"))
+        // 飞行标题浮层必须高于承载层（否则形变期被面板盖住），且自身空 outline 不投影。
+        val present = SettingsUiSource.function("presentSizedModalDialog")
+        assertTrue(present.contains("title.elevation = morphLayer.elevation + 1f"))
+        val title = source("ModalTitleMotion")
+        assertTrue(title.contains("outline.alpha = 0f"))
+        // 普通面板移交卡片 elevation；覆盖式面板（cover != null）不新增阴影。
+        assertTrue(present.contains("surfaceElevation = if (cover == null) container.elevation else 0f"))
+        // 控制器不再逐帧搬移 elevation（常量由层构造期持有）。
         val controller = source("IconAnchoredMotionController")
         assertFalse(controller.contains("layer.elevation ="))
-        // 卡片自己的 elevation 仍然要在形变期间让位、结束时还回去，这部分没变。
-        assertTrue(controller.contains("content.elevation = 0f"))
-        val settle = controller.substringAfter("private fun settleExpanded()").substringBefore("fun beginPredictiveBack")
-        assertTrue(settle.contains("content.elevation = contentElevation"))
     }
 
     @Test fun theCoveredParentFadesOutLateSoTwoStrokesNeverStackAtTheEnd() {
@@ -195,9 +242,12 @@ class ModalMotionRefinementTest {
         }
         val present = SettingsUiSource.function("presentSizedModalDialog")
         // 只有覆盖场景才淡父面板；普通弹窗没有父面板可淡。
-        assertTrue(present.contains("if (cover != null) coveredParent?.window?.decorView else null"))
-        // **必须是 decorView**：气泡面板的表面连同描边是 BubblePanelLayer 画的，容器自己
-        // background = null，淡容器只会让文字变淡、描边纹丝不动（实测 103 没有回到 87）。
+        assertTrue(present.contains("val coveredContent = if (cover != null) coveredParent?.let"))
+        // 淡的必须是**卡片层整层**：气泡面板的表面连同描边是 BubblePanelLayer 画的，容器自己
+        // background = null，只淡容器会让文字变淡、描边纹丝不动（实测 103 没有回到 87）。
+        // 但也**不能**淡整张 decorView——父面板的 scrim 在里面，跟着淡掉背景压暗就整个消失
+        // （2026-09-22 真机实测：面板外 BGR 25.7/29.3/26.1 → 42.0/48.0/42.7）。
+        assertTrue(present.contains("firstOrNull { it !== parentScrim }"))
         assertFalse(present.contains("coveredParent?.window?.decorView?.findViewById"))
         // 入场与退场两条 onFrame 都要驱动它，否则收起时父面板不会淡回来。
         assertEquals(2, Regex("coveredContent\\?\\.alpha = IconAnchoredMotionSpec\\.coveredParentAlpha")

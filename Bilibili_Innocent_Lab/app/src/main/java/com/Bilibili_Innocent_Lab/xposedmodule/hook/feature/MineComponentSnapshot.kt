@@ -38,7 +38,13 @@ internal data class MineComponentScanEntry(
     val showing: Boolean,
     val selectable: Boolean = true,
     /** 本次显式反馈点选的身份；处理旧快照时避免恢复已撤销规则。 */
-    val selectionToken: String? = null
+    val selectionToken: String? = null,
+    /**
+     * 同一条目的旧口径键。勾选面板把"[key] 或任一别名已在存储里"视为已勾选，保存时
+     * 连别名一起移除、只写回 [key]——存量选择器因此在用户下一次确认面板时迁移到新口径。
+     * 目前只有底栏用（旧图标地址键 → 路由键），见 `BottomBarFeatureInstaller.selectorKeys`。
+     */
+    val aliases: Set<String> = emptySet()
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("key", key)
@@ -49,6 +55,7 @@ internal data class MineComponentScanEntry(
         put("showing", showing)
         put("selectable", selectable)
         selectionToken?.let { put("selectionToken", it) }
+        if (aliases.isNotEmpty()) put("aliases", JSONArray().apply { aliases.sorted().forEach(::put) })
     }
 
     companion object {
@@ -58,7 +65,8 @@ internal data class MineComponentScanEntry(
             id: String?,
             uri: String?,
             showing: Boolean,
-            selectable: Boolean = true
+            selectable: Boolean = true,
+            aliases: Collection<String> = emptyList()
         ): MineComponentScanEntry? {
             val safeKind = kind.trim().takeIf { it in MineComponentSnapshotCodec.ALLOWED_KINDS }
                 ?: return null
@@ -77,7 +85,8 @@ internal data class MineComponentScanEntry(
                 id = safeId,
                 uri = safeUri,
                 showing = showing,
-                selectable = selectable
+                selectable = selectable,
+                aliases = sanitizeAliases(safeKind, key, aliases) ?: return null
             )
         }
 
@@ -96,6 +105,11 @@ internal data class MineComponentScanEntry(
             val derivedKey = MineComponentSelector.key(kind, title, id, uri) ?: return null
             val key = value.optString("key").trim().takeIf(String::isNotEmpty) ?: derivedKey
             if (key.length > MAX_KEY_LENGTH || key != derivedKey) return null
+            val rawAliases = value.optJSONArray("aliases")?.let { array ->
+                if (array.length() > MAX_ALIAS_COUNT) return null
+                (0 until array.length()).map { array.optString(it) }
+            }.orEmpty()
+            val aliases = sanitizeAliases(kind, key, rawAliases) ?: return null
             return MineComponentScanEntry(
                 key = key,
                 kind = kind,
@@ -104,14 +118,32 @@ internal data class MineComponentScanEntry(
                 uri = uri,
                 showing = value.optBoolean("showing", true),
                 selectable = value.optBoolean("selectable", true),
-                selectionToken = selectionToken
+                selectionToken = selectionToken,
+                aliases = aliases
             )
+        }
+
+        /**
+         * 别名必须是同类键（`<kind>:` 前缀）、不等于主键、长度与个数有界；
+         * 任一不合规整条拒绝——跨进程载荷不接受半合法内容。
+         */
+        private fun sanitizeAliases(kind: String, key: String, raw: Collection<String>): Set<String>? {
+            if (raw.size > MAX_ALIAS_COUNT) return null
+            val result = LinkedHashSet<String>()
+            raw.forEach { value ->
+                val alias = value.trim()
+                if (alias.isEmpty() || alias == key) return@forEach
+                if (!alias.startsWith("$kind:") || alias.length > MAX_KEY_LENGTH) return null
+                result += alias
+            }
+            return result
         }
 
         private const val MAX_KEY_LENGTH = 768
         private const val MAX_TITLE_LENGTH = 128
         private const val MAX_ID_LENGTH = 128
         private const val MAX_URI_LENGTH = 512
+        private const val MAX_ALIAS_COUNT = 4
     }
 }
 
@@ -148,6 +180,27 @@ internal object MineComponentSelector {
     private fun normalize(value: String): String = value.trim().replace(WHITESPACE, " ")
 
     private val WHITESPACE = Regex("\\s+")
+}
+
+/**
+ * 勾选面板的选中判定与保存合并。
+ *
+ * 条目带 [MineComponentScanEntry.aliases] 时：主键或任一别名已存 ⇒ 显示为已勾选；
+ * 保存时把可编辑条目的主键与别名一并移除，再写回勾选条目的主键。
+ * 不可编辑（旧规则锁定 / 不可选）的条目不参与，存量值原样保留。
+ */
+internal object ComponentPickerSelection {
+    fun isSelected(entry: MineComponentScanEntry, selectors: Set<String>): Boolean =
+        entry.key in selectors || entry.aliases.any { it in selectors }
+
+    fun merge(
+        initial: Set<String>,
+        editable: List<Pair<MineComponentScanEntry, Boolean>>
+    ): Set<String> {
+        val owned = editable.flatMapTo(HashSet()) { (entry, _) -> entry.aliases + entry.key }
+        val checked = editable.mapNotNull { (entry, isChecked) -> entry.key.takeIf { isChecked } }
+        return (initial - owned) + checked
+    }
 }
 
 /** 新选择器使用 JSON 数组保存，避免标题、URI 内的逗号被旧分隔符误拆。 */

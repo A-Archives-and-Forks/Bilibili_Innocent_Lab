@@ -7,6 +7,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class LiquidStretchOverscrollPolicyTest {
 
@@ -156,5 +157,72 @@ class LiquidStretchOverscrollPolicyTest {
                 nonTouchAdjusted = true
             )
         )
+    }
+
+    /**
+     * 两条相反方向的回弹同时衰减时必须有迟滞（2026-09-22 用户报告）。
+     *
+     * 没有迟滞时两个距离会反复穿越，而渲染层对"方向变了"是无条件发布的（强度量化拦不住），
+     * 每穿越一次就把整组可见玻璃表面重录一遍——短页面里一甩到底、立刻反向甩最容易撞上，
+     * 现场就是"短时间触发两个相反方向回弹会有迟滞感"。
+     */
+    @Test
+    fun `opposite rebounds do not trade dominance on every crossing`() {
+        val ratio = LiquidStretchOverscrollPolicy.EDGE_FLIP_RATIO
+        assertTrue(ratio > 1f)
+        // 量级相近时保持当前边，不随微小穿越翻转。
+        assertEquals(LiquidStretchEdge.TOP,
+            LiquidStretchOverscrollPolicy.dominantEdge(0.20f, 0.21f, LiquidStretchEdge.TOP))
+        assertEquals(LiquidStretchEdge.BOTTOM,
+            LiquidStretchOverscrollPolicy.dominantEdge(0.21f, 0.20f, LiquidStretchEdge.BOTTOM))
+        // 另一边显著更大才交权。
+        assertEquals(LiquidStretchEdge.BOTTOM,
+            LiquidStretchOverscrollPolicy.dominantEdge(0.20f, 0.20f * ratio + 0.01f, LiquidStretchEdge.TOP))
+        // 当前边归零必须立刻交权，不能卡在已经消失的那条边上。
+        assertEquals(LiquidStretchEdge.BOTTOM,
+            LiquidStretchOverscrollPolicy.dominantEdge(0f, 0.05f, LiquidStretchEdge.TOP))
+        assertEquals(LiquidStretchEdge.TOP,
+            LiquidStretchOverscrollPolicy.dominantEdge(0.05f, 0f, LiquidStretchEdge.BOTTOM))
+        // 两边都归零就是 NONE。
+        assertEquals(LiquidStretchEdge.NONE,
+            LiquidStretchOverscrollPolicy.dominantEdge(0f, 0f, LiquidStretchEdge.TOP))
+        // 无状态调用（默认参数）保持原语义：谁大选谁。
+        assertEquals(LiquidStretchEdge.TOP, LiquidStretchOverscrollPolicy.dominantEdge(0.4f, 0.1f))
+        assertEquals(LiquidStretchEdge.BOTTOM, LiquidStretchOverscrollPolicy.dominantEdge(0.1f, 0.4f))
+    }
+    /**
+     * 回弹可打断（2026-09-23 用户要求）。真机实证：按住正在回弹的页面能冻结形变，但按下事件照常
+     * 下发给手指下的卡片，原地松手就打开了"设置备份与恢复"。接住回弹的这段手势必须整段交给滚动
+     * 容器自己处理，内容收不到按下/点击/长按；拖动、甩动、松手回弹仍走滚动容器原逻辑。
+     */
+    @Test
+    fun `catching a rebound takes the whole gesture away from the content`() {
+        val base = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui"
+        fun read(path: String) = sequenceOf(File("$base/$path"), File("app/$base/$path")).first(File::isFile).readText()
+        val viewport = read("skin/liquid/LiquidStretchViewport.kt")
+        val dispatch = viewport.substringAfter("override fun dispatchTouchEvent(").substringBefore("override fun onInterceptTouchEvent(")
+        assertTrue("只有真的接住了回弹才接管", dispatch.contains("stopEffectsForTouch()") &&
+            viewport.contains("private fun stopEffectsForTouch(): Boolean") && viewport.contains("return stopped"))
+        assertTrue("不允许回弹时照旧清零，不接管", dispatch.contains("finishStretch()\n                false"))
+        assertTrue("手势结束必须复位接管标记", dispatch.indexOf("super.dispatchTouchEvent(event)") in
+            0 until dispatch.indexOf("catchingStretch = false"))
+        assertTrue(viewport.contains("catchingStretch || super.onInterceptTouchEvent(event)"))
+        val touch = viewport.substringAfter("override fun onTouchEvent(").substringBefore("override fun draw(")
+        assertTrue(touch.contains("if (!catchingStretch) return super.onTouchEvent(event)"))
+        assertTrue("交给滚动容器的 onTouchEvent，不经它的子 View", touch.contains("scrollTarget.onTouchEvent(forwarded)") &&
+            !touch.contains("scrollTarget.dispatchTouchEvent"))
+        assertTrue("观察者先于滚动容器处理", touch.indexOf("observeTouch(forwarded)") in
+            0 until touch.indexOf("scrollTarget.onTouchEvent(forwarded)"))
+        assertTrue(touch.contains("forwarded.recycle()"))
+        // 全局长按弹性挂在 Activity 分发上、自己做命中测试：接住回弹时也不得点亮按压高光（柔光真机实证）。
+        assertTrue(viewport.contains("override val claimsCurrentGesture: Boolean get() = catchingStretch"))
+        val elastic = read("interaction/ElasticInteractionController.kt")
+        assertTrue(elastic.contains("ElasticGestureClaim.claimedAbove(preparedTarget)"))
+        assertTrue(elastic.contains("if (!handled || !validGeometry() || claimed) clear() else activatePreparedPress()"))
+        // 设置页的滚动容器在 dispatchTouchEvent 里观察手势，接管路径必须同样通知它。
+        val scroll = read("activity/SettingsHomeScrollView.kt")
+        assertTrue(scroll.contains("LiquidStretchGestureObserver"))
+        val scrollDispatch = scroll.substringAfter("override fun dispatchTouchEvent(").substringBefore("override fun observeTouch(")
+        assertTrue(scrollDispatch.indexOf("observeTouch(event)") in 0 until scrollDispatch.indexOf("super.dispatchTouchEvent(event)"))
     }
 }

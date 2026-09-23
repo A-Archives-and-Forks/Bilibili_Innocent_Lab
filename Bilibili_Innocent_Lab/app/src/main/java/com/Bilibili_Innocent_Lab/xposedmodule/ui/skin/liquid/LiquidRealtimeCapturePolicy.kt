@@ -147,13 +147,77 @@ internal object LiquidRealtimeCapturePolicy {
     fun isFrameDue(frameTimeNanos: Long, nextCaptureNanos: Long): Boolean =
         frameTimeNanos >= nextCaptureNanos
 
+    /**
+     * 回弹强度的量化步长。
+     *
+     * 强度每变一次，渲染层就要把**整组可见玻璃表面**重录一遍（uniform 要跟着更新）。
+     * 而系统 stretch 距离是连续衰减的：不量化的话回弹期间几乎每一帧都越过发布门，
+     * 真机 102 秒滑动实测——坏帧的 draw 录制中位 **3.43ms**，是全局中位 1.19ms 的近 3 倍，
+     * 4% 的帧越过系统 deadline，表现为"滑动偶发不跟手"。
+     *
+     * 0.03 在 0.85 的总行程上约 28 级。它只是 `edgeBoost` 的乘数，而边缘光本身的量级是
+     * 菲涅尔 0.025 / 镜面 0.06——一级的最终像素亮度变化在千分之一量级，肉眼不可辨。
+     * 与 `ModalBackdropBlur.RADIUS_STEP_PX` 同一套路：**per-frame 写进渲染状态的量必须量化**。
+     */
+    const val STRETCH_INTENSITY_STEP = 0.03f
+
+    /**
+     * 低端死区：增益小于它就按"没有回弹"发布。
+     *
+     * 弹簧的**尾段占了整条回弹的绝大多数帧**，而那时增益已经小到看不见——0.06 只有
+     * 总行程 0.85 的 7%，对应的最终像素变化在千分之一量级。不设死区的话，尾段每跨过
+     * 一个量化级就要把整组可见玻璃表面重录一遍；短页面里所有表面都在屏幕上，一次都省不掉。
+     */
+    const val STRETCH_INTENSITY_DEAD_ZONE = 0.06f
+
     /** 系统 stretch 距离本身连续；smoothstep 只放大强度，不引入新的回弹时长或振荡。 */
     fun stretchOpticalIntensity(distance: Float): Float {
         val normalized = (distance.coerceAtLeast(0f) / MAX_STRETCH_DISTANCE).coerceIn(0f, 1f)
         val eased = normalized * normalized * (3f - 2f * normalized)
-        return 1f + MAX_STRETCH_OPTICAL_BOOST * eased
+        val boost = MAX_STRETCH_OPTICAL_BOOST * eased
+        if (boost < STRETCH_INTENSITY_DEAD_ZONE) return 1f
+        // 量化到整数级：距离为 0 时 boost 也是 0，终态恒为精确的 1f，不会卡在半亮。
+        val steps = (boost / STRETCH_INTENSITY_STEP).roundToLong()
+        return 1f + steps * STRETCH_INTENSITY_STEP
     }
 
     fun shouldSuspend(consecutiveFailures: Int): Boolean =
         consecutiveFailures >= MAX_CONSECUTIVE_FAILURES
+
+    /**
+     * 静止门控：连续多少张截图与**当前绑定的那张**逐像素相同，才判定画面静止、停止采集。
+     *
+     * 旧实现没有这道门：只要 Activity 可见就按刷新率不停 PixelCopy，每张完成后把**全部**玻璃
+     * 表面失效重画——真机静止 5 秒渲染 154 帧、每帧 GPU 10ms（柔光同条件 0 帧）。静止时截图
+     * 内容不变、shader 的抖动只依赖像素坐标，重画出来是同一帧，所以跳过它视觉上无损。
+     *
+     * 取 2 而不是 1：窗口刚画完的那一帧可能还没被合成，第一张"相同"可能只是截到了旧帧。
+     */
+    const val IDLE_CONFIRMATIONS = 2
+
+    /**
+     * 窗口有新绘制后等几帧再截：让触发唤醒的那一帧先完成合成。
+     */
+    const val WAKE_SETTLE_FRAMES = 2
+
+    /**
+     * 静止期的兜底探测间隔。窗口没有任何绘制就不会被唤醒，而纯 RenderThread 动画（硬件涟漪等）
+     * 改变像素却不经过 UI 线程绘制；每秒探测一次，把这类变化的滞后上限钉在 1 秒。
+     */
+    const val IDLE_PROBE_MS = 1000L
+
+    /**
+     * 本张截图是否可以当作"画面没变"丢弃。
+     *
+     * 只有当比较基准正是**当前绑定给后端**的那张实时截图时才成立：抑制期/缓冲重建后后端绑的是
+     * 稳定底图，此时哪怕内容恰好相同也必须绑回实时截图，否则玻璃会一直停在磨砂观感。
+     */
+    fun isUnchanged(
+        comparedAgainstBoundSource: Boolean,
+        samplingSuppressed: Boolean,
+        pixelsIdentical: () -> Boolean
+    ): Boolean = comparedAgainstBoundSource && !samplingSuppressed && pixelsIdentical()
+
+    /** 连续相同的张数达到阈值即进入静止。 */
+    fun shouldEnterIdle(identicalStreak: Int): Boolean = identicalStreak >= IDLE_CONFIRMATIONS
 }

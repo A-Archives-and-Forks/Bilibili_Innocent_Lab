@@ -14,6 +14,7 @@ import androidx.core.view.NestedScrollingParent3
 import androidx.core.view.NestedScrollingParentHelper
 import androidx.core.view.ViewCompat
 import androidx.core.widget.EdgeEffectCompat
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.interaction.ElasticGestureClaim
 import com.highcapable.betterandroid.ui.extension.view.parentOrNull
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -28,6 +29,14 @@ internal enum class LiquidStretchUnconsumedAction {
     PULL_AND_CONSUME,
     ABSORB_AND_PROPAGATE,
     PROPAGATE
+}
+
+/**
+ * 滚动容器若在 `dispatchTouchEvent` 里观察手势，实现本接口：视口接住回弹后会把整段手势
+ * 直接交给容器的 `onTouchEvent`（绕过 `dispatchTouchEvent`），观察必须经这里补上。
+ */
+internal interface LiquidStretchGestureObserver {
+    fun observeTouch(event: MotionEvent)
 }
 
 /** 与 Android View 无关的方向、距离和速度收敛规则。 */
@@ -106,15 +115,43 @@ internal object LiquidStretchOverscrollPolicy {
     ): Boolean = isTouch || (!nonTouchAbsorbed && nonTouchAdjusted)
 
     /**
-     * 当前占主导的回弹边：两侧可能瞬时都非零（一侧衰减中、另一侧刚拉起），
-     * 取距离较大者；都为零返回 [LiquidStretchEdge.NONE]。方向必须随距离一起上报——
-     * 回弹光学高光要按"哪条边在拉伸"投射到表面的对应边缘上，只报标量距离会让
-     * 四个方向上的高光完全一致（2026-09-21 用户实证：四边等亮描边违反方向直觉）。
+     * 翻转阈值：另一边必须比当前边大出这个倍数才夺走主导权。
+     *
+     * 没有迟滞时两条同时衰减的回弹会**反复穿越**——而渲染层对"方向变了"是无条件发布的
+     * （强度量化拦不住它），每穿越一次就把整组可见玻璃表面重录一遍。短页面最容易撞上：
+     * 内容几乎不滚，一甩就到边，反向再甩时上一条回弹还在衰减，两边同时非零
+     * （2026-09-22 用户报告"短页面内短时间触发两个相反方向回弹会有迟滞感"）。
+     *
+     * 1.25 只影响"两边都非零且量级相近"的那一小段；任一边归零时仍然立刻交接，
+     * 不会把方向卡在已经消失的那条边上。
      */
-    fun dominantEdge(topDistance: Float, bottomDistance: Float): LiquidStretchEdge = when {
-        topDistance > 0f && topDistance >= bottomDistance -> LiquidStretchEdge.TOP
-        bottomDistance > 0f -> LiquidStretchEdge.BOTTOM
-        else -> LiquidStretchEdge.NONE
+    const val EDGE_FLIP_RATIO = 1.25f
+
+    /**
+     * 当前占主导的回弹边：两侧可能瞬时都非零（一侧衰减中、另一侧刚拉起）。方向必须随距离
+     * 一起上报——回弹光学高光要按"哪条边在拉伸"投射到对应边缘，只报标量距离会让四个方向
+     * 的高光完全一致（2026-09-21 用户实证：四边等亮描边违反方向直觉）。
+     *
+     * [current] 是上一次发布的边，用于迟滞（见 [EDGE_FLIP_RATIO]）；传 NONE 即无状态判定。
+     */
+    fun dominantEdge(
+        topDistance: Float,
+        bottomDistance: Float,
+        current: LiquidStretchEdge = LiquidStretchEdge.NONE
+    ): LiquidStretchEdge {
+        val top = topDistance.takeIf { it > 0f } ?: 0f
+        val bottom = bottomDistance.takeIf { it > 0f } ?: 0f
+        if (top <= 0f && bottom <= 0f) return LiquidStretchEdge.NONE
+        if (top <= 0f) return LiquidStretchEdge.BOTTOM
+        if (bottom <= 0f) return LiquidStretchEdge.TOP
+        return when (current) {
+            LiquidStretchEdge.TOP ->
+                if (bottom > top * EDGE_FLIP_RATIO) LiquidStretchEdge.BOTTOM else LiquidStretchEdge.TOP
+            LiquidStretchEdge.BOTTOM ->
+                if (top > bottom * EDGE_FLIP_RATIO) LiquidStretchEdge.TOP else LiquidStretchEdge.BOTTOM
+            LiquidStretchEdge.NONE ->
+                if (top >= bottom) LiquidStretchEdge.TOP else LiquidStretchEdge.BOTTOM
+        }
     }
 }
 
@@ -131,7 +168,7 @@ internal class LiquidStretchViewport private constructor(
     private val scrollTarget: View,
     private val isStretchAllowed: () -> Boolean,
     private val onStretchDistance: (Float, LiquidStretchEdge) -> Unit
-) : FrameLayout(context), NestedScrollingParent3 {
+) : FrameLayout(context), NestedScrollingParent3, ElasticGestureClaim {
 
     private val nestedParentHelper = NestedScrollingParentHelper(this)
     private val topEffect = EdgeEffect(context)
@@ -164,14 +201,70 @@ internal class LiquidStretchViewport private constructor(
         }
     }
 
+    /**
+     * 本次手势是否由"接住回弹"开始（2026-09-23 用户要求回弹可打断）。
+     *
+     * 只冻结形变不够：按下事件照常下发时，手指下的卡片会进入按压态，原地松手就被当成点击
+     * （真机实证：按住正在回弹的页面，松手打开了"设置备份与恢复"）。平台 `NestedScrollView`
+     * 接住自己的 stretch 时会立刻把整段手势判给自己；这里的 stretch 由本视口代画，滚动容器
+     * 看不到它，所以由本视口拦下整段手势、原样转给滚动容器自己的 [View.onTouchEvent]——
+     * 拖动、甩动、松手回弹都走滚动容器原来的逻辑，内容收不到按下/点击/长按。
+     */
+    private var catchingStretch = false
+
+    /** 接住回弹的手势不属于内容：全局长按弹性不得给手指下的控件点亮按压高光。 */
+    override val claimsCurrentGesture: Boolean get() = catchingStretch
+
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
         pointerX = event.x
         if (event.actionMasked == MotionEvent.ACTION_DOWN) {
             lastFlingVelocityY = 0f
-            if (isAllowedNow()) stopEffectsForTouch()
-            else finishStretch()
+            catchingStretch = if (isAllowedNow()) {
+                stopEffectsForTouch()
+            } else {
+                finishStretch()
+                false
+            }
         }
-        return super.dispatchTouchEvent(event)
+        val handled = super.dispatchTouchEvent(event)
+        if (event.actionMasked == MotionEvent.ACTION_UP || event.actionMasked == MotionEvent.ACTION_CANCEL) {
+            catchingStretch = false
+        }
+        return handled
+    }
+
+    override fun onInterceptTouchEvent(event: MotionEvent): Boolean =
+        catchingStretch || super.onInterceptTouchEvent(event)
+
+    /** 只在接住回弹的手势里生效：事件换算到滚动容器坐标后直接交给它，不经过它的子 View。 */
+    @SuppressLint("ClickableViewAccessibility")
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (!catchingStretch) return super.onTouchEvent(event)
+        val forwarded = MotionEvent.obtain(event)
+        try {
+            forwarded.offsetLocation(
+                scrollX - scrollTarget.left - scrollTarget.translationX,
+                scrollY - scrollTarget.top - scrollTarget.translationY
+            )
+            (scrollTarget as? LiquidStretchGestureObserver)?.observeTouch(forwarded)
+            scrollTarget.onTouchEvent(forwarded)
+        } finally {
+            forwarded.recycle()
+        }
+        return true
+    }
+
+    /** 上一次发布的主导边；迟滞判定要拿它当基准，否则两条回弹会反复夺权。 */
+    private var publishedEdge = LiquidStretchEdge.NONE
+
+    /**
+     * 每帧的强度/方向发布点。`draw()` 前后各调一次：前者反映本帧输入累积的形变，
+     * 后者反映 EdgeEffect 自己推进后的值，两次都要让渲染层看到，否则回弹尾段会漏。
+     */
+    private fun publishStretch(topDistance: Float, bottomDistance: Float) {
+        val edge = LiquidStretchOverscrollPolicy.dominantEdge(topDistance, bottomDistance, publishedEdge)
+        publishedEdge = edge
+        onStretchDistance(maxOf(topDistance, bottomDistance), edge)
     }
 
     override fun draw(canvas: Canvas) {
@@ -182,10 +275,7 @@ internal class LiquidStretchViewport private constructor(
         }
         var topDistance = EdgeEffectCompat.getDistance(topEffect)
         var bottomDistance = EdgeEffectCompat.getDistance(bottomEffect)
-        onStretchDistance(
-            maxOf(topDistance, bottomDistance),
-            LiquidStretchOverscrollPolicy.dominantEdge(topDistance, bottomDistance)
-        )
+        publishStretch(topDistance, bottomDistance)
         super.draw(canvas)
         var continueDrawing = false
         // 实时取样（LiveBackdropSampler）会把内容根重绘进软件 Canvas；Android 12+ 的
@@ -206,10 +296,7 @@ internal class LiquidStretchViewport private constructor(
         }
         topDistance = EdgeEffectCompat.getDistance(topEffect)
         bottomDistance = EdgeEffectCompat.getDistance(bottomEffect)
-        onStretchDistance(
-            maxOf(topDistance, bottomDistance),
-            LiquidStretchOverscrollPolicy.dominantEdge(topDistance, bottomDistance)
-        )
+        publishStretch(topDistance, bottomDistance)
         if (continueDrawing) postInvalidateOnAnimation()
     }
 
@@ -426,6 +513,8 @@ internal class LiquidStretchViewport private constructor(
         lastFlingVelocityY = 0f
         nonTouchAbsorbed = false
         nonTouchAdjusted = false
+        // 迟滞基准一并复位：下一轮回弹要按"无状态"重新选边，不能沿用上一轮的主导边。
+        publishedEdge = LiquidStretchEdge.NONE
         onStretchDistance(0f, LiquidStretchEdge.NONE)
         if (hadEffect) invalidate()
     }
@@ -448,8 +537,12 @@ internal class LiquidStretchViewport private constructor(
         if (released) postInvalidateOnAnimation()
     }
 
-    /** 与 NestedScrollView.stopGlowAnimations 对齐：新手势接管回弹，但不突兀清零形变量。 */
-    private fun stopEffectsForTouch() {
+    /**
+     * 与 NestedScrollView.stopGlowAnimations 对齐：新手势接管回弹，但不突兀清零形变量。
+     *
+     * @return 确实接住了正在显示的回弹；调用方据此把整段手势交给滚动容器。
+     */
+    private fun stopEffectsForTouch(): Boolean {
         var stopped = false
         if (EdgeEffectCompat.getDistance(topEffect) > 0f) {
             EdgeEffectCompat.onPullDistance(
@@ -476,6 +569,7 @@ internal class LiquidStretchViewport private constructor(
             stopped = true
         }
         if (stopped) postInvalidateOnAnimation()
+        return stopped
     }
 
     private fun isAllowedNow(): Boolean =

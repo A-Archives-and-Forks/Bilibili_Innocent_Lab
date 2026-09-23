@@ -3,11 +3,14 @@ package com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid
 import android.graphics.Bitmap
 import android.graphics.BitmapShader
 import android.graphics.Canvas
+import android.graphics.ComposeShader
 import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.PorterDuff
 import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.Shader
 import android.os.Looper
 import androidx.annotation.WorkerThread
@@ -121,6 +124,55 @@ internal class LiquidBackdropSource private constructor(
             radiusPx, radiusPx, maskPaint
         )
     }
+
+    /**
+     * 按根坐标把**可见根背景**（[bitmap]，含颗粒，与 [drawRoot] 同一张）画进 [bounds]，
+     * 逐像素乘以 [alphaMask] 的 alpha 再乘 [alpha]。供滚动边缘溶解把内容"溶回"窗口底图：
+     * 画的必须与根背景逐像素一致，否则溶解区会露出一块色差。
+     *
+     * 独立的 Shader/Matrix：[bitmapShader] 被折射后端持有，[maskShader] 属于光学副本。
+     * 同一 Shader 在多个宿主间逐次改 local matrix 是安全的——HWUI 在录制那一刻快照原生实例。
+     */
+    fun drawPresentationRegion(
+        canvas: Canvas,
+        bounds: RectF,
+        rootOffsetX: Float,
+        rootOffsetY: Float,
+        alphaMask: Shader?,
+        alpha: Int
+    ) {
+        check(!closed) { "Liquid backdrop source is closed" }
+        if (bounds.isEmpty || bitmap.width <= 0 || bitmap.height <= 0 || fullWidth <= 0 || fullHeight <= 0) return
+        presentationMatrix.setScale(
+            fullWidth.toFloat() / bitmap.width.toFloat(),
+            fullHeight.toFloat() / bitmap.height.toFloat()
+        )
+        presentationMatrix.postTranslate(-rootOffsetX, -rootOffsetY)
+        presentationShader.setLocalMatrix(presentationMatrix)
+        presentationPaint.shader = if (alphaMask == null) presentationShader else {
+            // ComposeShader 在子 Shader 的 local matrix 变化后会自行重建原生实例（API 26+），
+            // 同一遮罩只需要组合一次。DST_IN：底图 × 遮罩 alpha。
+            if (composedMask !== alphaMask) {
+                composedShader = ComposeShader(presentationShader, alphaMask, PorterDuff.Mode.DST_IN)
+                composedMask = alphaMask
+            }
+            composedShader
+        }
+        presentationPaint.alpha = alpha.coerceIn(0, 255)
+        canvas.drawRect(bounds, presentationPaint)
+    }
+
+    private val presentationShader by lazy(LazyThreadSafetyMode.NONE) {
+        BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP).apply {
+            if (AndroidVersion.isAtLeast(AndroidVersion.T)) setFilterMode(BitmapShader.FILTER_MODE_LINEAR)
+        }
+    }
+    private val presentationMatrix = Matrix()
+    private val presentationPaint by lazy(LazyThreadSafetyMode.NONE) {
+        Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    }
+    private var composedMask: Shader? = null
+    private var composedShader: ComposeShader? = null
 
     /** Commit before binding this source to a renderer or exposing it to a window draw. */
     fun markPublished() {

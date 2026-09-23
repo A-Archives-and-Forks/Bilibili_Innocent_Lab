@@ -17,15 +17,21 @@ internal object LiquidTokenResolver {
             refractionAmountDp = if (realtime) 7f else 3.5f,
             depthEffect = if (realtime) 0.16f else 0.06f,
             interiorDistortionDp = if (realtime) 1.75f else 0f,
-            // 色散会给每个像素增加两次纹理采样，也会在高对比边缘形成突兀彩边。
-            chromaticShiftDp = 0f,
+            // 色散曾经整条关闭，因为旧实现全域等量位移——内部高对比文字也裂成红蓝边。
+            // shader 现按 edgeWeight 限域在 rim 带内、位移 <0.02px 直接跳过两次取样，
+            // 于是可以给实时档一点亚像素级色散（玻璃厚边的特征），内部零额外开销。
+            chromaticShiftDp = if (realtime) REALTIME_CHROMATIC_SHIFT_DP else 0f,
             scatteringRadiusDp = if (realtime) 4f else 0f,
             scatteringStrength = if (realtime) 0.18f else 0f,
             specularStrength = if (realtime) 0.06f else 0f,
             fresnelStrength = if (realtime) 0.025f else 0f,
             causticLuminanceGain = if (realtime) 0.12f else 0f,
             innerShadowStrength = if (realtime) 0.018f else 0f,
-            saturation = tuning.saturation,
+            // 实时档采的是真实内容，微提饱和让透出的色彩读作"通透"而不是"蒙灰"；
+            // 标准档采的是已经调好的光学底图，不动。上界 1.06 防止调参漂移出彩色噪点。
+            saturation = if (realtime) {
+                (tuning.saturation + REALTIME_SATURATION_BOOST).coerceAtMost(1.06f)
+            } else tuning.saturation,
             surfaceAlpha = if (realtime) tuning.cardGlassAlpha * 0.92f
             else tuning.cardGlassAlpha,
             modalSurfaceAlpha = if (realtime) tuning.modalGlassAlpha * 0.96f
@@ -40,7 +46,19 @@ internal object LiquidTokenResolver {
             highlightAlpha = if (realtime) 0.09f else 0.10f,
             // 屏幕 y 轴向下；-145° => (-0.819, -0.574)，光源位于左上方。
             highlightAngleDegrees = -145f,
-            effectPaddingDp = if (realtime) 22f else 12f
+            effectPaddingDp = if (realtime) 22f else 12f,
+            // 实时档底图是锐利截屏，色带风险低于平滑底图，但抑制期与光学直采都会
+            // 采到平滑副本；给 ±0.5LSB 足够打散台阶，肉眼不可辨为噪点。
+            ditherAmplitude = if (realtime) REALTIME_DITHER_AMPLITUDE else 0f
         )
     }
+
+    /** 亚像素级：只在 rim 带内生效，整块彩边靠 shader 的 edgeWeight 限域排除。 */
+    private const val REALTIME_CHROMATIC_SHIFT_DP = 0.6f
+
+    /** 0.98 → 1.03。 */
+    private const val REALTIME_SATURATION_BOOST = 0.05f
+
+    /** 1/255 ≈ ±0.5LSB。 */
+    private const val REALTIME_DITHER_AMPLITUDE = 1f / 255f
 }

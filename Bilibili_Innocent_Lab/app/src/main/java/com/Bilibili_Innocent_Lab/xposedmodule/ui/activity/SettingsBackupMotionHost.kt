@@ -19,6 +19,8 @@ import android.view.ViewOutlineProvider
 import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.core.graphics.ColorUtils
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid.LiquidMotionSurfaceFrameProvider
 import com.highcapable.betterandroid.ui.extension.view.textColor
 import kotlin.math.abs
@@ -184,6 +186,20 @@ internal class SettingsBackupMotionHost(
 
     /** 皮肤背景绑定到该层；其父容器始终跟随形变 surface 裁剪。 */
     fun liquidBackdropRoot(): View = backdropRoot
+
+    /** 在 setContentView 后接管默认的根 padding，让系统栏区域也由同一背景绘制。 */
+    fun installContentInsets() {
+        ViewCompat.setOnApplyWindowInsetsListener(this) { _, insets ->
+            val safe = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            )
+            // 只缩进内容；背景、形变轮廓和标题代理保持全窗口坐标。
+            setPadding(0, 0, 0, 0)
+            pageClip.setPadding(safe.left, safe.top, safe.right, safe.bottom)
+            insets
+        }
+        ViewCompat.requestApplyInsets(this)
+    }
 
     /** Both skin renderers read this View's live motion bounds, radius and fallback color. */
     fun setMotionSurfaceBackground(background: Drawable?) {

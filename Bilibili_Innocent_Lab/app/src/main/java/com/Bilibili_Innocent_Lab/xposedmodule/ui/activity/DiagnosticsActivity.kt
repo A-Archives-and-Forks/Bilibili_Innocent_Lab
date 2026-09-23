@@ -226,6 +226,7 @@ class DiagnosticsActivity : SkinnedActivity() {
         )
         val root = buildRoot()
         setContentView(motionHost)
+        motionHost.installContentInsets()
         motionHost.replacePage(root, requireNotNull(toolbarTitleView))
         bindPreparedSkinRoot(motionHost.liquidBackdropRoot()) {
             if (!isFinishing && !isDestroyed) recreate()
@@ -725,7 +726,6 @@ class DiagnosticsActivity : SkinnedActivity() {
     private fun buildToolbar(): View = LinearLayout(this).apply {
         gravity = Gravity.CENTER_VERTICAL
         setPadding(10.dp, 0, 8.dp, 0)
-        background = skinTopBarBackground(monetColors.background)
         addView(actionButton("‹", getString(R.string.diagnostics_title)) {
             onBackPressedDispatcher.onBackPressed()
         }.also(motionHost::registerNavigationBack), LinearLayout.LayoutParams(48.dp, 48.dp))

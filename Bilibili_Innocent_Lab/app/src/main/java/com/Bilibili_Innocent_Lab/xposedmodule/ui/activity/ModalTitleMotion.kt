@@ -2,6 +2,7 @@ package com.Bilibili_Innocent_Lab.xposedmodule.ui.activity
 
 import android.annotation.SuppressLint
 import android.graphics.Canvas
+import android.graphics.Outline
 import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
@@ -11,6 +12,7 @@ import android.text.Spanned
 import android.text.TextUtils
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewOutlineProvider
 import android.widget.TextView
 import androidx.core.graphics.withSave
 import com.highcapable.betterandroid.ui.extension.view.child
@@ -161,6 +163,14 @@ internal class ModalTitleMotion private constructor(
         isClickable = false
         isFocusable = false
         visibility = INVISIBLE
+        // 只抬 Z 序不投影：承载层带 elevation 后（Z>0）会把 Z=0 的兄弟挤到
+        // 表面之下，飞行标题必须比它高；空 outline 保证本层自身不产生阴影。
+        outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: Outline) {
+                outline.setRect(0, 0, view.width, view.height)
+                outline.alpha = 0f
+            }
+        }
     }
 
     // 单份无 Span 的文字内容不需要全窗离屏混合，避免交接 alpha 引入额外整屏图层。

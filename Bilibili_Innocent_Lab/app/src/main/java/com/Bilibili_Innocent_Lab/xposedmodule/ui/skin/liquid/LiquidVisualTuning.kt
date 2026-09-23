@@ -103,6 +103,27 @@ internal object LiquidVisualTuningPolicy {
     }
 }
 
+/**
+ * 悬浮栏可读性补偿在高级材质表面上的落点（见 `GlowLegibility`）。
+ *
+ * - boost：着色不透明度最多加 [TINT_RANGE]。
+ * - edgeDefinition：一圈暗色描边 + 一条内缩暗带，把浅色胶囊从亮背景里分出来。都画在表面
+ *   自身范围内——底栏 `clipToOutline`，画到外面的投影会被裁掉。
+ */
+internal object LiquidLegibilityTuning {
+    const val TINT_RANGE = 0.3f
+    const val MAX_TINT_ALPHA = 0.92f
+    const val EDGE_RING_ALPHA = 0.16f
+    const val EDGE_BAND_ALPHA = 0.06f
+    const val EDGE_BAND_DP = 8f
+
+    /** 加厚上限：基线 + [TINT_RANGE]，不超过 [MAX_TINT_ALPHA]，也不低于基线。 */
+    fun ceiling(base: Float): Float = (base + TINT_RANGE).coerceAtMost(MAX_TINT_ALPHA).coerceAtLeast(base)
+
+    /** 与策略同一条线性映射：boost 0 → 基线，1 → [ceiling]。 */
+    fun tintAlpha(base: Float, boost: Float): Float = base + (ceiling(base) - base) * boost.coerceIn(0f, 1f)
+}
+
 /** 普通、模态与形变表面在 GPU/fallback 下的透明度映射，集中为可穷举测试的纯策略。 */
 internal object LiquidSurfaceAlphaPolicy {
     fun resolve(
@@ -137,9 +158,10 @@ internal object LiquidSurfaceAlphaPolicy {
      * 普通卡片与模态层保持 1：它们的下层就是窗口底色，全不透反而更干净。
      */
     fun glassContentAlpha(role: SurfaceRole): Float = when (role) {
-        // 0.42：58% 的真实下层内容透入——"对下取色"要看得见锐利内容，
-        // 而不是只剩一团模糊折射；折射层保留折射/散射的高光质感。
-        SurfaceRole.FLOATING -> 0.42f
+        // 0.65（2026-09-23 可读性改造，原 0.42）：直透从 58% 降到 35%。原值下栏里叠着一层
+        // 58% 的锐利文字，与图标标签串读；"对下取色"改由滚动边缘溶解 + 自适应补偿承担，
+        // 见 GlowFloatingChrome。
+        SurfaceRole.FLOATING -> 0.65f
         // 呼出面板参考浮动条同一套"透出下层"做法：弹窗下面是 scrim 压暗的
         // 底页，38% 透入读作通透玻璃而非灰蒙遮罩；模态行文本的可读性由
         // scrim 自身的压暗与色罩兜底，不需要把玻璃层糊满。

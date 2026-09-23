@@ -20,6 +20,7 @@ import androidx.core.content.edit
 import androidx.core.graphics.ColorUtils
 import androidx.core.view.setPadding
 import com.Bilibili_Innocent_Lab.xposedmodule.R
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.ComponentPickerSelection
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.MineComponentScanEntry
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.MineComponentSelectionCodec
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.MineComponentSnapshot
@@ -142,7 +143,7 @@ internal fun MainActivity.showComponentPickerDialog(
             }
             textSize = 14f
             setTextColor(getColor(R.color.colorTextDark))
-            isChecked = legacyLocked || entry.key in initialSelectors
+            isChecked = legacyLocked || ComponentPickerSelection.isSelected(entry, initialSelectors)
             isEnabled = entry.selectable && !legacyLocked
         }
         checkboxes.add(box)
@@ -221,20 +222,12 @@ internal fun MainActivity.showComponentPickerDialog(
             text = getString(R.string.dialog_confirm),
             filled = true
         ) {
-            val editableKeys = entries.mapIndexedNotNull { index, entry ->
-                if (entry.selectable && checkboxes.getOrNull(index)?.isEnabled == true) {
-                    entry.key
-                } else {
-                    null
-                }
-            }.toSet()
-            val checkedSelectors = entries.mapIndexedNotNull { index, entry ->
-                if (entry.selectable &&
-                    checkboxes.getOrNull(index)?.isEnabled == true &&
-                    checkboxes[index].isChecked
-                ) entry.key else null
-            }.toSet()
-            val hiddenSelectors = (initialSelectors - editableKeys) + checkedSelectors
+            // 可编辑条目的主键与别名一并交给合并逻辑：旧口径别名在这里被替换成主键（一次性迁移）。
+            val editable = entries.mapIndexedNotNull { index, entry ->
+                val box = checkboxes.getOrNull(index)
+                if (entry.selectable && box?.isEnabled == true) entry to box.isChecked else null
+            }
+            val hiddenSelectors = ComponentPickerSelection.merge(initialSelectors, editable)
             prefs().edit {
                 putString(
                     spec.selectorsKey,

@@ -45,6 +45,8 @@ internal class BubbleSkinSurfaceView(
         isClickable = false
         isFocusable = false
         setWillNotDraw(false)
+        // 注意：本 View 不能带 elevation——Z>0 的子 View 会被 ViewGroup 排到最后
+        // 绘制，半透明表面会盖住卡片正文（实测行文字 211→66）。阴影归承载层。
     }
 
     fun updateFrame(bounds: RectF, radiusPx: Float, opacity: Float, clip: Path? = null) {
@@ -69,7 +71,7 @@ internal class BubbleSkinSurfaceView(
         hasClip = clip != null
         if (clip != null) frameClip.set(clip) else frameClip.rewind()
         surface.let { surface ->
-            // Liquid 的 Drawable alpha 只影响染色/描边，不影响折射底图；统一在有界层里淡化。
+            // 淡出统一走本 View 的有界图层，与 Drawable 自身的 alpha 语义互不干扰。
             if (surface.alpha != 255) surface.alpha = 255
             if (surface is GradientDrawable && surface.cornerRadius != radius) {
                 surface.cornerRadius = radius

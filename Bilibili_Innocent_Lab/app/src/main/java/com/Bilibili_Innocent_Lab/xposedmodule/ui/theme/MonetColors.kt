@@ -42,7 +42,18 @@ class MonetColors(
         /** 从系统壁纸提取种子色并生成 Monet 调色板 */
         fun fromWallpaper(context: Context): MonetColors {
             val isDark = context.isSystemInDarkMode()
-            val seed = extractSeedColor(context) ?: FALLBACK_SEED
+            // 来源链见 MonetSeedPolicy：壁纸取色 → 平台强调色 → 上次成功值 → 中性灰。
+            // 旧实现只有"壁纸取色 ?: 中性灰"，而壁纸取色对动态壁纸/部分 OEM ROM 会返回
+            // null——灰种子 chroma≈0，推导出的整套调色板完全去饱和，现场就是"全界面没有颜色"。
+            val wallpaper = extractSeedColor(context)
+            // 壁纸取色成功时不再多查一次平台资源：保持旧路径的取值与开销逐字不变。
+            val systemAccent = if (wallpaper == null) systemAccentSeed(context) else null
+            val cached = MonetSeedCache.read(context)
+            val live = wallpaper ?: systemAccent
+            if (live != null && MonetSeedPolicy.shouldRemember(live, cached)) {
+                MonetSeedCache.remember(context, live)
+            }
+            val seed = MonetSeedPolicy.resolve(wallpaper, systemAccent, cached, FALLBACK_SEED)
             return fromSeed(seed, isDark, MaterialColorSpecStore.read(context))
         }
 
@@ -78,6 +89,20 @@ class MonetColors(
                 background = dynamicColors.background().getArgb(scheme),
                 surfaceVariant = dynamicColors.surfaceVariant().getArgb(scheme)
             )
+        }
+
+        /**
+         * 平台 Material You 强调色（API 31+）。
+         *
+         * 它由系统自己从壁纸/主题算出，无需任何权限，且**能反映用户在主题设置里手动挑的
+         * 颜色**——`getWallpaperColors` 反映不了这一层，对动态壁纸还会直接返回 null。
+         * 作为壁纸取色的第一顺位兜底，把"取不到颜色"的概率压到接近零。
+         */
+        private fun systemAccentSeed(context: Context): Int? {
+            if (AndroidVersion.isLessThan(AndroidVersion.S)) return null
+            return runCatching {
+                context.getColor(android.R.color.system_accent1_500)
+            }.getOrNull()
         }
 
         /** Android 12+ 从系统壁纸提取种子色，低版本返回 null */

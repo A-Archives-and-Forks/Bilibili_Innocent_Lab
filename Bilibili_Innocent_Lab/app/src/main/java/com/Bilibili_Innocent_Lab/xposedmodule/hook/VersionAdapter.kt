@@ -2320,6 +2320,9 @@ object VersionAdapter {
     private const val DYNAMIC_MEDIATOR_TAB_CLASS =
         "com.bilibili.bplus.followinglist.home.mediator.MediatorTabLayout"
     private val BLOCK_UPDATE_OWNER_CANDIDATES = listOf(
+        // 9.13.0(9130300)：ar1.c 执行 FORCE_NETWORK 请求并写 UpdateApk 缓存；
+        // 同签名的 ar1.a 只是缓存/回退包装层，不作为网络 Hook 边界。
+        "ar1.c",
         // 9.11.0 → 9.1.0/9.1.1；再到 8.99.0 → 8.84.0。每个 owner 仍须通过
         // 精确 (Context) -> BiliUpgradeInfo 签名和叶子实现筛选，类名存在本身不算命中。
         //
@@ -2557,6 +2560,9 @@ object VersionAdapter {
         "tv.danmaku.p9138bili.p9228ui.main2.widget.TabHost"
     )
     private val PLAYER_DEFAULT_QUALITY_CLASS_CANDIDATES = listOf(
+        // 9.13.0(9130300)：Rs1.j#a()I 读取画质偏好、应用登录/能力限制，
+        // 并记录 quality settings；不是只读偏好的 getSettingsQuality。
+        "Rs1.j",
         // 新版 dex 可能保留旧混淆类，因此按新→旧探测；每个 owner 内仍要求唯一的
         // 无参 Int 入口。8.84.0–9.12.0 均由
         // "quality settings:" / 画质偏好键的离线方法体语义交叉核验。

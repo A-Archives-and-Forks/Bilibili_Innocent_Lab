@@ -47,6 +47,17 @@ internal object LensRefractionPolicy {
 
     fun marginPx(density: Float): Int = (MARGIN_DP * density).roundToInt().coerceAtLeast(1)
 
+    /** 节点输入被裁到输出区域时，取两倍最大位移作收敛宽度，至少留住一半边缘距离。 */
+    fun nodeTravelBudget(size: Float, centerGain: Float, rimPush: Float): Float =
+        (size * maxOf(abs(rimPush), abs(centerGain) * 0.385f)).coerceAtLeast(1f)
+
+    fun nodeSampleCoordinate(position: Float, size: Float, centerGain: Float, rimPush: Float): Float {
+        val raw = (lens(position / size * 2f - 1f, centerGain, rimPush) + 1f) * size * 0.5f
+        val room = minOf(position - 0.5f, size - 0.5f - position).coerceAtLeast(0f)
+        val reach = (room / nodeTravelBudget(size, centerGain, rimPush)).coerceIn(0f, 1f)
+        return position + (raw - position) * reach
+    }
+
     fun blurRadius(scale: Int, density: Float): Int =
         (BLUR_DP * density / scale.coerceAtLeast(1)).roundToInt().coerceIn(1, 32)
 
@@ -70,6 +81,19 @@ internal object LensRefractionPolicy {
         val innerH = (sh - 2 * margin).coerceAtLeast(1).toFloat()
         val maxX = (sw - 1).toFloat()
         val maxY = (sh - 1).toFloat()
+        // 列映射只依赖 x：原来在内层逐像素重算 dw×dh 次 lens()，现在每列算一次存成表
+        // （dw≈88 时 7744 次 → 88 次）。纯提取，输出逐位不变。
+        val columnLeft = IntArray(dw)
+        val columnRight = IntArray(dw)
+        val columnFrac = FloatArray(dw)
+        for (x in 0 until dw) {
+            val u = (x + 0.5f) / dw * 2f - 1f
+            val sx = ((lens(u, CENTER_GAIN_X, RIM_PUSH_X) + 1f) * 0.5f * innerW + margin - 0.5f).coerceIn(0f, maxX)
+            val x0 = sx.toInt().coerceIn(0, sw - 1)
+            columnLeft[x] = x0
+            columnRight[x] = (x0 + 1).coerceAtMost(sw - 1)
+            columnFrac[x] = sx - x0
+        }
         for (y in 0 until dh) {
             val v = (y + 0.5f) / dh * 2f - 1f
             val sy = ((lens(v, CENTER_GAIN_Y, RIM_PUSH_Y) + 1f) * 0.5f * innerH + margin - 0.5f).coerceIn(0f, maxY)
@@ -77,15 +101,14 @@ internal object LensRefractionPolicy {
             val y1 = (y0 + 1).coerceAtMost(sh - 1)
             val fy = sy - y0
             val row = y * dw
+            val rowTop = y0 * sw
+            val rowBottom = y1 * sw
             for (x in 0 until dw) {
-                val u = (x + 0.5f) / dw * 2f - 1f
-                val sx = ((lens(u, CENTER_GAIN_X, RIM_PUSH_X) + 1f) * 0.5f * innerW + margin - 0.5f).coerceIn(0f, maxX)
-                val x0 = sx.toInt().coerceIn(0, sw - 1)
-                val x1 = (x0 + 1).coerceAtMost(sw - 1)
-                val fx = sx - x0
+                val x0 = columnLeft[x]
+                val x1 = columnRight[x]
                 out[row + x] = bilinear(
-                    source[y0 * sw + x0], source[y0 * sw + x1],
-                    source[y1 * sw + x0], source[y1 * sw + x1], fx, fy
+                    source[rowTop + x0], source[rowTop + x1],
+                    source[rowBottom + x0], source[rowBottom + x1], columnFrac[x], fy
                 )
             }
         }

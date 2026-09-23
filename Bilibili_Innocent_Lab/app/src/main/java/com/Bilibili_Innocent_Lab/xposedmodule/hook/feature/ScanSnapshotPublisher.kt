@@ -38,6 +38,24 @@ internal class ScanSnapshotPublisher(
     }
 
     /**
+     * 整批累积后只发布一次。
+     *
+     * 新首页框架的列表可能来自宿主磁盘缓存（缓存里存的是已过滤版本），整批替换会让
+     * 已隐藏项从勾选面板里消失；按 key 累积则本进程见过的项一直可见，`showing` 随最新一次更新。
+     */
+    @Synchronized fun accumulateAll(entries: List<MineComponentScanEntry>) {
+        var changed = false
+        entries.forEach { entry ->
+            if (accumulated.size >= MineComponentSnapshotCodec.MAX_ENTRY_COUNT &&
+                !accumulated.containsKey(entry.key)
+            ) return@forEach
+            accumulated[entry.key] = entry
+            changed = true
+        }
+        if (changed) publish(accumulated.values.sortedBy(MineComponentScanEntry::key))
+    }
+
+    /**
      * 交付一批扫描结果。
      *
      * 调用方只管把"这次看到的全部候选"传进来，按 key 去重和截断在这里做；

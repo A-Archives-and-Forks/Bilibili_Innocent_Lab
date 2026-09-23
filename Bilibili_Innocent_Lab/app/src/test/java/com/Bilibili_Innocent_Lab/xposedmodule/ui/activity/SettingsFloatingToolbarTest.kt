@@ -21,11 +21,32 @@ class SettingsFloatingToolbarTest {
         // 长胶囊：左右留白包住三枚按钮，29dp 圆角配 58dp 高度成正胶囊端头。
         assertTrue(home.contains("background = activity.skinFloatingBackground(activity.monetColors.surface, 29f)"))
         assertTrue(home.contains("pageLayer.addView(header, FrameLayout.LayoutParams(-1, -2, Gravity.TOP).apply {"))
-        assertTrue(home.contains("setMargins(dp(10), dp(4), dp(10), 0)"))
+        // 2026-09-23：页面层铺到窗口顶端，胶囊外边距自己让开状态栏。
+        assertTrue(home.contains("setMargins(dp(10), dp(4) + systemTopInset, dp(10), 0)"))
         // 栏高折算成滚动页上内缩：静止时内容从栏下沿开始，上滚时滑到栏背后。
         assertTrue(home.contains("headerInset = bottom - top + dp(8)"))
         assertTrue(home.contains("private fun applyScrollInsets()"))
-        assertTrue(home.contains("internal val currentHeaderInset: Int get() = headerInset"))
+        assertTrue(home.contains("val top = (if (headerInset > 0) headerInset else dp(8)) + systemTopInset"))
+        // 搜索定位按"滚动页顶端到栏下沿"对齐，页面层从窗口顶端开始后必须含状态栏高度。
+        assertTrue(home.contains("internal val currentHeaderInset: Int get() = headerInset + systemTopInset"))
+    }
+
+    /**
+     * 状态栏任何时刻都透出内容（2026-09-23 用户要求）：原来只有长按弹性临时放开祖先裁剪时
+     * 才透，常态被根布局的状态栏 padding + clipToPadding 裁在状态栏下沿。
+     */
+    @Test fun statusBarAlwaysShowsContentScrollingBehindIt() {
+        val home = source(
+            "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/SettingsHomePresenter.kt")
+        val install = home.substringAfter("private fun installTopInset()").substringBefore("private fun applyScrollInsets()")
+        assertTrue(install.contains("ViewCompat.setOnApplyWindowInsetsListener(shell)"))
+        assertTrue(install.contains("WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()"))
+        // 只接管顶部：左、右、下照旧缩进，底栏与导航栏行为不变。
+        assertTrue(install.contains("view.setPadding(safe.left, 0, safe.right, safe.bottom)"))
+        assertTrue(install.contains("params.topMargin = dp(4) + systemTopInset"))
+        assertTrue(install.contains("applyScrollInsets()"))
+        assertTrue(install.contains("ViewCompat.requestApplyInsets(shell)"))
+        assertTrue(home.contains("SettingsFavoritesRepository.read(activity.applicationContext, this)\n        installTopInset()"))
     }
 
     @Test fun capsuleItselfIsAnElasticTargetWhileButtonsKeepTheirOwnGroups() {

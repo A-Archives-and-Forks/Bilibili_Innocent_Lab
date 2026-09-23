@@ -3,10 +3,10 @@
     <string name="settings_home_purify">净化</string>
     <string name="settings_home_enhance">增强</string>
     <string name="settings_home_module">模块</string>
-    <string name="settings_home_favorites_hint">把常用开关放在一起，随手就能找到。</string>
-    <string name="settings_home_purify_hint">留下想看的，隐藏不需要的。</string>
-    <string name="settings_home_enhance_hint">调整播放与浏览，让使用更顺手。</string>
-    <string name="settings_home_module_hint">外观、兼容选项与运行状态。</string>
+    <string name="settings_home_favorites_hint">常用常新</string>
+    <string name="settings_home_purify_hint">眼不见，心不烦</string>
+    <string name="settings_home_enhance_hint">锦上添花</string>
+    <string name="settings_home_module_hint">外观、兼容选项与运行状态</string>
     <string name="settings_favorites_manage">管理常用</string>
     <string name="settings_favorites_search">查找开关</string>
     <string name="settings_favorites_loading">正在读取常用开关…</string>

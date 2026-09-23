@@ -93,8 +93,10 @@ class LiquidTokenResolverTest {
         // 模态层透入的是被 scrim 压暗的内容，通透性可以比浮动条更收一些，
         // 但要留下可读出的下层映射。
         assertTrue(LiquidSurfaceAlphaPolicy.glassContentAlpha(SurfaceRole.MODAL) <= 0.75f)
-        assertTrue(LiquidSurfaceAlphaPolicy.glassContentAlpha(SurfaceRole.MODAL) >
-            LiquidSurfaceAlphaPolicy.glassContentAlpha(SurfaceRole.FLOATING))
+        // 2026-09-23 悬浮栏可读性改造：浮动条直透从 58% 降到 35%（0.42→0.65），栏里不再叠一层
+        // 锐利文字；"对下取色"改由滚动边缘溶解 + 自适应补偿承担。原先"模态层比浮动条更不透"
+        // 的次序约束随之撤销，改为给浮动条设可读性下限。
+        assertTrue(LiquidSurfaceAlphaPolicy.glassContentAlpha(SurfaceRole.FLOATING) >= 0.6f)
     }
 
     @Test
@@ -109,8 +111,19 @@ class LiquidTokenResolverTest {
         assertTrue(realtime.refractionHeightDp > standard.refractionHeightDp)
         assertTrue(realtime.refractionAmountDp > standard.refractionAmountDp)
         assertTrue(realtime.interiorDistortionDp > 0f)
-        // 边缘色散关闭后每像素少两次纹理采样，也不会再生成突兀彩边。
-        assertEquals(0f, realtime.chromaticShiftDp, 0f)
+        // 色散限域在 rim 带内（shader 按 edgeWeight 缩放、<0.02px 跳过取样）后重新开启：
+        // 亚像素量级，整块彩边由限域排除；上界钉死防止调参漂移。标准档仍为 0。
+        assertTrue(realtime.chromaticShiftDp > 0f)
+        assertTrue(realtime.chromaticShiftDp <= 0.75f)
+        assertEquals(0f, standard.chromaticShiftDp, 0f)
+        // 抖动只给实时档；标准档为 0 时 shader 整条分支被 uniform 门掉。
+        assertTrue(realtime.ditherAmplitude > 0f)
+        assertTrue(realtime.ditherAmplitude <= 2f / 255f)
+        assertEquals(0f, standard.ditherAmplitude, 0f)
+        // 实时档采真实内容，微提饱和；标准档采已调好的光学底图，不动。
+        assertTrue(realtime.saturation > standard.saturation)
+        assertTrue(realtime.saturation <= 1.06f)
+        assertEquals(tuning.saturation, standard.saturation, 0f)
         assertTrue(realtime.scatteringRadiusDp > 0f)
         assertTrue(realtime.scatteringStrength > 0f)
         assertTrue(realtime.surfaceAlpha < standard.surfaceAlpha)
@@ -155,9 +168,13 @@ class LiquidTokenResolverTest {
                 assertTrue(parameters.specularStrength <= .06f)
                 assertTrue(parameters.fresnelStrength <= .025f)
                 assertTrue(parameters.innerShadowStrength <= .018f)
+                // 采样触达上界要把色散位移一并算进 padding 预算，否则 rim 色散会采到
+                // effect 区之外。
                 assertTrue(parameters.effectPaddingDp >= parameters.refractionHeightDp +
-                    parameters.interiorDistortionDp + parameters.scatteringRadiusDp)
-                assertEquals(tuning.saturation, parameters.saturation, 0f)
+                    parameters.interiorDistortionDp + parameters.scatteringRadiusDp +
+                    parameters.chromaticShiftDp)
+                assertTrue(parameters.saturation >= tuning.saturation)
+                assertTrue(parameters.saturation <= 1.06f)
             }
         }
     }

@@ -2231,12 +2231,17 @@ class MainActivity : SkinnedActivity() {
             ?.let {
                 IconAnchoredMotionLayer(
                     this,
-                    surfaceBackground = modalBackground.takeIf { cover != null },
+                    // 所有锚点弹窗都把卡片表面托管给持久表面 View：形变首尾与落定画的是
+                    // 同一个 Drawable，落定瞬间不再有 drawable 交接。覆盖式面板沿用此路径。
+                    surfaceBackground = modalBackground
+                        ?: skinModalBackground(monetColors.surface, MODAL_CORNER_RADIUS_DP),
                     fallbackColor = monetColors.surface,
-                    surfaceRadiusPx = MODAL_CORNER_RADIUS_DP * density
+                    surfaceRadiusPx = MODAL_CORNER_RADIUS_DP * density,
+                    // 卡片阴影移交表面 View，随帧矩形生长/落定；覆盖式面板保持无阴影。
+                    surfaceElevation = if (cover == null) container.elevation else 0f
                 ).also { layer ->
                     if (layer.usesPersistentSurface) {
-                        // 覆盖式面板的填充与描边始终归承载表面；正文只负责内容动画。
+                        // 填充、描边与投影始终归承载表面；正文只负责内容动画。
                         container.background = null
                         container.elevation = 0f
                     }
@@ -2346,7 +2351,20 @@ class MainActivity : SkinnedActivity() {
         // **必须淡整个 decorView，不能只淡内容容器**：气泡面板的表面（连同描边）是
         // `BubblePanelLayer` 画的，容器自己 `background = null`，淡容器只会让文字变淡、
         // 描边纹丝不动——这条是实测撞出来的，改回去就白修了。
-        val coveredContent = if (cover != null) coveredParent?.window?.decorView else null
+        // 覆盖式子面板要淡出的是父面板的**卡片层**，绝不能淡整张 decorView——父面板的
+        // 压暗层（scrim）就在那张 decorView 里，跟着淡到 0 等于背景压暗整个消失，而子面板
+        // 按"父面板那层还在"的前提**故意没有自己的 scrim**，两条假设一撞就是全屏变亮
+        // （2026-09-22 真机实测：面板外背景 BGR 25.7/29.3/26.1 → 42.0/48.0/42.7，
+        // 底页文字明显透出）。父 root 的孩子是 [scrim, 卡片层, (飞行标题浮层)]，
+        // 取第一个非 scrim 的孩子即卡片层；拿不到就退回旧行为，不让排版异常变成崩溃。
+        val coveredContent = if (cover != null) coveredParent?.let { parent ->
+            val parentScrim = dialogScrims[parent]
+            val parentRoot = parentScrim?.parent as? ViewGroup
+            val cardLayer = if (parentRoot == null) null else (0 until parentRoot.childCount)
+                .map(parentRoot::getChildAt)
+                .firstOrNull { it !== parentScrim }
+            cardLayer ?: parent.window?.decorView
+        } else null
         val backdropBlur = if (cover != null) null else ModalBackdropBlur.createOrNull(
             window = dialog.window,
             userEnabled = ModalBackdropBlurStore.read(this),
@@ -2374,6 +2392,9 @@ class MainActivity : SkinnedActivity() {
         val titleMotion = if (morphLayer != null) {
             ModalTitleMotion.create(morphAnchor, container.firstChildOrNull<NativeTextView>(), root)
                 ?.also { title ->
+                    // 承载层带 elevation 后 Z>0，会把 Z=0 的兄弟盖到表面之下；
+                    // 飞行标题只抬 Z 序（空 outline，自身不投影），保持在面板之上。
+                    title.elevation = morphLayer.elevation + 1f
                     root.addView(title, NativeFrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
                 }
@@ -4245,7 +4266,7 @@ class MainActivity : SkinnedActivity() {
                             marginStart = 5.dp
                         }
                     ) {
-                        background = skinFloatingBackground(monetColors.surface, 24f)
+                        background = skinChromeOverlayBackground(monetColors.surface, 24f)
                         foreground = selfRippleBackground(24f)
                         updatePadding(10.dp)
                         setImageResource(R.drawable.ic_search)
@@ -4259,7 +4280,7 @@ class MainActivity : SkinnedActivity() {
                             marginEnd = 12.dp
                         }
                     ) {
-                        background = skinFloatingBackground(monetColors.surface, 24f)
+                        background = skinChromeOverlayBackground(monetColors.surface, 24f)
                         foreground = selfRippleBackground(24f)
                         updatePadding(10.dp)
                         setImageResource(R.drawable.ic_restart)
@@ -4278,7 +4299,7 @@ class MainActivity : SkinnedActivity() {
                         ImageView(
                             lparams = LayoutParams(48.dp, 48.dp)
                         ) {
-                            background = skinFloatingBackground(monetColors.surface, 24f)
+                            background = skinChromeOverlayBackground(monetColors.surface, 24f)
                             foreground = selfRippleBackground(24f)
                             updatePadding(10.dp)
                             setImageResource(R.mipmap.ic_github)
@@ -6174,6 +6195,7 @@ class MainActivity : SkinnedActivity() {
         @StringRes stringResource: Int,
         @DrawableRes imageResource: Int
     ) = Hikagable<MarginLayoutParams> {
+        var linkLabel: NativeTextView? = null
         LinearLayout(
             lparams = LayoutParams(widthMatchParent = true) {
                 updateMargins(left = 15.dp, right = 15.dp)
@@ -6181,7 +6203,11 @@ class MainActivity : SkinnedActivity() {
             init = {
                 gravity = Gravity.CENTER or Gravity.START
                 background = skinCardBackground(monetColors.surfaceVariant)
+                foreground = selfRippleBackground(15f)
                 setPadding(10.dp)
+                setOnClickListener {
+                    linkLabel?.let { label -> label.urls.singleOrNull()?.onClick(label) }
+                }
             }
         ) {
             ImageView(
@@ -6201,6 +6227,12 @@ class MainActivity : SkinnedActivity() {
                 text = stringResource(stringResource)
                 textColor = colorResource(R.color.colorTextGray)
                 textSize = 11f
+                // 保留自动链接的样式与目标，由整卡处理点击，文字区也能进入全局弹性手势。
+                movementMethod = null
+                isClickable = false
+                isLongClickable = false
+                isFocusable = false
+                linkLabel = this
             }
         }
     }

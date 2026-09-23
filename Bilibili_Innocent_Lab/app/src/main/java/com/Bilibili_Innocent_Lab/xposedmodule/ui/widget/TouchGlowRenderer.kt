@@ -7,7 +7,7 @@ import android.graphics.RadialGradient
 import android.graphics.Shader
 import androidx.core.graphics.ColorUtils
 import androidx.core.graphics.withTranslation
-import kotlin.math.abs
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.activity.GlowShape
 
@@ -20,12 +20,12 @@ import com.Bilibili_Innocent_Lab.xposedmodule.ui.activity.GlowShape
  *
  * 旋转语义：localMatrix 在几何局部空间生效、画布 translate 负责位移，两者叠加即
  * "任意朝向椭圆"。`setScale` 之后 `postTranslate` 再 `postRotate`，得到
- * M = R(θ)·T(coreOffset,0)·S(sx,sy)——亮核沿局部主轴（形变方向）前移，尾侧衰减更长。
+ * M = R(θ)·T(coreOffsetX,coreOffsetY)·S(sx,sy)——亮核沿局部主轴（形变方向）前移，尾侧衰减更长。
  * 屏幕坐标 y 向下，`atan2(vy,vx)` 与 `postRotate` 同坐标系，正方向一致。
  *
  * **几何圆必须包住前移后的渐变支持域**（长半轴 + 前移量）。早期实现画的是基准半径 R 的圆，
  * 而拉长后的渐变长半轴 rx > R：几何在长轴方向把 alpha 尚有约 0.26 的渐变齐平切断，留下一道
- * 硬边——现场就是"光晕边缘过渡断裂、混色生硬"。改为 max(radiusX, radiusY) + |coreOffsetX| 后，
+ * 硬边——现场就是"光晕边缘过渡断裂、混色生硬"。改为 max(radiusX, radiusY) + length(coreOffset) 后，
  * 渐变在自身椭圆边界处恰好衰减到 0，边缘连续。
  */
 internal class TouchGlowRenderer(
@@ -64,11 +64,11 @@ internal class TouchGlowRenderer(
     fun draw(canvas: Canvas, shape: GlowShape) {
         if (!shape.visible) return
         matrix.setScale(shape.radiusX / radius, shape.radiusY / radius)
-        matrix.postTranslate(shape.coreOffsetX, 0f)
+        matrix.postTranslate(shape.coreOffsetX, shape.coreOffsetY)
         matrix.postRotate(shape.rotationDeg)
         shader.setLocalMatrix(matrix)
         paint.alpha = shape.alphaByte
-        val extent = maxOf(shape.radiusX, shape.radiusY) + abs(shape.coreOffsetX)
+        val extent = maxOf(shape.radiusX, shape.radiusY) + hypot(shape.coreOffsetX, shape.coreOffsetY)
         canvas.withTranslation(shape.centerX, shape.centerY) {
             drawCircle(0f, 0f, extent, paint)
         }

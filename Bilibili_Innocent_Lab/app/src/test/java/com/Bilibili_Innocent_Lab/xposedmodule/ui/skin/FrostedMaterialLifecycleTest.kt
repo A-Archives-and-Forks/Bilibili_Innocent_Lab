@@ -64,8 +64,13 @@ class FrostedMaterialLifecycleTest {
         assertTrue(registration.indexOf("!lifecycle.canWork") < registration.indexOf("surfaces[view]"))
         assertFalse(renderer.contains(".recycle()"))
         assertTrue(renderer.contains("val recipient = WeakReference(this)"))
+        // 休眠的柔光回退引擎必须同样跟随生命周期（Liquid 可能在前台会话中途失败切过来）：
+        // 会话把启停发给**全部**引擎，柔光的启停就是 resume/stop。
         val session = source("runtime/ActivitySkinSession.kt")
-        assertTrue(session.contains("if (!isClosed) materialRenderer.resume()"))
-        assertTrue(session.contains("if (!isClosed) materialRenderer.stop()"))
+        assertTrue(session.contains("listOfNotNull(liquidRenderer, materialRenderer)"))
+        assertTrue(session.contains("if (!isClosed) engines.forEach(GlowEngine::onStart)"))
+        assertTrue(session.contains("if (!isClosed) engines.forEach(GlowEngine::onStop)"))
+        assertTrue(renderer.contains("override fun onStart() = resume()"))
+        assertTrue(renderer.contains("override fun onStop() = stop()"))
     }
 }

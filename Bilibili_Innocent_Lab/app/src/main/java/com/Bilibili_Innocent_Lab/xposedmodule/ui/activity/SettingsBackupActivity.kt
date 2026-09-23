@@ -185,6 +185,7 @@ class SettingsBackupActivity : SkinnedActivity() {
         motionHost.setMotionSurfaceBackground(skinMotionSurfaceBackground(monetColors.surfaceVariant, 15f))
         motionHost.onWindowSizeChangedDuringMotion = ::handleMotionWindowSizeChange
         setContentView(motionHost)
+        motionHost.installContentInsets()
         bindPreparedSkinRoot(motionHost.liquidBackdropRoot()) {
             if (!isFinishing && !isDestroyed) recreate()
         }
@@ -1125,7 +1126,6 @@ class SettingsBackupActivity : SkinnedActivity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(dp(4), dp(4), dp(16), dp(4))
-            background = skinTopBarBackground(monetColors.background)
         }
         toolbar.addView(TextView(this).apply {
             text = "←"

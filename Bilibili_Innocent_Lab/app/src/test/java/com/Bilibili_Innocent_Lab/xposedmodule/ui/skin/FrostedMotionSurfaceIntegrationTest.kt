@@ -75,16 +75,22 @@ class FrostedMotionSurfaceIntegrationTest {
         assertFalse(draw.contains("saveLayer("))
     }
 
-    @Test fun bothFullPageHostsUseSemanticMotionSurfacesAndSharedTopBarFrost() {
+    @Test fun bothFullPageHostsKeepTheBackdropContinuousBehindSystemBarsAndToolbar() {
         for (name in listOf("SettingsBackupActivity", "DiagnosticsActivity")) {
             val activity = source("activity/$name")
             assertTrue(name, activity.contains("motionHost.setMotionSurfaceBackground("))
             assertTrue(name, activity.contains("skinMotionSurfaceBackground("))
-            assertTrue(name, activity.contains("background = skinTopBarBackground(monetColors.background)"))
+            assertFalse(name, activity.contains("background = skinTopBarBackground(monetColors.background)"))
+            assertTrue(name, activity.indexOf("motionHost.installContentInsets()") >
+                activity.indexOf("setContentView(motionHost)"))
             assertTrue(name, activity.contains("bindPreparedSkinRoot(motionHost.liquidBackdropRoot())"))
             assertFalse(name, activity.contains("liquidMotionSurfaceBackgroundOrNull("))
         }
         val host = source("activity/SettingsBackupMotionHost")
+        val insets = host.substringAfter("fun installContentInsets()").substringBefore("fun setMotionSurfaceBackground")
+        assertTrue(insets.contains("WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()"))
+        assertTrue(insets.contains("setPadding(0, 0, 0, 0)"))
+        assertTrue(insets.contains("pageClip.setPadding(safe.left, safe.top, safe.right, safe.bottom)"))
         assertTrue(host.contains("fun setMotionSurfaceBackground(background: Drawable?)"))
         assertTrue(host.contains("surface.background = background"))
         assertTrue(host.contains("if (background == null)"))

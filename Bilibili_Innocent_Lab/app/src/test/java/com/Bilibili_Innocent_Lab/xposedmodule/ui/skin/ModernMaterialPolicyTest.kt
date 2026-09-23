@@ -29,6 +29,108 @@ class ModernMaterialPolicyTest {
         assertNotSame(source, output)
     }
 
+    /**
+     * 零分配热路径与原 API 必须逐位同结果（2026-09-22 性能整改）。
+     *
+     * `blurInto` 复用调用方缓冲、`pass` 手工内联了窗口进出——原写法用捕获可变局部变量的
+     * 局部 fun，Kotlin 会把累加器装箱成 `Ref.IntRef` 挪到堆上，真机实测 102×102 采样图
+     * 一次 2.0–4.6ms，是柔光皮肤 UI 线程掉帧的主因。这条用例钉住"只快不变"。
+     */
+    @Test fun theZeroAllocationBlurMatchesTheReferenceBitForBit() {
+        val width = 23
+        val height = 17
+        val source = IntArray(width * height) { i ->
+            (0xFF shl 24) or ((i * 37 and 255) shl 16) or ((i * 11 and 255) shl 8) or (i * 97 and 255)
+        }
+        listOf(1, 3, 7, 12).forEach { radius ->
+            val reference = ModernBackdropBlur.blur(source, width, height, radius)
+            val working = source.copyOf()
+            val scratch = IntArray(source.size)
+            val fast = ModernBackdropBlur.blurInto(working, scratch, width, height, radius)
+            assertArrayEquals("radius=$radius 必须逐位一致", reference, fast)
+        }
+        // 缓冲尺寸不匹配必须直接拒绝，而不是越界或静默算错。
+        assertTrue(
+            runCatching {
+                ModernBackdropBlur.blurInto(IntArray(6), IntArray(5), 3, 2, 1)
+            }.isFailure
+        )
+    }
+
+    /** 节流间隔要落在"看不出滞后、又确实省下逐帧采样"的区间里。 */
+    @Test fun theLiveSampleIntervalStaysInTheImperceptibleRange() {
+        assertTrue(ModernMaterialPolicy.LIVE_SAMPLE_MIN_INTERVAL_MS in 16L..48L)
+    }
+
+    private fun source(relative: String): String {
+        val candidates = sequenceOf(
+            java.io.File("src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/$relative"),
+            java.io.File("app/src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/$relative")
+        )
+        return candidates.firstOrNull(java.io.File::isFile)?.readText()
+            ?: error("cannot locate $relative from ${java.io.File(".").absolutePath}")
+    }
+
+    /**
+     * 显式动画期**不得冻结**透镜采样（2026-09-23 用户报告）。
+     *
+     * 曾为躲 UI 线程尖刺在手风琴动画期整段不采、静默 96ms 后补采——用户看到的是顶栏/
+     * 底栏透出的背景等动画播完才瞬间跳变。位移通知必须与滚动走同一条"设脏"路径。
+     */
+    @Test fun explicitMotionKeepsTheLensLiveInsteadOfFreezingIt() {
+        val sampler = source("ui/skin/material/LiveBackdropSampler.kt")
+        assertFalse("不得再有动画期静默窗口", sampler.contains("motionUntilNanos"))
+        assertFalse("不得再有单独的动画期冻结入口", sampler.contains("fun invalidateForMotion"))
+        val renderer = source("ui/skin/material/FrostedMaterialRenderer.kt")
+        val onPosition = renderer.substringAfter("private fun onPositionChanged(")
+            .substringBefore("fun releaseMemory()", "MISSING")
+        assertTrue(onPosition != "MISSING")
+        assertTrue("显式动画与滚动都只是把透镜设脏", onPosition.contains("live.invalidate()"))
+        assertTrue("透镜采集的离屏软件回放不得覆盖'上次硬件绘制位置'（滚动通知在 pre-draw 之后才发）",
+            renderer.contains("if (view != null && canvas.isHardwareAccelerated) renderer?.register(view)"))
+    }
+
+    /**
+     * 所有逐像素工作必须留在后台线程（2026-09-23 真机打点）。
+     *
+     * 一次采样处理 5 个表面，模糊 360–900µs、透镜重映射 250–1060µs，合计 7–10.7ms 压在
+     * UI 线程——这就是当初想用冻结躲开的尖刺。挪走它们后底栏仍剩 3–4.4ms 的软件光栅化
+     * （5 层半透明卡片的填充率），所以主线程只允许**录制**绘制指令，光栅化也在后台回放。
+     */
+    @Test fun perPixelLensWorkNeverRunsOnTheUiThread() {
+        val sampler = source("ui/skin/material/LiveBackdropSampler.kt")
+        val capture = sampler.substringAfter("private fun capture(")
+            .substringBefore("private fun onBatchDone(", "MISSING")
+        assertTrue(capture != "MISSING")
+        assertTrue("主线程只录制内容层的绘制指令", capture.contains("picture.beginRecording("))
+        for (heavy in listOf("eraseColor", "drawPicture", "getPixels", "blurInto",
+            "LensRefractionPolicy.remap", "premultiply", "illuminate")) {
+            assertFalse("主线程采集阶段不得调用 $heavy", capture.contains(heavy))
+        }
+        val process = sampler.substringAfter("fun process(job: LensJob)")
+            .substringBefore("fun close()", "MISSING")
+        assertTrue(process != "MISSING")
+        assertTrue("后台作业必须标注 @WorkerThread",
+            sampler.substringBefore("fun process(job: LensJob)").trimEnd().endsWith("@WorkerThread"))
+        for (heavy in listOf("drawPicture", "getPixels", "blurInto", "LensRefractionPolicy.remap",
+            "premultiply", "illuminate", "unpremultiply")) {
+            assertTrue("后台作业必须包含 $heavy", process.contains(heavy))
+        }
+        val release = sampler.substringAfter("fun release()").substringBefore("sampleWidth = 0", "MISSING")
+        assertTrue(release != "MISSING")
+        assertFalse("后台可能正往 sample 里回放：释放时 recycle 会立刻释放原生像素，就是释放后使用",
+            release.contains("sample?.recycle()"))
+        assertTrue("同一时刻至多一批在飞，在飞期间主线程不碰作业缓冲",
+            sampler.contains("if (inFlight) return"))
+        val done = sampler.substringAfter("private fun onBatchDone(")
+            .substringBefore("private fun fail()", "MISSING")
+        assertTrue(done != "MISSING")
+        assertTrue("过期批次（释放/关闭后回来的）必须整批丢弃",
+            done.contains("token != batchToken"))
+        assertTrue("缓冲已重建的单个结果必须丢弃",
+            done.contains("entry.generation != job.generation"))
+    }
+
     @Test fun blurActuallySpreadsAnImpulseAndReducesHighFrequencyContrast() {
         val source = IntArray(25 * 25) { 0xFF000000.toInt() }
         source[12 * 25 + 12] = 0xFFFFFFFF.toInt()

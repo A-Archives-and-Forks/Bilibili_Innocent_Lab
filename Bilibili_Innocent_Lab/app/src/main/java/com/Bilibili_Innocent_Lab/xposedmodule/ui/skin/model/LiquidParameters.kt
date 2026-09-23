@@ -37,5 +37,12 @@ internal data class LiquidParameters(
      * 因此 `-145°` 指向左上方，外法线朝左/朝上的边缘被点亮。
      */
     val highlightAngleDegrees: Float,
-    val effectPaddingDp: Float
+    val effectPaddingDp: Float,
+    /**
+     * 输出抖动幅度（0..1 色域，约定 1/255 ≈ ±0.5LSB）。
+     *
+     * 平滑底图在 8 位量化下会出色带；抖动把台阶打散成噪声。标准档为 0，
+     * shader 里整条分支被 uniform 门掉，行为与旧版逐像素一致。
+     */
+    val ditherAmplitude: Float = 0f
 )

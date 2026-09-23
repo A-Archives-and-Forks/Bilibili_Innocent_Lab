@@ -43,8 +43,17 @@ class ModernMaterialIntegrationTest {
         assertTrue(skin.contains("skinBackground(color, radiusDp, materialOutline = true, role = SurfaceRole.SELECTED_ITEM)"))
         val renderer = source("ui/skin/material/FrostedMaterialRenderer.kt")
         assertTrue(renderer.contains("radiusDp * density"))
-        assertTrue(renderer.contains("windowRoot.viewTreeObserver.addOnScrollChangedListener(observer)"))
-        assertTrue(renderer.contains("removeOnScrollChangedListener(listener)"))
+        assertTrue(renderer.contains("observer.addOnScrollChangedListener(scroll)"))
+        assertTrue(renderer.contains("observer.removeOnScrollChangedListener(state.scroll)"))
+        assertTrue(renderer.contains("observer.addOnPreDrawListener(preDraw)"))
+        assertTrue(renderer.contains("observer.removeOnPreDrawListener(state.preDraw)"))
+        assertTrue(renderer.contains("observer.addOnDrawListener(draw)"))
+        assertTrue(renderer.contains("observer.removeOnDrawListener(state.draw)"))
+        // 登记与批量比较须用同一矩阵乘法次序，避免浮点结合差异造成静止表面反复失效。
+        val registration = renderer.substringAfter("internal fun register(").substringBefore("private fun registerRefreshWindow")
+        val refresh = renderer.substringAfter("private fun flushPositionChanges").substringBefore("fun releaseMemory")
+        assertTrue(registration.contains("samplingMatrices.withAncestorMemo"))
+        assertTrue(refresh.contains("samplingMatrices.withAncestorMemo"))
         assertTrue(renderer.contains("ValueAnimator.areAnimatorsEnabled()"))
     }
 }

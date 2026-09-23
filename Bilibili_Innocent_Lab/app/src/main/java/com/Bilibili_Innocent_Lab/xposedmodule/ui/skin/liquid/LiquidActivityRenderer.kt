@@ -1,30 +1,28 @@
 package com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid
 
 import android.annotation.SuppressLint
-import android.content.pm.ApplicationInfo
 import android.graphics.Bitmap
-import android.graphics.BitmapShader
 import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.ColorFilter
 import android.graphics.LinearGradient
 import android.graphics.Matrix
-import android.graphics.Outline
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.PixelFormat
+import android.graphics.PointF
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
+import android.util.Log
 import android.view.Choreographer
 import android.view.PixelCopy
 import android.view.View
 import android.view.ViewTreeObserver
-import android.view.WindowManager
+import androidx.annotation.AnyThread
 import androidx.annotation.MainThread
 import androidx.core.graphics.ColorUtils
 import androidx.core.graphics.createBitmap
@@ -32,6 +30,13 @@ import com.highcapable.betterandroid.system.extension.utils.AndroidVersion
 import com.highcapable.betterandroid.ui.component.activity.AppViewsActivity
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.background.LiquidBackgroundMode
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.background.LiquidBackgroundStore
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.engine.GlowBackdropTarget
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.engine.GlowChromeGlassApi31
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.engine.GlowEngine
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.engine.GlowEngineCallbacks
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.engine.GlowLegibility
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.engine.GlowSurfaceOptics
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.SkinId
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.LiquidParameters
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.LiquidRenderBackend
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.SurfaceRole
@@ -41,55 +46,7 @@ import java.lang.ref.WeakReference
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import kotlin.math.abs
-import kotlin.math.ceil
-import kotlin.math.floor
 import kotlin.math.roundToInt
-
-/** 动态形变表面向 Liquid Drawable 暴露当前帧，不把 renderer 泄漏给业务 View。 */
-internal interface LiquidMotionSurfaceFrameProvider {
-    fun copyLiquidMotionBounds(outBounds: RectF)
-    fun liquidMotionCornerRadiusPx(): Float
-    fun liquidMotionFallbackColor(): Int
-}
-
-/** Surface 的真实 Drawable 几何；只在已有对象上更新，实时反馈遮罩逐帧零分配。 */
-private class LiquidSurfaceFootprint {
-    val refreshState = LiquidSurfaceRefreshState()
-    var left = 0
-    var top = 0
-    var right = 0
-    var bottom = 0
-    var radiusPx = 0f
-
-    /**
-     * 上一次录制 display list 时该表面在屏幕上的位置。
-     *
-     * `backdropOrigin` 这个 uniform 是在 draw 里按当时的 `getLocationOnScreen` 写入的，会被
-     * Skia 快照进 display list。视图只是被移动（滚动改 RenderNode 位置、translation 动画）
-     * 而没有失效时，display list 会带着**旧原点**重放，玻璃里的背景于是停在旧位置，直到下一次
-     * 失效才突然对齐——这就是慢速滑动时控件内背景抖动的来源。记录原点是为了只失效真正移动过的
-     * 表面。
-     */
-    var originX = Int.MIN_VALUE
-        private set
-    var originY = Int.MIN_VALUE
-        private set
-
-    val hasOrigin: Boolean
-        get() = originX != Int.MIN_VALUE && originY != Int.MIN_VALUE
-
-    fun update(bounds: Rect, radiusPx: Float, originX: Int, originY: Int) {
-        left = bounds.left
-        top = bounds.top
-        right = bounds.right
-        bottom = bounds.bottom
-        this.radiusPx = radiusPx
-        this.originX = originX
-        this.originY = originY
-    }
-
-    fun matchesOrigin(x: Int, y: Int): Boolean = originX == x && originY == y
-}
 
 private class LiquidWindowRefresh(
     val observer: WeakReference<ViewTreeObserver>,
@@ -107,11 +64,48 @@ private class LiquidCaptureRequest(
     val height: Int,
     // Exclusively borrowed until this request completes: no next request can rewind the mask meanwhile.
     val mask: Path,
-    val maskReady: Boolean
-)
+    val maskReady: Boolean,
+    /**
+     * 发起截图时正绑定给后端的那张实时截图：后台只和它比较。提交时它必须仍是绑定源，
+     * 比较结论才可采信——否则一律当"有变化"。
+     */
+    val baseline: LiquidBackdropSource?
+) {
+    // 以下三项只在截图线程写入，经 mainHandler 消息队列交接后才在主线程读取。
+    var copyCompletedNanos = 0L
+    var outcome = LiquidCaptureOutcome.FAILED
+    var sameAsBaseline = false
+}
 
 /**
- * MainActivity 首批使用的 Activity 级 Liquid renderer。
+ * 截图线程上的后处理：反馈抑制遮罩 + 与基准逐像素比较（截图线程启动失败时退回主线程执行）。
+ *
+ * 2026-09-23 前这两步在 PixelCopy 的主线程回调里执行（整张约 1,000,000 px 的软件路径填充 +
+ * 一次整图 `sameAs`）。单飞从"发起"一直延续到主线程提交：提交前不会有下一次请求改写 [mask]、
+ * 轮转到的缓冲或基准，本函数读写的全部对象在此期间只归截图线程使用。
+ * 实时缓冲与已发布的稳定底图 `close()` 都不 recycle，过期请求在这里多算一次也不会触碰已释放像素；
+ * 结论由主线程按票据丢弃。
+ */
+@AnyThread
+private fun postProcessRealtimeCapture(
+    feedback: LiquidFeedbackSuppressor,
+    request: LiquidCaptureRequest,
+    result: Int
+) {
+    request.copyCompletedNanos = System.nanoTime()
+    if (result != PixelCopy.SUCCESS) return
+    val outcome = runCatching {
+        feedback.sanitizeRealtimeCapture(request.source, request.stableBackdrop, request.mask, request.maskReady)
+    }.getOrDefault(LiquidCaptureOutcome.FAILED)
+    request.outcome = outcome
+    val baseline = request.baseline ?: return
+    if (outcome == LiquidCaptureOutcome.FAILED) return
+    // 异常一律当"有变化"处理，不能抛出去。
+    request.sameAsBaseline = runCatching { request.source.bitmap.sameAs(baseline.bitmap) }.getOrDefault(false)
+}
+
+/**
+ * 高级材质的 [GlowEngine] 实现：Activity 级 Liquid renderer。
  *
  * 每个实例持有一个稳定 root underlay；用户启用高负载模式后，Surface Drawable 可改采三缓冲
  * PixelCopy source。Bitmap、RuntimeShader、RenderEffect 都在绑定/切换路径创建，draw 只更新位置
@@ -120,7 +114,8 @@ private class LiquidCaptureRequest(
 internal class LiquidActivityRenderer(
     private val activity: AppViewsActivity,
     private val palette: MonetColors
-) : AutoCloseable {
+) : GlowEngine {
+    override val skin: SkinId get() = SkinId.LIQUID
     private val density = activity.resources.displayMetrics.density
     private val darkPalette = ColorUtils.calculateLuminance(palette.surface) < 0.5
     private val hardwareAccelerated = activity.isHardwareAccelerationRequested()
@@ -143,13 +138,13 @@ internal class LiquidActivityRenderer(
         tuning = visualTuning,
         profile = effectProfile
     )
-    private val backendCandidates = LiquidCapabilityPolicy.candidateOrder(
+    /** 渲染后端的准备、降级链与底图绑定，见 [LiquidBackendSet]。 */
+    private val backends = LiquidBackendSet(
+        parameters = parameters,
+        density = density,
         sdkInt = AndroidVersion.code,
         hardwareAccelerated = hardwareAccelerated
     )
-    private val fallbackPlan = LiquidBackendFallbackPlan(backendCandidates)
-    private val preparedDrivers = linkedMapOf<LiquidRenderBackend, LiquidBackendDriver>()
-    private val backendFailures = linkedMapOf<LiquidRenderBackend, String>()
     private val overlayPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -178,20 +173,57 @@ internal class LiquidActivityRenderer(
     private val rootFallbackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = palette.background
     }
+    // 可读性补偿的边缘加深：暗色细描边 + 内缩暗带，只在 edgeDefinition > 0 的悬浮栏上画。
+    private val legibilityRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = Color.BLACK
+        strokeWidth = density
+    }
+    private val legibilityBandPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        color = Color.BLACK
+        strokeWidth = LiquidLegibilityTuning.EDGE_BAND_DP * density
+    }
+    /** 悬浮栏宿主 → 可读性补偿；弱键，不延长 View 生命周期。 */
+    private val surfaceLegibility = WeakHashMap<View, GlowLegibility>()
+    private val backdropHostLocation = IntArray(2)
+    /** 窗口底图换代计数，见 [windowBackdropGeneration]。 */
+    private var backdropGeneration = 0L
+
+    /** 悬浮栏宿主 → 内容节点玻璃（B 期，API 31+），见 [LiquidChromeBackdropApi31]。drawer 为 GlowChromeGlassApi31，
+     *  声明成 Any 以免 API 31 以下加载本类时解析它。 */
+    private class ChromeBackdrop(val target: GlowBackdropTarget, val drawer: Any) {
+        /**
+         * 上一次绘制确实走了内容节点玻璃。只有这时栏才与实时截图无关，截图换代可以不重录它；
+         * 某一帧节点不可用而退回窗口玻璃时，它就和别的表面一样跟着截图刷新。
+         */
+        var drewByNode = false
+    }
+    private val chromeBackdrops = WeakHashMap<View, ChromeBackdrop>()
+    private val chromeOffset = PointF()
+    /** 节点路径任一次出错即永久停用：退回窗口玻璃，不牵连主后端的降级链。 */
+    private var chromeBackdropBroken = false
     private val surfaceViews = WeakHashMap<View, LiquidSurfaceFootprint>()
     private val refreshWindows = WeakHashMap<View, LiquidWindowRefresh>()
     private val visibilityMatrix = FloatArray(9)
     private val retiredBackdropSources = LinkedHashSet<LiquidBackdropSource>()
     private val mainHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * 实时截图的回调与后处理线程（[postProcessRealtimeCapture]）。只在实时档首次截图时启动；
+     * 与 `liquid-background-loader` 分开，自定义底图解码不会堵住逐帧截图。
+     * [feedback] 的抑制底图缓存只在这条线程上读写，主线程的释放也投递到这里。
+     */
+    private var captureThread: HandlerThread? = null
+    private var captureHandler: Handler? = null
     private val choreographer = Choreographer.getInstance()
     private val performanceController =
         if (effectProfile == LiquidEffectProfile.REALTIME_CAPTURE) {
             LiquidPerformanceController(activity, ::onThermalStatusChanged)
         } else null
-    private val realtimeCaptureCanvas = Canvas()
-    private val realtimeCaptureMask = Path()
-    private val realtimeCaptureBounds = Rect()
-    private val suppressionScaleBounds = Rect()
+
+    /** 窗口刷新率、吞吐降档与 ADPF 目标周期，见 [LiquidRefreshRateController]。 */
+    private val refreshRate = LiquidRefreshRateController(activity, performanceController)
     private var realtimeSamplePixelBudget = LiquidRealtimeCapturePolicy.TARGET_SAMPLE_PIXELS
     private val realtimeCaptureSourceRect = Rect()
     private val realtimeRootLocation = IntArray(2)
@@ -212,34 +244,29 @@ internal class LiquidActivityRenderer(
      */
     private var realtimeMaskReady = false
 
-    /** 实测采集吞吐；只统计连续成功完成之间的间隔，失败/熔断/重建都会重置。 */
-    private val captureThroughput = LiquidCaptureThroughputTracker()
-
-    /** 吞吐自适应给出的刷新率上限；`null` 表示尚未降档。会话内只降不升。 */
-    private var throughputRefreshRateCap: Float? = null
 
     /**
-     * 预缩放到截图尺寸的稳定底图，供反馈抑制按 1:1 填充。
+     * 实时采集的静止门控，见 [LiquidRealtimeCapturePolicy.IDLE_CONFIRMATIONS]。
      *
-     * 抑制原本用 0.25 倍的稳定底图逐帧**双线性放大**填进截图（1440p 上是 360×800 → 671×1490，
-     * 约 2.9 倍面积），这是主线程上的软件光栅化，夹在 GPU→CPU 回读与纹理上传之间。预缩放一次后
-     * 逐帧只剩 1:1 的 alpha 混合，输出内容不变（同一双线性滤波、同一源，只是重采样从每帧一次变成
-     * 尺寸变化时一次）。代价是一张截图尺寸的位图（1,000,000 px 约 3.81 MiB），内存压力下释放。
+     * 静止时不挂逐帧回调、不发 PixelCopy、不重画玻璃；窗口任何一次绘制（[realtimeDrawListener]）
+     * 或每秒一次的兜底探测（[realtimeIdleProbe]）把它唤醒。
      */
-    private var suppressionUnderlay: Bitmap? = null
-    private var suppressionUnderlayShader: BitmapShader? = null
-    private var suppressionUnderlaySource: LiquidBackdropSource? = null
-    private val suppressionPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private var backendDriver: LiquidBackendDriver? = null
+    private var realtimeIdle = false
+    private var identicalCaptureStreak = 0
 
-    /**
-     * 当前 backdrop 只绑定到**正在使用**的后端。
-     *
-     * 旧实现每帧遍历 `preparedDrivers` 全量绑定：API 33 上 BLUR 后端永远不会被绘制，却仍在
-     * 每帧 `discardDisplayList()` + `beginRecording()` 重录一个引用整张截图的 display list。
-     * 现在改为记录"已绑定的 source"，切换后端时再补绑。
-     */
-    private val driverBoundSources = HashMap<LiquidRenderBackend, LiquidBackdropSource>()
+    private val realtimeDrawListener = ViewTreeObserver.OnDrawListener {
+        if (realtimeIdle) leaveRealtimeIdle(LiquidRealtimeCapturePolicy.WAKE_SETTLE_FRAMES)
+    }
+    private val realtimeIdleProbe = Runnable {
+        if (!realtimeIdle) return@Runnable
+        // 探测只需再确认一张：相同就立刻回到静止，不必重新攒两张。
+        identicalCaptureStreak = LiquidRealtimeCapturePolicy.IDLE_CONFIRMATIONS - 1
+        leaveRealtimeIdle(settleFrames = 0)
+    }
+
+
+    /** 实时截图的反馈抑制（遮罩 + 预缩放底图），见 [LiquidFeedbackSuppressor]。 */
+    private val feedback = LiquidFeedbackSuppressor(paddingPx = parameters.effectPaddingDp * density)
     private var backdropSource: LiquidBackdropSource? = null
     private var realtimeBackdropSource: LiquidBackdropSource? = null
     private var realtimeCaptureSources: List<LiquidBackdropSource> = emptyList()
@@ -260,13 +287,6 @@ internal class LiquidActivityRenderer(
     private var realtimeSamplingSuppressed = false
     private var scrollSettlePending = false
     private val scrollSettleCheck = Runnable { onScrollSettleCheck() }
-    private var realtimeFrameIntervalNanos =
-        LiquidRealtimeCapturePolicy.frameIntervalNanos(60f)
-    private var realtimeTargetRefreshRate = 60f
-    private var originalPreferredRefreshRate: Float? = null
-    private var appliedPreferredRefreshRate: Float? = null
-    private var originalPreferredDisplayModeId: Int? = null
-    private var appliedPreferredDisplayModeId: Int? = null
     private var stretchOpticalIntensity = 1f
     /**
      * 当前回弹方向：-1 = 顶部下拉（表面上边缘发光）、+1 = 底部上拉、0 = 无。
@@ -293,52 +313,159 @@ internal class LiquidActivityRenderer(
     private val realtimeFrameCallback = Choreographer.FrameCallback(::onRealtimeFrame)
 
     val backend: LiquidRenderBackend?
-        get() = backendDriver?.backend ?: fallbackPlan.current
+        get() = backends.backend
 
-    init {
-        backendCandidates.forEach { candidate ->
-            runCatching { createBackend(candidate) }
-                .onSuccess { preparedDrivers[candidate] = it }
-                .onFailure { throwable -> recordBackendFailure(candidate, throwable) }
-        }
-        selectCurrentPreparedBackend()
-    }
-
-    /**
-     * 记录某个后端为什么用不了。
-     *
-     * `RuntimeShader` 在构造期由厂商驱动编译 AGSL，失败会直接抛异常。原实现把它整个吞掉，
-     * 于是 Adreno 能跑、Mali 被拒这类跨驱动问题在用户侧只表现为"效果变朴素了"，没有任何可上报的
-     * 线索。这里只保留异常类型与截断后的 message，不含任何用户数据。
-     */
-    private fun recordBackendFailure(backend: LiquidRenderBackend, throwable: Throwable) {
-        val message = throwable.message
-            ?.replace('\n', ' ')
-            ?.trim()
-            ?.takeIf(String::isNotEmpty)
-            ?.take(MAX_BACKEND_FAILURE_MESSAGE)
-        backendFailures[backend] = if (message == null) {
-            throwable.javaClass.simpleName
-        } else {
-            "${throwable.javaClass.simpleName}: $message"
-        }
-    }
+    override val backendName: String?
+        get() = backend?.name
 
     /**
      * 当前后端之前那些更优先候选的失败原因；没有降级时为 null。
      *
      * 供设置页在后端名称旁展示，用户可以直接把它反馈回来，而不是只说"不好看"。
      */
-    val backendDegradeReason: String?
-        get() {
-            val active = backendDriver?.backend ?: fallbackPlan.current ?: return null
-            if (backendFailures.isEmpty()) return null
-            return backendCandidates
-                .takeWhile { it != active }
-                .firstNotNullOfOrNull { candidate ->
-                    backendFailures[candidate]?.let { "${candidate.name}: $it" }
-                }
+    override val backendDegradeReason: String?
+        get() = backends.degradeReason
+
+    override val wantsScrollEdgeDissolve: Boolean
+        get() = !closed && !fatalPosted
+
+    override val windowBackdropGeneration: Long
+        get() = backdropGeneration
+
+    /**
+     * 滚动边缘溶解与可读性探针共用：按宿主相对根的位置取可见根背景。
+     * [rootScreenLocation] 由根背景在同一帧更早的 draw 写入，与宿主位置同帧对齐。
+     */
+    override fun drawWindowBackdrop(
+        canvas: Canvas,
+        host: View,
+        bounds: RectF,
+        alphaMask: Shader?,
+        alpha: Float
+    ): Boolean {
+        if (closed || fatalPosted) return false
+        val root = boundRoot ?: return false
+        if (host.rootView !== root.rootView) return false
+        val source = backdropSource?.takeIf { !it.isClosed } ?: return false
+        host.getLocationOnScreen(backdropHostLocation)
+        source.drawPresentationRegion(
+            canvas = canvas,
+            bounds = bounds,
+            rootOffsetX = (backdropHostLocation[0] - rootScreenLocation[0]).toFloat(),
+            rootOffsetY = (backdropHostLocation[1] - rootScreenLocation[1]).toFloat(),
+            alphaMask = alphaMask,
+            alpha = (alpha.coerceIn(0f, 1f) * 255f).roundToInt()
+        )
+        return true
+    }
+
+    /**
+     * 悬浮栏的光学参数：着色基线与 [drawSurfaceLayers] 同源；直透比例在 GPU 后端是玻璃层之外
+     * 的那部分，在 TRANSLUCENT 兜底下没有玻璃层、下方内容只隔着一层着色。
+     */
+    override fun floatingSurfaceOptics(): GlowSurfaceOptics? {
+        if (closed || fatalPosted) return null
+        val translucent = backends.backend == LiquidRenderBackend.TRANSLUCENT
+        val base = LiquidSurfaceAlphaPolicy.resolve(SurfaceRole.FLOATING, translucent, parameters)
+        return GlowSurfaceOptics(
+            surfaceColor = palette.surface,
+            baseTintAlpha = base,
+            maxTintAlpha = LiquidLegibilityTuning.ceiling(base),
+            // 内容节点玻璃全不透，但清透档只轻微模糊：下方细节大半仍会透出来。
+            seeThrough = when {
+                translucent -> 1f
+                chromeBackdropActive -> CHROME_DETAIL_SEE_THROUGH
+                else -> 1f - LiquidSurfaceAlphaPolicy.glassContentAlpha(SurfaceRole.FLOATING)
+            }
+        )
+    }
+
+    private val chromeBackdropActive: Boolean
+        get() = supportsSurfaceBackdrop && chromeBackdrops.isNotEmpty()
+
+    override val supportsSurfaceBackdrop: Boolean
+        @SuppressLint("ReplaceWithAndroidVersion")
+        get() = !closed && !fatalPosted && !chromeBackdropBroken && hardwareAccelerated &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.S
+
+    @SuppressLint("ReplaceWithAndroidVersion")
+    override fun setSurfaceBackdrop(host: View, target: GlowBackdropTarget?) {
+        if (closed) return
+        if (target == null || !supportsSurfaceBackdrop || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+            chromeBackdrops.remove(host)?.let { entry ->
+                closeChromeBackdrop(entry)
+                host.invalidate()
+            }
+            return
         }
+        val existing = chromeBackdrops[host]
+        if (existing?.target === target) return
+        existing?.let(::closeChromeBackdrop)
+        // 构造里会编译 AGSL：失败与绘制期失败同等处理，永久停用节点路径，不能抛进调用方的 pre-draw。
+        val drawer = runCatching { LiquidChromeBackdropApi31.create(parameters, density) }.getOrElse { error ->
+            chromeBackdropBroken = true
+            Log.w(TAG, "chrome backdrop unavailable", error)
+            chromeBackdrops.remove(host)
+            host.invalidate()
+            return
+        }
+        chromeBackdrops[host] = ChromeBackdrop(target, drawer)
+        host.invalidate()
+    }
+
+    @SuppressLint("ReplaceWithAndroidVersion")
+    private fun closeChromeBackdrop(entry: ChromeBackdrop) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) (entry.drawer as GlowChromeGlassApi31).close()
+    }
+
+    /**
+     * 悬浮栏的内容节点玻璃。返回 false 表示本次不可用（内容节点尚未录制、宿主已脱离容器），
+     * 调用方照常走窗口玻璃。出错时永久停用节点路径并自行吞掉异常——不能让
+     * `drawWithFallback` 把它算成主后端失败、把全窗口的玻璃一起降级。
+     */
+    @SuppressLint("ReplaceWithAndroidVersion")
+    private fun drawChromeBackdrop(
+        entry: ChromeBackdrop,
+        canvas: Canvas,
+        bounds: Rect,
+        radiusPx: Float,
+        alpha: Int,
+        host: View
+    ): Boolean {
+        if (chromeBackdropBroken || Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return false
+        val content = entry.target.recordedCapture() ?: return false
+        if (!entry.target.offsetOf(host, chromeOffset)) return false
+        val realtime = effectProfile == LiquidEffectProfile.REALTIME_CAPTURE
+        return runCatching {
+            (entry.drawer as GlowChromeGlassApi31).draw(
+                canvas = canvas,
+                bounds = bounds,
+                radiusPx = radiusPx,
+                content = content,
+                contentOffsetX = chromeOffset.x,
+                contentOffsetY = chromeOffset.y,
+                alpha = alpha / 255f,
+                // 与窗口玻璃的浮动条同一套强度：常驻凝光下限 + 回弹方向增益。
+                opticalIntensity = if (realtime) maxOf(stretchOpticalIntensity, FLOATING_OPTICAL_FLOOR) else 1f,
+                stretchDirY = if (realtime) stretchEdgeDirY else 0f
+            ) { recording, rect -> drawWindowBackdrop(recording, host, rect, null, 1f) }
+        }.onFailure { error ->
+            chromeBackdropBroken = true
+            Log.w(TAG, "chrome backdrop disabled", error)
+            chromeBackdrops.values.forEach(::closeChromeBackdrop)
+            chromeBackdrops.clear()
+        }.isSuccess
+    }
+
+    override fun setSurfaceLegibility(host: View, legibility: GlowLegibility?) {
+        if (closed) return
+        val next = legibility?.takeUnless { it == GlowLegibility.NEUTRAL }
+        val previous = if (next == null) surfaceLegibility.remove(host) else surfaceLegibility.put(host, next)
+        if (previous != next) host.invalidate()
+    }
+
+    override fun bindRoot(root: View, callbacks: GlowEngineCallbacks): Boolean =
+        bindRoot(root, callbacks.onFirstVisibleDraw, callbacks.onFatalFailure)
 
     @MainThread
     fun bindRoot(
@@ -376,6 +503,9 @@ internal class LiquidActivityRenderer(
         }
         rootScrollListener = scrollListener
         root.viewTreeObserver.addOnScrollChangedListener(scrollListener)
+        if (effectProfile == LiquidEffectProfile.REALTIME_CAPTURE) {
+            root.viewTreeObserver.addOnDrawListener(realtimeDrawListener)
+        }
 
         rebuildBackdrop(root)
         val drawable = LiquidRootDrawable(this, palette.background)
@@ -388,17 +518,19 @@ internal class LiquidActivityRenderer(
         return true
     }
 
+    override fun onStart() = onActivityStarted()
+    override fun onStop() = onActivityStopped()
+
     @MainThread
     fun onActivityStarted() {
         if (closed) return
         activityVisible = true
         // 新会话重新从设备最高档开始探测；只降不升的策略靠会话边界自愈。
-        captureThroughput.reset()
-        throughputRefreshRateCap = null
+        refreshRate.resetSession()
         if (effectProfile == LiquidEffectProfile.REALTIME_CAPTURE &&
             !realtimeCaptureSuspended
         ) {
-            performanceController?.start(realtimeFrameIntervalNanos)
+            performanceController?.start(refreshRate.frameIntervalNanos)
             boundRoot?.let(::configureRealtimeRefreshRate)
         }
         scheduleRealtimeCapture(LiquidRealtimeCapturePolicy.INITIAL_DELAY_MS)
@@ -410,51 +542,30 @@ internal class LiquidActivityRenderer(
         captureRequests.invalidate()
         clearScrollSuppression()
         removeRealtimeFrameCallback()
+        resetRealtimeIdle()
         performanceController?.stop()
-        restorePreferredRefreshRate()
+        refreshRate.restore()
     }
 
-    fun createSurfaceDrawable(
-        fallbackColor: Int,
-        radiusDp: Float,
-        role: SurfaceRole
-    ): Drawable = LiquidSurfaceDrawable(
-        renderer = this,
-        fallbackColor = fallbackColor,
-        radiusPx = radiusDp.coerceAtLeast(0f) * density,
-        role = role
-    )
+    override fun surface(fallbackColor: Int, radiusDp: Float, role: SurfaceRole): Drawable =
+        LiquidSurfaceDrawable(
+            renderer = this,
+            fallbackColor = fallbackColor,
+            radiusPx = radiusDp.coerceAtLeast(0f) * density,
+            role = role
+        )
 
     /**
-     * 将现有滚动容器包进透明 stretch viewport；失败时保持原层级，不上报皮肤失败。
-     *
-     * viewport 只让滚动前景共享同一个 Android 12+ stretch RenderNode（底层 Activity 背景保持
-     * 静止），并按回弹距离提升表面光学强度；不再绘制任何边界采样环。
+     * 回弹视口只让滚动前景共享同一个 Android 12+ stretch RenderNode（底层 Activity 背景保持
+     * 静止），并按回弹距离提升表面光学强度；不再绘制任何边界采样环。API 31 以下或未开硬件加速
+     * 时没有 stretch，保持原层级。安装本身见 `GlowEngine.installStretchViewport`。
      */
-    @MainThread
-    @SuppressLint("ReplaceWithAndroidVersion")
-    fun installStretchViewport(
-        scrollTarget: View,
-        isStretchAllowed: () -> Boolean
-    ): View? {
-        if (closed || Build.VERSION.SDK_INT < 31 ||
-            !activity.isHardwareAccelerationRequested()
-        ) {
-            return null
-        }
-        return runCatching {
-            LiquidStretchViewport.installAround(
-                scrollTarget = scrollTarget,
-                isStretchAllowed = isStretchAllowed,
-                onStretchDistance = ::onStretchDistanceChanged
-            )
-        }.getOrNull()
-    }
+    override val wantsStretchViewport: Boolean
+        @SuppressLint("ReplaceWithAndroidVersion")
+        get() = !closed && Build.VERSION.SDK_INT >= 31 && hardwareAccelerated
 
-    @MainThread
-    fun finishStretchViewport(view: View?) {
-        (view as? LiquidStretchViewport)?.finishStretch()
-    }
+    override fun onStretchDistance(distance: Float, edge: LiquidStretchEdge) =
+        onStretchDistanceChanged(distance, edge)
 
     private fun onStretchDistanceChanged(distance: Float, edge: LiquidStretchEdge) {
         if (closed || effectProfile != LiquidEffectProfile.REALTIME_CAPTURE) return
@@ -478,24 +589,28 @@ internal class LiquidActivityRenderer(
     }
 
     @MainThread
-    fun onTrimMemory(level: Int) {
+    override fun onTrimMemory(level: Int) {
         if (closed || !LiquidMemoryPolicy.shouldReleaseGraphics(level)) return
         releaseGraphicsForMemoryPressure()
     }
 
     @MainThread
-    fun onLowMemory() {
+    override fun onLowMemory() {
         if (closed) return
         releaseGraphicsForMemoryPressure()
     }
 
+    @SuppressLint("ReplaceWithAndroidVersion")
     private fun releaseGraphicsForMemoryPressure() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            chromeBackdrops.values.forEach { (it.drawer as GlowChromeGlassApi31).releaseDisplayList() }
+        }
         releaseSuppressionUnderlay()
         suspendRealtimeCapture(releaseBuffers = true)
         // 高阶折射/模糊和实时三缓冲可以在压力下永久降级，但最多 2 MiB 的稳定 underlay
         // 仍是用户可见背景本身。释放它会让当前 Activity 无重建地退回纯色，表现为自定义
         // 图片“过一段时间丢失”；保留稳定 source，同时切到零额外资源的 TRANSLUCENT 表面。
-        advanceToTranslucent()
+        backends.advanceToTranslucent()
         boundRoot?.invalidate()
         invalidateRegisteredSurfaces()
     }
@@ -570,51 +685,93 @@ internal class LiquidActivityRenderer(
         // 取样模式跑——折射弯曲对平滑底图无收益，但边缘光/通透全程与静止态一致，
         // 不再出现"切页瞬间高光消失再加载"的路径切换跳变（2026-09-21 真机实证）。
         val foreignWindow = host != null && host.rootView !== boundRoot?.rootView
-        if (role == SurfaceRole.MODAL) {
-            android.util.Log.d(
-                "ModalGlass",
-                "draw host=${host?.javaClass?.simpleName} bounds=$bounds " +
-                    "r=$effectiveRadiusPx alpha=$alpha foreign=$foreignWindow " +
-                    "off=${viewX - rootScreenLocation[0]},${viewY - rootScreenLocation[1]}"
-            )
-        }
+        var foreignFellBack = false
+        val chrome = if (role == SurfaceRole.FLOATING && host != null && !foreignWindow) chromeBackdrops[host] else null
+        chrome?.drewByNode = false
         drawWithFallback { driver ->
             if (driver.backend != LiquidRenderBackend.TRANSLUCENT) {
                 if (foreignWindow) {
-                    // 填充透明度沿用折射路径的 glassContentAlpha：浮动条透出
-                    // 真实下层内容，"对下取色"与主窗口一致。
-                    backdropSource?.takeIf { !it.isClosed }?.drawOpticalRegion(
-                        canvas = canvas,
-                        localBounds = bounds,
-                        radiusPx = effectiveRadiusPx,
-                        rootOffsetX = (viewX - rootScreenLocation[0]).toFloat(),
-                        rootOffsetY = (viewY - rootScreenLocation[1]).toFloat(),
-                        alpha = (LiquidSurfaceAlphaPolicy.glassContentAlpha(role) * 255f)
-                            .roundToInt()
-                    )
-                } else {
-                    checkNotNull(realtimeBackdropSource ?: backdropSource) {
-                        "GPU Liquid backend has no backdrop source"
+                    // 优先走绑在稳定光学底图上的第二个折射驱动：面板因此拿到与窗内玻璃
+                    // 同一条 rim（折射弯曲 + 菲涅尔 + 镜面 + 焦散 + 内阴影），而底图里
+                    // 没有锐利内容可泄漏。取不到驱动（非 REFRACTION 后端、编译失败、
+                    // 底图缺失）才退回平铺直采，并由 luminousEdge 补那条渐变描边。
+                    val panelDriver = backends.foreignRefractionDriver(backdropSource)
+                    // ⚠️ 必须自带 try/catch：`drawWithFallback` 把 lambda 里的任何异常都算成
+                    // **主后端**失败并整体降级（REFRACTION→BLUR，全窗口的玻璃一起变）。
+                    // 面板驱动是附加通道，坏掉只准它自己退回直采。
+                    val drewPanel = panelDriver != null && runCatching {
+                        panelDriver.drawBackdrop(
+                            canvas,
+                            bounds,
+                            effectiveRadiusPx,
+                            viewX - rootScreenLocation[0],
+                            viewY - rootScreenLocation[1],
+                            // 稳定底图无回弹语义：强度恒 1、无方向，边缘光按静止态渲染。
+                            1f,
+                            0f,
+                            LiquidSurfaceAlphaPolicy.glassContentAlpha(role) * (alpha / 255f),
+                            motionLite = false
+                        )
+                    }.onFailure {
+                        backends.markForeignDriverBroken()
+                    }.isSuccess
+                    if (!drewPanel) {
+                        foreignFellBack = true
+                        // 填充透明度沿用折射路径的 glassContentAlpha：浮动条透出
+                        // 真实下层内容，"对下取色"与主窗口一致。
+                        // 必须乘上 drawable 自身 alpha：承载层/卡片交接靠 background.alpha=0
+                        // 隐藏被接管的那张 drawable——只消色罩不消光学填充会让两张玻璃层
+                        // 在形变中叠画，面板近乎不透明、落定才"加载通透"。
+                        backdropSource?.takeIf { !it.isClosed }?.drawOpticalRegion(
+                            canvas = canvas,
+                            localBounds = bounds,
+                            radiusPx = effectiveRadiusPx,
+                            rootOffsetX = (viewX - rootScreenLocation[0]).toFloat(),
+                            rootOffsetY = (viewY - rootScreenLocation[1]).toFloat(),
+                            alpha = (LiquidSurfaceAlphaPolicy.glassContentAlpha(role) * alpha.toFloat())
+                                .roundToInt()
+                        )
                     }
-                    driver.drawBackdrop(
-                        canvas,
-                        bounds,
-                        effectiveRadiusPx,
-                        viewX - rootScreenLocation[0],
-                        viewY - rootScreenLocation[1],
-                        if (effectProfile == LiquidEffectProfile.REALTIME_CAPTURE) {
-                            // 浮动条常驻一档折射强度：真实下层透入时折射弯曲可见，
-                            // 是"有光感的玻璃"而非磨砂贴片；回弹增益仍可继续叠上去。
-                            if (role == SurfaceRole.FLOATING) {
-                                maxOf(stretchOpticalIntensity, FLOATING_OPTICAL_FLOOR)
-                            } else stretchOpticalIntensity
-                        } else 1f,
-                        if (effectProfile == LiquidEffectProfile.REALTIME_CAPTURE) {
-                            stretchEdgeDirY
-                        } else 0f,
-                        LiquidSurfaceAlphaPolicy.glassContentAlpha(role),
-                        motionLite = realtimeSamplingSuppressed
-                    )
+                } else {
+                    // B 期：主窗口里的悬浮栏优先走内容节点玻璃（实时、无截图滞后）；
+                    // 节点不可用时照常折射窗口截屏。
+                    val drewChrome = chrome != null && host != null &&
+                        drawChromeBackdrop(chrome, canvas, bounds, effectiveRadiusPx, alpha, host)
+                    if (!drewChrome) {
+                        checkNotNull(realtimeBackdropSource ?: backdropSource) {
+                            "GPU Liquid backend has no backdrop source"
+                        }
+                        driver.drawBackdrop(
+                            canvas,
+                            bounds,
+                            effectiveRadiusPx,
+                            viewX - rootScreenLocation[0],
+                            viewY - rootScreenLocation[1],
+                            if (effectProfile == LiquidEffectProfile.REALTIME_CAPTURE) {
+                                // 浮动条常驻一档折射强度：真实下层透入时折射弯曲可见，
+                                // 是"有光感的玻璃"而非磨砂贴片；回弹增益仍可继续叠上去。
+                                if (role == SurfaceRole.FLOATING) {
+                                    maxOf(stretchOpticalIntensity, FLOATING_OPTICAL_FLOOR)
+                                } else stretchOpticalIntensity
+                            } else 1f,
+                            if (effectProfile == LiquidEffectProfile.REALTIME_CAPTURE) {
+                                stretchEdgeDirY
+                            } else 0f,
+                            // 与光学直采路径同理：drawable alpha 是整张表面的主开关，
+                            // 折射/模糊填充也必须随它衰减。
+                            LiquidSurfaceAlphaPolicy.glassContentAlpha(role) * (alpha / 255f),
+                            // 回弹期一并降级为 lite（2026-09-22 真机实证）。
+                            // 09-21（六）当时坚持"回弹保持完整折射路径"，针对的是**切换绘制
+                            // 路径**（drawOpticalRegion 直采）带来的跳变；而 lite 是**同一条
+                            // shader** 少取几次样：焦散（liteCaustic）、菲涅尔、镜面、内阴影、
+                            // contentAlpha 通透逐项保留，边缘光与静止态同源，只少了内部那层
+                            // 约 6% 的散射混合。短页面里所有玻璃表面都在屏幕上，回弹期跑全量
+                            // 散射就是 GPU 墙——用户实测帧间隔 18% 超 12.5ms、`High input
+                            // latency` 占 73% 帧，而 UI 线程只占 5.4ms，其余全在 GPU。
+                            motionLite = realtimeSamplingSuppressed || stretchOpticalIntensity > 1f
+                        )
+                    }
+                    chrome?.drewByNode = drewChrome
                 }
             }
             drawSurfaceLayers(
@@ -625,7 +782,10 @@ internal class LiquidActivityRenderer(
                 fallbackColor = fallbackColor,
                 role = role,
                 translucentFallback = driver.backend == LiquidRenderBackend.TRANSLUCENT,
-                luminousEdge = foreignWindow
+                // 折射驱动自带边缘光，只有退回平铺直采的面板才需要那条渐变描边补光；
+                // 两者同时上会叠成一圈比真实 rim 亮一个量级的硬边（2026-09-21（八）实证）。
+                luminousEdge = foreignWindow && foreignFellBack,
+                legibility = if (role == SurfaceRole.FLOATING && host != null) surfaceLegibility[host] else null
             )
         }
         scheduleHealthConfirmationAfterDraw()
@@ -639,13 +799,17 @@ internal class LiquidActivityRenderer(
         fallbackColor: Int,
         role: SurfaceRole,
         translucentFallback: Boolean,
-        luminousEdge: Boolean = false
+        luminousEdge: Boolean = false,
+        legibility: GlowLegibility? = null
     ) {
-        val surfaceFraction = LiquidSurfaceAlphaPolicy.resolve(
+        val baseFraction = LiquidSurfaceAlphaPolicy.resolve(
             role = role,
             translucentFallback = translucentFallback,
             parameters = parameters
         )
+        // 可读性补偿只加厚、不减薄；上限与 floatingSurfaceOptics 报给策略的一致。
+        val surfaceFraction = if (legibility == null) baseFraction
+            else LiquidLegibilityTuning.tintAlpha(baseFraction, legibility.boost)
         val surfaceAlpha = (surfaceFraction * alpha).toInt().coerceIn(0, 255)
         // 高阶玻璃使用中性的 surface 轻染色；fallback 才恢复业务传入的实色以保证可读性。
         val tintColor = when {
@@ -713,11 +877,40 @@ internal class LiquidActivityRenderer(
                 outlinePaint
             )
         }
+        val definition = legibility?.edgeDefinition ?: 0f
+        if (definition > 0f) drawLegibilityEdge(canvas, bounds, radiusPx, definition * (alpha / 255f))
+    }
+
+    /**
+     * 亮背景上的浅色胶囊：暗色细描边勾出轮廓，内缩暗带给出厚度（Apple 称 darkened edge）。
+     * 画在白色高光描边之后，两者叠成"外暗内亮"的玻璃边，而不是互相抵消。
+     */
+    private fun drawLegibilityEdge(canvas: Canvas, bounds: Rect, radiusPx: Float, strength: Float) {
+        val ringInset = legibilityRingPaint.strokeWidth * 0.5f
+        legibilityRingPaint.alpha =
+            (255f * LiquidLegibilityTuning.EDGE_RING_ALPHA * strength).roundToInt().coerceIn(0, 255)
+        canvas.drawRoundRect(
+            bounds.left + ringInset, bounds.top + ringInset,
+            bounds.right - ringInset, bounds.bottom - ringInset,
+            (radiusPx - ringInset).coerceAtLeast(0f),
+            (radiusPx - ringInset).coerceAtLeast(0f),
+            legibilityRingPaint
+        )
+        val bandHalf = legibilityBandPaint.strokeWidth * 0.5f
+        legibilityBandPaint.alpha =
+            (255f * LiquidLegibilityTuning.EDGE_BAND_ALPHA * strength).roundToInt().coerceIn(0, 255)
+        canvas.drawRoundRect(
+            bounds.left + bandHalf, bounds.top + bandHalf,
+            bounds.right - bandHalf, bounds.bottom - bandHalf,
+            (radiusPx - bandHalf).coerceAtLeast(0f),
+            (radiusPx - bandHalf).coerceAtLeast(0f),
+            legibilityBandPaint
+        )
     }
 
     private inline fun drawWithFallback(draw: (LiquidBackendDriver) -> Unit) {
         while (!closed) {
-            val driver = backendDriver ?: if (selectCurrentPreparedBackend()) backendDriver else null
+            val driver = backends.current ?: if (backends.selectCurrentPrepared()) backends.current else null
             if (driver == null) {
                 dispatchFatalFailure()
                 return
@@ -762,6 +955,7 @@ internal class LiquidActivityRenderer(
         ) {
             captureRequests.invalidate()
             existing.updateFullSize(width, height)
+            backdropGeneration++
             bindPreparedBackendsToBackdrop(existing)
             root.invalidate()
             invalidateRegisteredSurfaces()
@@ -775,12 +969,13 @@ internal class LiquidActivityRenderer(
             LiquidBackdropSource.create(palette, width, height)
         }.getOrNull()
         if (created == null) {
-            if (existing == null) advanceToTranslucent()
+            if (existing == null) backends.advanceToTranslucent()
             return
         }
         captureRequests.invalidate()
         created.markPublished()
         backdropSource = created
+        backdropGeneration++
         bindPreparedBackendsToBackdrop(created)
         root.invalidate()
         invalidateRegisteredSurfaces()
@@ -869,6 +1064,7 @@ internal class LiquidActivityRenderer(
                 val previous = backdropSource
                 captureRequests.invalidate()
                 backdropSource = source
+                backdropGeneration++
                 customBackdropRequest = null
                 bindPreparedBackendsToBackdrop(source)
                 root.invalidate()
@@ -908,7 +1104,7 @@ internal class LiquidActivityRenderer(
      * 抑制交给 [flushSurfaceRefresh] 在确认表面原点真的变化后再触发。
      */
     @MainThread
-    fun notifyPositionChanged() {
+    override fun notifyPositionChanged() {
         lastContentShiftNanos = System.nanoTime()
         queueSurfaceRefresh(contentChanged = false)
     }
@@ -939,7 +1135,6 @@ internal class LiquidActivityRenderer(
         val stable = backdropSource
         if (stable == null || stable.isClosed) return
         realtimeSamplingSuppressed = true
-        driverBoundSources.clear()
         bindPreparedBackendsToBackdrop(stable)
         invalidateRegisteredSurfaces()
         if (!scrollSettlePending) {
@@ -948,9 +1143,39 @@ internal class LiquidActivityRenderer(
         }
     }
 
+    /**
+     * 手指按在屏幕上的时段。
+     *
+     * 抑制解除是一次重同步：整组表面重录回折射路径 + 立刻排一次全屏 PixelCopy，
+     * 采集完成后再整组失效一次。它落在**新手势的头几帧**上就是可感知的迟滞——
+     * 用户实测最容易复现的姿势正是"回弹刚结束立刻反向滑"：回弹把静默窗口一路顺延，
+     * 手一松窗口到点，解除恰好撞上下一次按下（2026-09-22 用户报告）。
+     *
+     * 按着时把解除往后推，但设上界：长按不动本来就该恢复实时档，不能无限等。
+     */
+    private var gestureActiveSinceNanos = 0L
+
+    @MainThread
+    override fun notifyGestureActive(active: Boolean) {
+        if (closed) return
+        gestureActiveSinceNanos = if (active) System.nanoTime() else 0L
+    }
+
+    private fun gestureHoldsRelease(now: Long): Boolean {
+        val since = gestureActiveSinceNanos
+        if (since == 0L) return false
+        return now - since < GESTURE_RELEASE_HOLD_MS * NANOS_PER_MILLISECOND
+    }
+
     private fun onScrollSettleCheck() {
         scrollSettlePending = false
         if (closed || !realtimeSamplingSuppressed) return
+        val now = System.nanoTime()
+        if (gestureHoldsRelease(now)) {
+            scrollSettlePending = true
+            mainHandler.postDelayed(scrollSettleCheck, LiquidRealtimeCapturePolicy.SCROLL_QUIET_MS)
+            return
+        }
         val quietNanos = System.nanoTime() - lastContentShiftNanos
         // 回弹形变未归零时同样保持抑制：按住不动没有新位移回调，静默窗口会自然
         // 攒满——此时解除会让表面重录回折射路径，下一次位移又切回光学直采，
@@ -967,6 +1192,7 @@ internal class LiquidActivityRenderer(
         // 采集完成会再失效一次；采集已挂起（suspended）时则靠这次失效恢复玻璃观感。
         invalidateRegisteredSurfaces()
         // 立刻排一次新采集；完成时 handleRealtimeCaptureResult 会把实时缓冲绑回去。
+        resetRealtimeIdle()
         realtimeNextCaptureNanos = 0L
         postRealtimeFrameCallback()
     }
@@ -982,6 +1208,17 @@ internal class LiquidActivityRenderer(
     private fun invalidateRegisteredSurfaces() {
         queueSurfaceRefresh(contentChanged = true)
     }
+
+    /**
+     * 实时截图换了一张：只刷新真正读截图的表面。内容节点玻璃栏的输入是内容节点 + 稳定底图，
+     * 截图换代不改变它的任何一个像素，重录它（栏的 display list + 效果节点）是白做的。
+     */
+    private fun invalidateRealtimeCaptureConsumers() {
+        queueSurfaceRefresh(contentChanged = true, captureOnly = true)
+    }
+
+    /** 已由内容节点玻璃绘制、不读实时截图的表面。 */
+    private fun isCaptureIndependent(view: View): Boolean = chromeBackdrops[view]?.drewByNode == true
 
     private fun registerRefreshWindow(windowRoot: View) {
         val observer = windowRoot.viewTreeObserver
@@ -1008,7 +1245,7 @@ internal class LiquidActivityRenderer(
         }
     }
 
-    private fun queueSurfaceRefresh(contentChanged: Boolean) {
+    private fun queueSurfaceRefresh(contentChanged: Boolean, captureOnly: Boolean = false) {
         if (closed) return
         val iterator = refreshWindows.entries.iterator()
         while (iterator.hasNext()) {
@@ -1016,9 +1253,9 @@ internal class LiquidActivityRenderer(
             if (!root.isAttachedToWindow) {
                 removeRefreshWindow(state)
                 iterator.remove()
-            } else if (state.batch.mark(contentChanged) && contentChanged && root.isShown) {
+            } else if (state.batch.mark(contentChanged, captureOnly) && contentChanged && root.isShown) {
                 // New source pixels need a draw. Position owners already schedule their own frame.
-                triggerSurfaceFrame(root)
+                triggerSurfaceFrame(root, captureOnly)
             }
         }
     }
@@ -1035,7 +1272,7 @@ internal class LiquidActivityRenderer(
      * 找不到可见表面则本窗口无需这次绘制：CONTENT 标记留在 batch 里，窗口下一次遍历的
      * preDraw 仍会完整 flush（隐藏表面经 `skipped` 在重新可见时补偿刷新）。
      */
-    private fun triggerSurfaceFrame(windowRoot: View) {
+    private fun triggerSurfaceFrame(windowRoot: View, captureOnly: Boolean) {
         val iterator = surfaceViews.entries.iterator()
         while (iterator.hasNext()) {
             val entry = iterator.next()
@@ -1045,6 +1282,8 @@ internal class LiquidActivityRenderer(
                 continue
             }
             if (view.rootView !== windowRoot || !view.isShown) continue
+            // 截图换代时挑一个真正读截图的表面来调度这一帧，节点玻璃栏不必重录。
+            if (captureOnly && isCaptureIndependent(view)) continue
             view.invalidate()
             return
         }
@@ -1055,7 +1294,7 @@ internal class LiquidActivityRenderer(
         if (closed) return
         val changes = refreshWindows[windowRoot]?.batch?.take() ?: return
         if (changes == 0) return
-        val contentChanged = changes and LiquidRefreshBatch.CONTENT != 0
+        val contentChanged = LiquidRefreshBatch.anyContent(changes)
         // 位移门控：只有某个表面真的改了屏幕原点才算"内容位移"。点击、按键或
         // 零位移的滚动回调同样会走这条链路，若在此刻切底图，所有玻璃会在一次
         // 无事发生的回调里 real→stable 闪一下。
@@ -1075,7 +1314,9 @@ internal class LiquidActivityRenderer(
                 if (originChanged) surfaceMoved = true
                 if (entry.value.refreshState.shouldRefresh(visible,
                         originChanged = originChanged,
-                        contentChanged = contentChanged)) view.invalidate()
+                        contentChanged = LiquidRefreshBatch.surfaceContentChanged(
+                            changes, captureIndependent = isCaptureIndependent(view)
+                        ))) view.invalidate()
             }
         } finally { refreshWindowRoot = null }
         // 抑制在 preDraw 内、draw 前生效：本帧被失效的位移表面重录时已经读到
@@ -1116,59 +1357,10 @@ internal class LiquidActivityRenderer(
             parameters.effectPaddingDp * density)
     }
 
-    /** 根据 display mode 与热状态请求窗口刷新率，并同步 ADPF 目标周期。 */
-    @Suppress("DEPRECATION")
-    private fun configureRealtimeRefreshRate(
-        root: View,
-        thermalStatus: Int = performanceController?.currentThermalStatus
-            ?: LiquidPerformancePolicy.THERMAL_STATUS_NONE
-    ) {
+    /** 只有实时档申请刷新率；具体规则见 [LiquidRefreshRateController.configure]。 */
+    private fun configureRealtimeRefreshRate(root: View, thermalStatus: Int? = null) {
         if (effectProfile != LiquidEffectProfile.REALTIME_CAPTURE) return
-        val display = root.display ?: return
-        val currentMode = display.mode
-        val matchingModes = display.supportedModes.asSequence()
-            .filter {
-                it.physicalWidth == currentMode.physicalWidth &&
-                    it.physicalHeight == currentMode.physicalHeight
-            }
-            .toList()
-        val supportedRates = matchingModes.asSequence()
-            .map { it.refreshRate }
-            .toList()
-        val requestedRefreshRate = LiquidRealtimeCapturePolicy.targetRefreshRate(
-            currentRefreshRate = display.refreshRate,
-            supportedRefreshRates = supportedRates
-        )
-        val thermalLimited = LiquidPerformancePolicy.targetRefreshRate(
-            requestedRefreshRate = requestedRefreshRate,
-            thermalStatus = thermalStatus
-        )
-        // 吞吐上限与热上限取更严格的一方；两者都只收紧、不放宽设备原始能力。
-        realtimeTargetRefreshRate = throughputRefreshRateCap
-            ?.let { minOf(thermalLimited, it) }
-            ?: thermalLimited
-        realtimeFrameIntervalNanos = LiquidRealtimeCapturePolicy.frameIntervalNanos(
-            realtimeTargetRefreshRate
-        )
-        performanceController?.updateTargetWorkDuration(realtimeFrameIntervalNanos)
-        val attributes = activity.window.attributes
-        if (originalPreferredRefreshRate == null) {
-            originalPreferredRefreshRate = attributes.preferredRefreshRate
-            originalPreferredDisplayModeId = attributes.preferredDisplayModeId
-        }
-        val targetMode = matchingModes
-            .filter { abs(it.refreshRate - realtimeTargetRefreshRate) <= 0.5f }
-            .maxByOrNull { it.refreshRate }
-        val targetModeId = targetMode?.modeId ?: 0
-        if (abs(attributes.preferredRefreshRate - realtimeTargetRefreshRate) >= 0.01f ||
-            attributes.preferredDisplayModeId != targetModeId
-        ) {
-            attributes.preferredRefreshRate = realtimeTargetRefreshRate
-            attributes.preferredDisplayModeId = targetModeId
-            activity.window.attributes = attributes
-        }
-        appliedPreferredRefreshRate = realtimeTargetRefreshRate
-        appliedPreferredDisplayModeId = targetModeId
+        if (thermalStatus == null) refreshRate.configure(root) else refreshRate.configure(root, thermalStatus)
     }
 
     private fun onThermalStatusChanged(status: Int) {
@@ -1178,7 +1370,7 @@ internal class LiquidActivityRenderer(
             return
         }
         val root = boundRoot ?: return
-        captureThroughput.reset()
+        refreshRate.resetThroughput()
         configureRealtimeRefreshRate(root, status)
         // 只降帧率仅减少"做几次"；同时降采样分辨率才能压住每次的回读与纹理上传量。
         val budget = LiquidPerformancePolicy.samplePixelBudget(thermalStatus = status)
@@ -1186,7 +1378,7 @@ internal class LiquidActivityRenderer(
             realtimeSamplePixelBudget = budget
             releaseRealtimeCaptureSources(rebindStableBackdrop = true)
         }
-        realtimeNextCaptureNanos = System.nanoTime() + realtimeFrameIntervalNanos
+        realtimeNextCaptureNanos = System.nanoTime() + refreshRate.frameIntervalNanos
     }
 
     /** 由 VSync 驱动目标最高 120Hz；PixelCopy 始终单飞，慢设备自然按完成速度降频。 */
@@ -1197,6 +1389,7 @@ internal class LiquidActivityRenderer(
         ) {
             return
         }
+        resetRealtimeIdle()
         realtimeNextCaptureNanos = System.nanoTime() +
             delayMs.coerceAtLeast(0L) * NANOS_PER_MILLISECOND
         postRealtimeFrameCallback()
@@ -1218,10 +1411,48 @@ internal class LiquidActivityRenderer(
         choreographer.removeFrameCallback(realtimeFrameCallback)
     }
 
+    /** 本张与当前绑定的截图相同：攒够连续张数就静止，否则隔几帧再确认一次。 */
+    private fun onIdenticalCapture() {
+        identicalCaptureStreak += 1
+        if (LiquidRealtimeCapturePolicy.shouldEnterIdle(identicalCaptureStreak)) {
+            enterRealtimeIdle()
+        } else {
+            realtimeNextCaptureNanos = System.nanoTime() +
+                LiquidRealtimeCapturePolicy.WAKE_SETTLE_FRAMES * refreshRate.frameIntervalNanos
+        }
+    }
+
+    private fun enterRealtimeIdle() {
+        if (realtimeIdle) return
+        realtimeIdle = true
+        removeRealtimeFrameCallback()
+        mainHandler.removeCallbacks(realtimeIdleProbe)
+        mainHandler.postDelayed(realtimeIdleProbe, LiquidRealtimeCapturePolicy.IDLE_PROBE_MS)
+    }
+
+    /**
+     * 离开静止并排一次采集。[settleFrames] 帧之后才截：由窗口绘制唤醒时，触发唤醒的那一帧
+     * 此刻可能还没合成，立刻截会截到旧帧、被误判为"没变"。
+     */
+    private fun leaveRealtimeIdle(settleFrames: Int) {
+        if (!realtimeIdle) return
+        realtimeIdle = false
+        mainHandler.removeCallbacks(realtimeIdleProbe)
+        realtimeNextCaptureNanos = System.nanoTime() + settleFrames * refreshRate.frameIntervalNanos
+        postRealtimeFrameCallback()
+    }
+
+    /** 生命周期边界（停止/挂起/关闭）：静止状态与探测一并清掉，恢复时从头采集。 */
+    private fun resetRealtimeIdle() {
+        realtimeIdle = false
+        identicalCaptureStreak = 0
+        mainHandler.removeCallbacks(realtimeIdleProbe)
+    }
+
     private fun onRealtimeFrame(frameTimeNanos: Long) {
         realtimeFrameCallbackPosted = false
         if (closed || !activityVisible || realtimeCaptureSuspended ||
-            effectProfile != LiquidEffectProfile.REALTIME_CAPTURE
+            effectProfile != LiquidEffectProfile.REALTIME_CAPTURE || realtimeIdle
         ) {
             return
         }
@@ -1264,15 +1495,25 @@ internal class LiquidActivityRenderer(
         )
         // 必须在发起截图前构建：此刻 footprint 里保存的是最近一次绘制的位置，正是 PixelCopy
         // 即将读到的那一帧的几何。放到回调里构建会与截图内容错位。
-        realtimeMaskReady = buildSuppressionMask(root, captureSource)
+        realtimeMaskReady = feedback.buildSuppressionMask(
+            root, captureSource, rootScreenLocation[0], rootScreenLocation[1], surfaceViews
+        )
         val ticket = captureRequests.begin() ?: return
+        // 基准在发起时冻结：单飞期间不会有提交改绑，后台比较的正是此刻绑定给后端的那张。
+        val baseline = realtimeBackdropSource?.takeIf {
+            it !== captureSource && !it.isClosed && backends.lastBoundBackdrop === it
+        }
         val request = LiquidCaptureRequest(ticket, captureSource, stable, WeakReference(root), root.width, root.height,
-            realtimeCaptureMask, realtimeMaskReady)
+            feedback.mask, realtimeMaskReady, baseline)
         realtimeCaptureInFlight = request
-        realtimeNextCaptureNanos = frameTimeNanos + realtimeFrameIntervalNanos
+        realtimeNextCaptureNanos = frameTimeNanos + refreshRate.frameIntervalNanos
         val recipient = WeakReference(this)
+        val suppressor = feedback
+        val callbackHandler = captureWorker() ?: mainHandler
+        // 回调在截图线程上：遮罩与逐像素比较不再占 UI 线程，主线程只做提交。
         val pixelCopyFinishedListener = PixelCopy.OnPixelCopyFinishedListener { result ->
-            recipient.get()?.handleRealtimeCaptureResult(request, result)
+            postProcessRealtimeCapture(suppressor, request, result)
+            mainHandler.post { recipient.get()?.handleRealtimeCaptureResult(request, result) }
         }
         val requested = runCatching {
             PixelCopy.request(
@@ -1280,7 +1521,7 @@ internal class LiquidActivityRenderer(
                 realtimeCaptureSourceRect,
                 captureSource.bitmap,
                 pixelCopyFinishedListener,
-                mainHandler
+                callbackHandler
             )
         }.isSuccess
         if (!requested) handleRealtimeCaptureResult(request, PixelCopy.ERROR_SOURCE_INVALID)
@@ -1299,28 +1540,45 @@ internal class LiquidActivityRenderer(
         val workStartedNanos = System.nanoTime()
         try {
             if (result == PixelCopy.SUCCESS) {
-                val outcome = sanitizeRealtimeCapture(request)
+                // 抑制与比较已在截图线程完成（postProcessRealtimeCapture）；这里只采信结论。
+                val outcome = request.outcome
                 if (outcome != LiquidCaptureOutcome.FAILED) {
-                    // 位图刚被改写，立刻提示 HWUI 预上传纹理；否则上传会推迟到下一帧 draw 中间，
-                    // 变成 RenderThread 上的一次同步停顿。每帧一张约 3.81 MiB 的实时缓冲。
-                    runCatching { captureSource.bitmap.prepareToDraw() }
-                    applyCaptureThroughputSample(workStartedNanos)
                     // NO_GLASS_VISIBLE 说明本帧压根没画玻璃，截图里也就不含自身反馈，可直接
                     // 采用；把它计入熔断计数会让长列表滚动 33ms 就永久关掉整个实时效果。
                     realtimeCaptureFailureCount = 0
+                    val bound = realtimeBackdropSource
+                    val unchanged = LiquidRealtimeCapturePolicy.isUnchanged(
+                        comparedAgainstBoundSource = bound != null && bound === request.baseline &&
+                            bound !== captureSource && !bound.isClosed && backends.lastBoundBackdrop === bound,
+                        samplingSuppressed = realtimeSamplingSuppressed
+                    ) { request.sameAsBaseline }
+                    if (unchanged) {
+                        // 本张只是一次探测，不绑定、不重画。轮转退回这块缓冲：下一次探测继续写它
+                        // ——它此刻没有被绑定，也就不会被任何显示列表引用，三缓冲的不变式不破。
+                        realtimeCaptureNextIndex = realtimeCaptureSources.indexOf(captureSource)
+                            .coerceAtLeast(0)
+                        refreshRate.resetThroughput()
+                        onIdenticalCapture()
+                        return
+                    }
+                    identicalCaptureStreak = 0
+                    // 位图刚被改写，立刻提示 HWUI 预上传纹理；否则上传会推迟到下一帧 draw 中间，
+                    // 变成 RenderThread 上的一次同步停顿。每帧一张约 3.81 MiB 的实时缓冲。
+                    runCatching { captureSource.bitmap.prepareToDraw() }
+                    applyCaptureThroughputSample(request.copyCompletedNanos)
                     realtimeBackdropSource = captureSource
                     // 截图发起后开始的滚动会把这帧变成过期采样：保留缓冲但暂不绑定，
                     // 等位移静默后的下一帧采集再切回实时。
                     if (!realtimeSamplingSuppressed) {
                         bindPreparedBackendsToBackdrop(captureSource)
                     }
-                    invalidateRegisteredSurfaces()
+                    invalidateRealtimeCaptureConsumers()
                     return
                 }
             }
 
             // 失败会拉长下一次完成间隔，不能算进稳态吞吐。
-            captureThroughput.reset()
+            refreshRate.resetThroughput()
             if (result != PixelCopy.ERROR_SOURCE_NO_DATA) realtimeCaptureFailureCount += 1
             if (LiquidRealtimeCapturePolicy.shouldSuspend(realtimeCaptureFailureCount)) {
                 suspendRealtimeCapture(releaseBuffers = true)
@@ -1335,182 +1593,33 @@ internal class LiquidActivityRenderer(
         }
     }
 
-    /**
-     * 记录一次成功完成，必要时按实测吞吐降一档刷新率。
-     *
-     * 只降不升：升档需要先请求更高刷新率才能观察可行性，"试探→失败→降回"会在相邻档位之间反复
-     * 切换且肉眼可见。会话重建、热状态变化与缓冲重建都会重置统计，届时重新从设备最高档开始。
-     */
-    private fun applyCaptureThroughputSample(completionNanos: Long) {
-        val shouldStepDown = captureThroughput.onCaptureCompleted(
-            nowNanos = completionNanos,
-            currentTargetFps = realtimeTargetRefreshRate
-        )
-        if (!shouldStepDown) return
-        val root = boundRoot ?: return
-        val display = root.display ?: return
-        val currentMode = display.mode
-        val supported = display.supportedModes.asSequence()
-            .filter {
-                it.physicalWidth == currentMode.physicalWidth &&
-                    it.physicalHeight == currentMode.physicalHeight
-            }
-            .map { it.refreshRate }
-            .toList()
-        val next = LiquidCaptureThroughputPolicy.stepDownTarget(
-            currentTargetFps = realtimeTargetRefreshRate,
-            measuredFps = captureThroughput.measuredFramesPerSecond,
-            supportedRefreshRates = supported
-        )
-        captureThroughput.reset()
-        if (next >= realtimeTargetRefreshRate - 0.5f) return
-        throughputRefreshRateCap = next
-        configureRealtimeRefreshRate(root)
+    /** 按需启动截图线程；启动失败返回 null，由调用方退回主线程回调（与改造前相同的路径）。 */
+    private fun captureWorker(): Handler? {
+        captureHandler?.let { return it }
+        if (closed) return null
+        val thread = runCatching {
+            HandlerThread("BIL-LiquidCapture").apply { start() }
+        }.getOrNull() ?: return null
+        val handler = Handler(thread.looper)
+        captureThread = thread
+        captureHandler = handler
+        return handler
     }
 
-    /**
-     * 准备与当前截图尺寸 1:1 的抑制底图；尺寸或稳定底图变化时重建。
-     *
-     * @return 可用时返回 true；分配失败按"本次不做抑制"处理，由调用方回退。
-     */
-    private fun ensureSuppressionUnderlay(
-        stableBackdrop: LiquidBackdropSource,
-        width: Int,
-        height: Int
-    ): Boolean {
-        val cached = suppressionUnderlay
-        if (cached != null && !cached.isRecycled &&
-            cached.width == width && cached.height == height &&
-            suppressionUnderlaySource === stableBackdrop && !stableBackdrop.isClosed
-        ) {
-            return true
-        }
-        releaseSuppressionUnderlay()
-        if (width <= 0 || height <= 0 || stableBackdrop.isClosed) return false
-        return runCatching {
-            val bitmap = createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(bitmap)
-            suppressionScaleBounds.set(0, 0, width, height)
-            // 这一次放大与原逐帧填充使用同一滤波与同一源，输出内容一致。
-            stableBackdrop.drawOpticalBackdrop(canvas, suppressionScaleBounds, 255)
-            bitmap.prepareToDraw()
-            val shader = BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
-            suppressionUnderlay = bitmap
-            suppressionUnderlayShader = shader
-            suppressionUnderlaySource = stableBackdrop
-            suppressionPaint.shader = shader
-            true
-        }.getOrElse {
-            releaseSuppressionUnderlay()
-            false
-        }
+    /** 抑制器的截图侧状态只在截图线程上改；线程尚未启动（或已退出）时没有并发方，直接执行。 */
+    private fun onCaptureWorker(task: () -> Unit) {
+        val handler = captureHandler
+        if (handler == null || !handler.post(task)) task()
     }
 
+    /** 内存压力/缓冲重建时释放预缩放抑制底图；只断引用，在飞的后处理自己持有到结束。 */
     private fun releaseSuppressionUnderlay() {
-        suppressionPaint.shader = null
-        suppressionUnderlayShader = null
-        suppressionUnderlaySource = null
-        suppressionUnderlay = null
+        onCaptureWorker(feedback::releaseSuppressionUnderlay)
     }
 
-    /**
-     * 按**发起截图那一刻**的已绘制几何构建抑制遮罩。
-     *
-     * 位置一律取 footprint 在最近一次 draw 时记录的屏幕原点，而不是实时
-     * `getLocationOnScreen`：`PixelCopy` 读的是最近一次已合成的帧，用当前坐标会在快速滑动时
-     * 与截图内容错开几十像素。工作量与放在回调里构建完全相同。
-     */
-    private fun buildSuppressionMask(
-        root: View,
-        captureSource: LiquidBackdropSource
-    ): Boolean {
-        if (captureSource.isClosed || root.width <= 0 || root.height <= 0) return false
-        val bitmap = captureSource.bitmap
-        val scaleX = bitmap.width.toFloat() / root.width.toFloat()
-        val scaleY = bitmap.height.toFloat() / root.height.toFloat()
-        val rootOriginX = rootScreenLocation[0]
-        val rootOriginY = rootScreenLocation[1]
-        realtimeCaptureMask.rewind()
-        realtimeCaptureMask.fillType = Path.FillType.WINDING
-        var hasMask = false
-        val paddingPx = parameters.effectPaddingDp * density
-        val iterator = surfaceViews.entries.iterator()
-        while (iterator.hasNext()) {
-            val entry = iterator.next()
-            val surface = entry.key
-            val footprint = entry.value
-            if (!surface.isAttachedToWindow) {
-                iterator.remove()
-                continue
-            }
-            if (!surface.isShown || surface.alpha <= 0f || surface.rootView !== root.rootView) continue
-            if (!footprint.hasOrigin) continue
-            val rawLeft = footprint.originX - rootOriginX + footprint.left - paddingPx
-            val rawTop = footprint.originY - rootOriginY + footprint.top - paddingPx
-            val rawRight = footprint.originX - rootOriginX + footprint.right + paddingPx
-            val rawBottom = footprint.originY - rootOriginY + footprint.bottom + paddingPx
-            if (rawRight <= 0f || rawBottom <= 0f || rawLeft >= root.width ||
-                rawTop >= root.height
-            ) {
-                continue
-            }
-            val left = (rawLeft * scaleX).coerceIn(0f, bitmap.width.toFloat())
-            val top = (rawTop * scaleY).coerceIn(0f, bitmap.height.toFloat())
-            val right = (rawRight * scaleX).coerceIn(0f, bitmap.width.toFloat())
-            val bottom = (rawBottom * scaleY).coerceIn(0f, bitmap.height.toFloat())
-            if (right > left && bottom > top) {
-                realtimeCaptureMask.addRoundRect(
-                    left,
-                    top,
-                    right,
-                    bottom,
-                    (footprint.radiusPx + paddingPx) * scaleX,
-                    (footprint.radiusPx + paddingPx) * scaleY,
-                    Path.Direction.CW
-                )
-                hasMask = true
-            }
-        }
-        return hasMask
-    }
-
-    /**
-     * Replace owned optical output with the clean underlay. Leaving any composite fraction would
-     * recursively feed the module's own text and previous glass back into the next optical input.
-     * Pixels outside the owned-output mask keep the live PixelCopy content.
-     *
-     * 遮罩几何在发起截图时就已按当帧绘制位置构建（[buildSuppressionMask]），这里只负责应用。
-     * 返回值区分"没有可见玻璃"与"真的失败"，调用方只对后者累计熔断计数。
-     */
-    private fun sanitizeRealtimeCapture(
-        request: LiquidCaptureRequest
-    ): LiquidCaptureOutcome {
-        val captureSource = request.source
-        val stableBackdrop = request.stableBackdrop
-        if (captureSource.isClosed || stableBackdrop.isClosed) return LiquidCaptureOutcome.FAILED
-        if (!request.maskReady) return LiquidCaptureOutcome.NO_GLASS_VISIBLE
-
-        val bitmap = captureSource.bitmap
-        realtimeCaptureBounds.set(0, 0, bitmap.width, bitmap.height)
-        realtimeCaptureCanvas.setBitmap(bitmap)
-        return try {
-            if (ensureSuppressionUnderlay(stableBackdrop, bitmap.width, bitmap.height)) {
-                // Cached opaque underlay is copied 1:1; no recursive composite fraction or per-frame resampling.
-                suppressionPaint.alpha = LiquidRealtimeCapturePolicy.BASE_SUPPRESSION_ALPHA
-                realtimeCaptureCanvas.drawPath(request.mask, suppressionPaint)
-            } else {
-                // 预缩放位图分配失败时回退到原路径，抑制强度与几何完全一致。
-                stableBackdrop.drawRootMasked(
-                    realtimeCaptureCanvas,
-                    request.mask,
-                    realtimeCaptureBounds,
-                    LiquidRealtimeCapturePolicy.BASE_SUPPRESSION_ALPHA
-                )
-            }
-            LiquidCaptureOutcome.SUPPRESSED
-        } finally {
-            realtimeCaptureCanvas.setBitmap(null)
-        }
+    /** 吞吐降档见 [LiquidRefreshRateController.onCaptureCompleted]。 */
+    private fun applyCaptureThroughputSample(completionNanos: Long) {
+        refreshRate.onCaptureCompleted(completionNanos, boundRoot)
     }
 
     private fun ensureRealtimeCaptureSources(root: View): List<LiquidBackdropSource>? {
@@ -1561,8 +1670,9 @@ internal class LiquidActivityRenderer(
         realtimeCaptureSuspended = true
         clearScrollSuppression()
         removeRealtimeFrameCallback()
+        resetRealtimeIdle()
         performanceController?.stop()
-        restorePreferredRefreshRate()
+        refreshRate.restore()
         if (releaseBuffers) releaseRealtimeCaptureSources(rebindStableBackdrop = true)
     }
 
@@ -1571,12 +1681,12 @@ internal class LiquidActivityRenderer(
         clearScrollSuppression()
         val stableBackdrop = backdropSource
         realtimeBackdropSource = null
-        driverBoundSources.clear()
+        backends.forgetBindings()
         // 缓冲尺寸变化会改变单次回读成本，旧吞吐样本不再代表当前配置。
-        captureThroughput.reset()
+        refreshRate.resetThroughput()
         releaseSuppressionUnderlay()
         if (rebindStableBackdrop && stableBackdrop != null && !stableBackdrop.isClosed &&
-            backendDriver?.backend != LiquidRenderBackend.TRANSLUCENT
+            backends.current?.backend != LiquidRenderBackend.TRANSLUCENT
         ) {
             bindPreparedBackendsToBackdrop(stableBackdrop)
         }
@@ -1588,93 +1698,24 @@ internal class LiquidActivityRenderer(
         realtimeCaptureNextIndex = 0
     }
 
-    /** 只选择 bind 阶段已准备的实例；该方法允许从 draw 调用，但绝不创建图形资源。 */
-    private fun selectCurrentPreparedBackend(): Boolean {
-        while (!closed) {
-            val candidate = fallbackPlan.current ?: return false
-            val prepared = preparedDrivers[candidate]
-            if (prepared == null) {
-                fallbackPlan.advanceAfterFailure(candidate)
-                continue
-            }
-            backendDriver = prepared
-            return true
-        }
-        return false
-    }
-
-    /**
-     * 只把新 backdrop 绑定到当前后端；其余后备驱动在真正被选中时再补绑。
-     *
-     * 逐帧全量绑定是纯浪费：`LiquidBlurBackendApi31.bindBackdrop` 每次都会丢弃并重录一个引用
-     * 整张实时截图的 RenderNode display list，而 API 33 设备上它永远不会被绘制。
-     */
+    /** 新底图只绑给当前后端；降级链耗尽即致命。见 [LiquidBackendSet.bindBackdrop]。 */
     private fun bindPreparedBackendsToBackdrop(source: LiquidBackdropSource) {
-        driverBoundSources.clear()
-        if (!ensureCurrentDriverBound(source)) dispatchFatalFailure()
+        if (!backends.bindBackdrop(source)) dispatchFatalFailure()
     }
 
-    /** 绑定失败按后端失败处理并降级；成功后记录已绑定的 source，避免重复绑定。 */
-    private fun ensureCurrentDriverBound(source: LiquidBackdropSource): Boolean {
-        while (!closed) {
-            val driver = backendDriver ?: if (selectCurrentPreparedBackend()) {
-                backendDriver
-            } else null
-            if (driver == null) return false
-            if (!driver.requiresBackdrop) return true
-            if (driverBoundSources[driver.backend] === source) return true
-            if (runCatching { driver.bindBackdrop(source) }.isSuccess) {
-                driverBoundSources[driver.backend] = source
-                return true
-            }
-            driverBoundSources.remove(driver.backend)
-            preparedDrivers.remove(driver.backend)?.close()
-            backendDriver = null
-            if (fallbackPlan.advanceAfterFailure(driver.backend) == null) return false
-        }
-        return false
-    }
-
+    /** 运行期绘制失败：降级并补绑当前采样源，切换成功或退回廉价路径时整组表面重录。 */
     private fun advanceAfterFailure(failed: LiquidRenderBackend): Boolean {
-        backendFailures.getOrPut(failed) { "runtime-draw-failed" }
-        driverBoundSources.remove(failed)
-        preparedDrivers.remove(failed)?.close()
-        if (backendDriver?.backend == failed) backendDriver = null
-        fallbackPlan.advanceAfterFailure(failed) ?: return false
-        val activated = selectCurrentPreparedBackend()
-        val source = realtimeBackdropSource ?: backdropSource
-        if (activated && source != null && !source.isClosed && !ensureCurrentDriverBound(source)) {
-            return false
+        return when (backends.advanceAfterFailure(failed, realtimeBackdropSource ?: backdropSource)) {
+            LiquidBackendAdvance.EXHAUSTED -> false
+            LiquidBackendAdvance.ACTIVATED -> {
+                invalidateRegisteredSurfaces()
+                true
+            }
+            LiquidBackendAdvance.NONE_READY -> {
+                invalidateRegisteredSurfaces()
+                false
+            }
         }
-        invalidateRegisteredSurfaces()
-        return activated
-    }
-
-    private fun advanceToTranslucent() {
-        while (fallbackPlan.current != null &&
-            fallbackPlan.current != LiquidRenderBackend.TRANSLUCENT
-        ) {
-            val failed = requireNotNull(fallbackPlan.current)
-            preparedDrivers.remove(failed)?.close()
-            if (backendDriver?.backend == failed) backendDriver = null
-            fallbackPlan.advanceAfterFailure(failed)
-        }
-        if (backendDriver?.backend != LiquidRenderBackend.TRANSLUCENT) {
-            backendDriver = null
-            selectCurrentPreparedBackend()
-        }
-    }
-
-    /** 直接 SDK guard 让 Android Lint 能静态证明下面两个 @RequiresApi 构造调用。 */
-    @SuppressLint("ReplaceWithAndroidVersion")
-    private fun createBackend(backend: LiquidRenderBackend): LiquidBackendDriver = when (backend) {
-        LiquidRenderBackend.REFRACTION -> if (Build.VERSION.SDK_INT >= 33) {
-            LiquidRefractionBackendApi33(parameters, density)
-        } else error("RuntimeShader requires API 33")
-        LiquidRenderBackend.BLUR -> if (Build.VERSION.SDK_INT >= 31) {
-            LiquidBlurBackendApi31(parameters.blurRadiusDp * density)
-        } else error("RenderEffect requires API 31")
-        LiquidRenderBackend.TRANSLUCENT -> LiquidTranslucentBackend()
     }
 
     private fun dispatchFatalFailure() {
@@ -1719,58 +1760,37 @@ internal class LiquidActivityRenderer(
                 ?.removeOnScrollChangedListener(listener)
         }
         rootScrollListener = null
+        // 在 onDraw 分发中移除会抛 IllegalStateException；关闭路径不允许因此中断。
+        runCatching {
+            root?.viewTreeObserver?.takeIf { it.isAlive }?.removeOnDrawListener(realtimeDrawListener)
+        }
+        resetRealtimeIdle()
         surfaceViews.clear()
+        chromeBackdrops.values.forEach(::closeChromeBackdrop)
+        chromeBackdrops.clear()
         refreshWindows.values.forEach(::removeRefreshWindow)
         refreshWindows.clear()
         onFirstVisibleDraw = null
         onFatalFailure = null
-        releaseSuppressionUnderlay()
-        preparedDrivers.values.forEach(LiquidBackendDriver::close)
-        preparedDrivers.clear()
-        backendDriver = null
+        backends.close()
         releaseRealtimeCaptureSources(rebindStableBackdrop = false)
-        realtimeCaptureCanvas.setBitmap(null)
+        // 截图线程上可能还有一次在飞的后处理：抑制器的收尾排在它后面，随后线程退出；
+        // 之后才到的 PixelCopy 回调投递失败即丢弃，不会再触碰已释放的状态。
+        onCaptureWorker(feedback::close)
+        captureThread?.quitSafely()
+        captureThread = null
+        captureHandler = null
         backdropSource?.close()
         backdropSource = null
         retiredBackdropSources.forEach(LiquidBackdropSource::close)
         retiredBackdropSources.clear()
-        restorePreferredRefreshRate()
+        refreshRate.restore()
         boundRoot = null
         rootDrawable = null
-    }
-
-    @Suppress("DEPRECATION")
-    private fun restorePreferredRefreshRate() {
-        val applied = appliedPreferredRefreshRate ?: return
-        val original = originalPreferredRefreshRate ?: return
-        val attributes = activity.window.attributes
-        val appliedModeId = appliedPreferredDisplayModeId
-        val originalModeId = originalPreferredDisplayModeId
-        var changed = false
-        if (abs(attributes.preferredRefreshRate - applied) < 0.01f) {
-            attributes.preferredRefreshRate = original
-            changed = true
-        }
-        if (appliedModeId != null && originalModeId != null &&
-            attributes.preferredDisplayModeId == appliedModeId
-        ) {
-            attributes.preferredDisplayModeId = originalModeId
-            changed = true
-        }
-        if (changed) {
-            activity.window.attributes = attributes
-        }
-        appliedPreferredRefreshRate = null
-        originalPreferredRefreshRate = null
-        appliedPreferredDisplayModeId = null
-        originalPreferredDisplayModeId = null
     }
 }
 
 private const val NANOS_PER_MILLISECOND = 1_000_000L
-
-/** 降级原因只保留有界长度，避免把驱动的长堆栈文本带进界面。 */
-private const val MAX_BACKEND_FAILURE_MESSAGE = 160
 
 /** 模态边框高光的竖向渐隐行程（dp）：顶部提亮只在面板最上方一段可见。 */
 private const val MODAL_EDGE_FADE_DP = 64f
@@ -1789,124 +1809,19 @@ private const val OPTICAL_EDGE_BAND_DP = 10f
 private const val OPTICAL_EDGE_BAND_ALPHA = 0.35f
 
 /**
+ * 手指按着时最多把"抑制解除"这次重同步推迟多久。
+ *
+ * 上界存在的理由：长按不动本来就该恢复实时档，不能因为手指一直贴着就无限停在磨砂观感。
+ * 取 600ms —— 比一次正常的甩动手势长、比"按住发呆"短。
+ */
+private const val GESTURE_RELEASE_HOLD_MS = 600L
+
+/**
  * 浮动条常驻的折射强度下限（驱动会钳到 1..1.85）：stretchDirY==0 时 shader 把
  * 增益按全向处理，整圈边缘的焦散/菲涅尔/镜面随之下调增量点亮，静止也有凝光；
  * 回弹方向出现后同一增益收拢到对应边缘。
  */
 private const val FLOATING_OPTICAL_FLOOR = 1.15f
-
-private class LiquidRootDrawable(
-    private val renderer: LiquidActivityRenderer,
-    private val fallbackColor: Int
-) : Drawable() {
-    private val location = IntArray(2)
-    private var drawableAlpha = 255
-
-    override fun draw(canvas: Canvas) {
-        val view = callback as? View
-        if (view != null) view.getLocationOnScreen(location)
-        else {
-            location[0] = 0
-            location[1] = 0
-        }
-        renderer.drawRoot(
-            canvas, bounds, drawableAlpha, location[0], location[1], fallbackColor
-        )
-    }
-
-    override fun setAlpha(alpha: Int) {
-        drawableAlpha = alpha.coerceIn(0, 255)
-        invalidateSelf()
-    }
-
-    override fun getAlpha(): Int = drawableAlpha
-    override fun setColorFilter(colorFilter: ColorFilter?) = Unit
-
-    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-    override fun getOpacity(): Int = PixelFormat.OPAQUE
-}
-
-private class LiquidSurfaceDrawable(
-    private val renderer: LiquidActivityRenderer,
-    private val fallbackColor: Int,
-    private val radiusPx: Float,
-    private val role: SurfaceRole
-) : Drawable() {
-    private val location = IntArray(2)
-    private val motionBoundsF = RectF()
-    private val motionBounds = Rect()
-    private var drawableAlpha = 255
-
-    override fun draw(canvas: Canvas) {
-        val view = callback as? View
-        if (view != null) {
-            view.getLocationOnScreen(location)
-        }
-        else {
-            location[0] = 0
-            location[1] = 0
-        }
-        var drawBounds = bounds
-        var drawRadiusPx = radiusPx
-        var drawFallbackColor = fallbackColor
-        var drawX = location[0]
-        var drawY = location[1]
-        val motionProvider = view as? LiquidMotionSurfaceFrameProvider
-        if (motionProvider != null) {
-            motionProvider.copyLiquidMotionBounds(motionBoundsF)
-            if (motionBoundsF.width() > 0f && motionBoundsF.height() > 0f) {
-                motionBounds.set(
-                    floor(motionBoundsF.left).toInt(),
-                    floor(motionBoundsF.top).toInt(),
-                    ceil(motionBoundsF.right).toInt(),
-                    ceil(motionBoundsF.bottom).toInt()
-                )
-                drawBounds = motionBounds
-                drawRadiusPx = motionProvider.liquidMotionCornerRadiusPx()
-                drawFallbackColor = motionProvider.liquidMotionFallbackColor()
-                // drawX/drawY 保持 View 原点：两条采样链（drawOpticalRegion 的逆矩阵与折射
-                // shader 的 backdropOrigin）都把画布坐标当作"原点+局部坐标"解算根坐标，
-                // motionBounds 本身已是承载层画布内的绝对矩形，再叠 left/top 会让采样窗
-                // 二次偏移到卡片右下方——形变全程显示的是偏离真实位置的底图区域，落定
-                // 换回卡片 0 基 drawable 时采样区瞬移（"通透背景跳变加载"的来源）。
-            }
-        }
-        if (view != null) {
-            renderer.registerSurfaceView(view, drawBounds, drawRadiusPx, location[0], location[1])
-        }
-        renderer.drawSurface(
-            canvas,
-            drawBounds,
-            drawRadiusPx,
-            drawableAlpha,
-            drawX,
-            drawY,
-            drawFallbackColor,
-            role,
-            host = view
-        )
-    }
-
-    override fun setAlpha(alpha: Int) {
-        drawableAlpha = alpha.coerceIn(0, 255)
-        invalidateSelf()
-    }
-
-    override fun getAlpha(): Int = drawableAlpha
-    override fun setColorFilter(colorFilter: ColorFilter?) = Unit
-
-    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
-    override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
-
-    /** 静态几何报告真实圆角；缺省实现是无半径矩形，会让弹性长按高光按方形裁剪。 */
-    override fun getOutline(outline: Outline) {
-        if (bounds.isEmpty) outline.setEmpty()
-        else outline.setRoundRect(bounds, radiusPx)
-    }
-}
-
-private fun AppViewsActivity.isHardwareAccelerationRequested(): Boolean {
-    val windowFlag = window.attributes.flags and WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
-    val appFlag = applicationInfo.flags and ApplicationInfo.FLAG_HARDWARE_ACCELERATED
-    return windowFlag != 0 || appFlag != 0
-}
+/** 清透档节点玻璃（3dp 模糊）残留的细节比例，供可读性策略估计漏字。 */
+private const val CHROME_DETAIL_SEE_THROUGH = LiquidChromeGlassPolicy.DETAIL_SEE_THROUGH
+private const val TAG = "BIL-LiquidRenderer"

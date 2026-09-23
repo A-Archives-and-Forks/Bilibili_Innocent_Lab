@@ -8,6 +8,7 @@ import android.view.MotionEvent
 import android.view.ViewConfiguration
 import android.view.accessibility.AccessibilityNodeInfo
 import androidx.core.widget.NestedScrollView
+import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid.LiquidStretchGestureObserver
 import kotlin.math.abs
 
 /** Observes an intentional vertical gesture without consuming or changing nested-scroll dispatch. */
@@ -17,7 +18,7 @@ internal class SettingsHomeScrollView(
     private val onUserScroll: () -> Unit,
     private val onContentTouch: () -> Unit
 ) :
-    NestedScrollView(context) {
+    NestedScrollView(context), LiquidStretchGestureObserver {
     private val slop = ViewConfiguration.get(context).scaledTouchSlop
     private var pointer = MotionEvent.INVALID_POINTER_ID
     private var originX = 0f
@@ -71,6 +72,12 @@ internal class SettingsHomeScrollView(
     }
 
     override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        observeTouch(event)
+        return super.dispatchTouchEvent(event)
+    }
+
+    /** 回弹视口接住手势时绕过 [dispatchTouchEvent] 直接调 onTouchEvent，也经这里观察。 */
+    override fun observeTouch(event: MotionEvent) {
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 // NestedScrollView stops a programmatic smooth scroll on DOWN, even without a drag.
@@ -96,6 +103,5 @@ internal class SettingsHomeScrollView(
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> pointer = MotionEvent.INVALID_POINTER_ID
         }
-        return super.dispatchTouchEvent(event)
     }
 }

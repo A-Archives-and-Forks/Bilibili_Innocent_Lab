@@ -42,9 +42,12 @@ class SettingsPagePositionRefreshTest {
         val activity = function(source("skin/activity/SkinnedActivity"),
             "protected fun notifyPreparedSkinPositionChanged()")
         assertTrue(activity.contains("if (!lifecycleEnded) skinSessionOrNull?.notifyPositionChanged()"))
-        val session = function(source("skin/runtime/ActivitySkinSession"), "fun notifyPositionChanged()")
-        assertTrue(session.contains("if (!isClosed && effectiveSkin == SkinId.LIQUID)"))
-        assertTrue(session.contains("liquidRenderer?.notifyPositionChanged()"))
+        // 会话只把位移通知转给**当前在画**的引擎，且关闭后不再转发。
+        val sessionSource = source("skin/runtime/ActivitySkinSession")
+        val session = function(sessionSource, "fun notifyPositionChanged()")
+        assertTrue(session.contains("if (!isClosed) activeEngine.notifyPositionChanged()"))
+        assertTrue("Liquid 只在实际生效时接收；失败回落后转给柔光",
+            sessionSource.contains("liquidRenderer?.takeIf { effectiveSkin == SkinId.LIQUID } ?: materialRenderer"))
     }
 
     @Test fun positionBridgeReusesOriginComparisonWithoutRequestingPixelCopyOrRebuildingBackgrounds() {
@@ -75,12 +78,12 @@ class SettingsPagePositionRefreshTest {
 
     @Test fun contentRefreshTriggersTraversalThroughOneVisibleSurfaceNotTheWholeWindow() {
         val renderer = source("skin/liquid/LiquidActivityRenderer")
-        val queue = function(renderer, "private fun queueSurfaceRefresh(contentChanged: Boolean)")
+        val queue = function(renderer, "private fun queueSurfaceRefresh(contentChanged: Boolean, captureOnly: Boolean = false)")
         // 整窗 root.invalidate() 会把每个 View 的 display list 标脏重录；
         // 滚动期 PixelCopy 完成与回弹期强度步进每秒数十次走到这里。
         assertFalse(queue.contains("root.invalidate()"))
-        assertTrue(queue.contains("triggerSurfaceFrame(root)"))
-        val trigger = function(renderer, "private fun triggerSurfaceFrame(windowRoot: View)")
+        assertTrue(queue.contains("triggerSurfaceFrame(root, captureOnly)"))
+        val trigger = function(renderer, "private fun triggerSurfaceFrame(windowRoot: View, captureOnly: Boolean)")
         assertTrue(trigger.contains("view.isShown"))
         assertTrue(trigger.contains("view.invalidate()"))
         // 损伤域必须收缩到表面矩形：flush 内的逐表面 invalidate 仍是唯一扩散点。
