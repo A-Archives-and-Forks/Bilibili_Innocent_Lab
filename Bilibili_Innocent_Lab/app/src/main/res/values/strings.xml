@@ -925,6 +925,14 @@
     <string name="highlights_component_pool_block_all">If the scan finds no pools, turn on Block everything to refuse every component-library download.</string>
     <string name="highlights_recommendation_auto_confirm">Tags and uploaders picked in the Bilibili feedback panel can now go into the blocklist on their own, without confirming each one in Manage recommendation blocks.</string>
     <string name="highlights_recommend_play_count">Filter Home and related-video recommendations by play count. Unknown, unreadable, or live cards are kept.</string>
+    <string name="highlights_glow_engine_title">Glow visuals</string>
+    <string name="highlights_glow_engine">Soft Frost and Advanced material now share one visual engine. Floating bars show the content beneath in real time and adapt their tint so text stays legible; the status bar is see-through as well, and the engine stays idle when nothing moves.</string>
+    <string name="highlights_settings_home_title">Redesigned settings</string>
+    <string name="highlights_settings_home">Settings are organized into Favorites, Purify, Enhance and Module pages with floating navigation bars. Pin frequently used switches, reorder them by dragging, and jump to any setting from search.</string>
+    <string name="highlights_motion_title">Motion and feel</string>
+    <string name="highlights_motion">Long-press a card or button to drag it and let it spring back. Expanding sections, pop-up panels and page transitions flow continuously, and the overscroll bounce can be stopped with a touch without triggering what is underneath.</string>
+    <string name="highlights_host_compat_title">Tablets and new Bilibili versions</string>
+    <string name="highlights_host_compat">Hiding bottom-bar items, home tabs and home components works again in tablet mode. Bottom-bar choices now survive icon changes on the Bilibili side. Adapted to Bilibili 9.13.0.</string>
     <string name="component_snapshot_cached_notice">Showing the last saved scan. The current Bilibili state could not be confirmed.</string>
     <string name="hide_player_popup_promotion">Hide player popup promotions</string>
     <string name="hide_player_popup_promotion_tip">Hide common floating promotion cards in the player, including mini program promotions. Other interactive components and regular danmaku are preserved.</string>

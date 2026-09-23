@@ -925,6 +925,14 @@
     <string name="highlights_component_pool_block_all">掃描不到資源池時，可開啟「全量禁止」，拒收所有元件庫下載。</string>
     <string name="highlights_recommendation_auto_confirm">在嗶哩嗶哩回饋面板裡點過的標籤和 UP 主可以自動進入封鎖名單，不必再去「管理推薦封鎖」逐條確認。</string>
     <string name="highlights_recommend_play_count">依播放次數過濾首頁推薦及影片詳細頁下方推薦。讀不到播放次數、直播或解析失敗的卡片一律保留。</string>
+    <string name="highlights_glow_engine_title">凝光視效</string>
+    <string name="highlights_glow_engine">柔光與進階材質共用一套視覺引擎：懸浮列即時透出下方內容，隨明暗自動調節濃淡，文字始終清晰；狀態列同樣通透，畫面靜止時引擎不再額外耗電。</string>
+    <string name="highlights_settings_home_title">全新設定介面</string>
+    <string name="highlights_settings_home">設定分為常用、淨化、增強、模組四頁，搭配懸浮底欄與頂欄；常用開關可收藏、拖曳排序，搜尋可跨頁直達任意設定。</string>
+    <string name="highlights_motion_title">動畫與手感</string>
+    <string name="highlights_motion">長按卡片或按鈕即可拖曳，放開自然回彈；展開、彈出與頁面轉場連貫流暢；捲動到底的回彈可隨時按住停下，不會誤觸下方內容。</string>
+    <string name="highlights_host_compat_title">平板與新版適配</string>
+    <string name="highlights_host_compat">平板模式下的底部導覽列、首頁頂欄標籤與首頁元件隱藏恢復生效；底部導覽列隱藏不再因嗶哩嗶哩更換圖示而失效；適配嗶哩嗶哩 9.13.0。</string>
     <string name="component_snapshot_cached_notice">正在顯示上次儲存的掃描結果，尚未確認嗶哩嗶哩目前狀態。</string>
     <string name="hide_player_popup_promotion">隱藏播放器彈窗推廣</string>
     <string name="hide_player_popup_promotion_tip">隱藏播放器內的小程式等通用懸浮推廣卡片，保留其他互動元件和一般彈幕。</string>

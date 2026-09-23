@@ -21,8 +21,9 @@ internal object ReleaseHighlightsCatalog {
     // 开屏广告、更新检查、暂停页广告都复用既有开关，没有引入新设置，所以
     // "新设置必须有公告与导航目标"这条门禁不需要新增条目；批次 1 本身在
     // v1.1.5 时还不存在，从未随发布展示过，也不该拆成新批次。
+    // 18 → 19（1.1.8）：新增批次 2，见下方批次 2 的注释。
     // 注意以后改版本号都要改一下这个地方的版本号，下面这个REVIEWED，不然过不了ci
-    const val REVIEWED_VERSION_CODE = 18
+    const val REVIEWED_VERSION_CODE = 19
     const val SETTINGS_BASELINE_VERSION = 13
     val batches = listOf(ReleaseHighlightsBatch(1, listOf(
         ReleaseHighlight("player-end-page-recommend", HighlightKind.NEW,
@@ -86,6 +87,21 @@ internal object ReleaseHighlightsCatalog {
             HighlightDestination("video.related.blocked_tags")),
         ReleaseHighlight("player-popup-promotion", HighlightKind.NEW, R.string.hide_player_popup_promotion_tip,
             HighlightDestination("player.popup_promotion.hidden")),
+        ReleaseHighlight("independent-adaptation", HighlightKind.FIXED, R.string.highlights_stability,
+            standaloneTitleRes = R.string.highlights_stability_title)
+    )),
+    // 批次 2（1.1.8）：凝光视效 / 新设置界面 / 手感 / 宿主兼容四条重构亮点，加上 v1.1.7 发布后
+    // 误追加进批次 1 的八条新功能——1.1.7 用户已看过批次 1，留在那里永远不会再弹。装过
+    // 1.1.8 Alpha 的用户会再看到其中六条，这是有意取舍（正式版用户优先）。
+    ReleaseHighlightsBatch(2, listOf(
+        ReleaseHighlight("glow-engine", HighlightKind.IMPROVED, R.string.highlights_glow_engine,
+            standaloneTitleRes = R.string.highlights_glow_engine_title),
+        ReleaseHighlight("settings-home-pages", HighlightKind.NEW, R.string.highlights_settings_home,
+            standaloneTitleRes = R.string.highlights_settings_home_title),
+        ReleaseHighlight("motion-and-feel", HighlightKind.IMPROVED, R.string.highlights_motion,
+            standaloneTitleRes = R.string.highlights_motion_title),
+        ReleaseHighlight("tablet-home-frame", HighlightKind.FIXED, R.string.highlights_host_compat,
+            standaloneTitleRes = R.string.highlights_host_compat_title),
         ReleaseHighlight("player-codec-preference", HighlightKind.NEW, R.string.highlights_player_codec_preference,
             HighlightDestination("player.codec.preference")),
         ReleaseHighlight("player-decode-mode", HighlightKind.NEW, R.string.highlights_player_decode_mode,
@@ -111,9 +127,7 @@ internal object ReleaseHighlightsCatalog {
             HighlightDestination(SettingsCatalog.ID_RECOMMEND_VIDEO_MIN_PLAY_COUNT)),
         ReleaseHighlight("recommend-play-count-max", HighlightKind.NEW,
             R.string.highlights_recommend_play_count,
-            HighlightDestination(SettingsCatalog.ID_RECOMMEND_VIDEO_MAX_PLAY_COUNT)),
-        ReleaseHighlight("independent-adaptation", HighlightKind.FIXED, R.string.highlights_stability,
-            standaloneTitleRes = R.string.highlights_stability_title)
+            HighlightDestination(SettingsCatalog.ID_RECOMMEND_VIDEO_MAX_PLAY_COUNT))
     )))
     val currentRevision: Int get() = batches.maxOf { it.revision }
     val destinations get() = batches.sortedByDescending { it.revision }.flatMap { it.entries }

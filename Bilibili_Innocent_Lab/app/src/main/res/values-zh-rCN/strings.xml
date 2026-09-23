@@ -925,6 +925,14 @@
     <string name="highlights_component_pool_block_all">扫描不到资源池时，可打开「全量禁止」，拒收所有组件库下载。</string>
     <string name="highlights_recommendation_auto_confirm">在哔哩哔哩反馈面板里点过的标签和 UP 主可以自动进入屏蔽名单，不必再去「管理推荐屏蔽」逐条确认。</string>
     <string name="highlights_recommend_play_count">按播放量过滤首页推荐和视频详情页底部推荐。读不到播放量、直播或解析失败的卡片一律保留。</string>
+    <string name="highlights_glow_engine_title">凝光视效</string>
+    <string name="highlights_glow_engine">柔光与高级材质共用一套视觉引擎：悬浮栏实时透出下方内容，随明暗自动调节浓淡，文字始终清晰；状态栏同样通透，画面静止时引擎不再额外耗电。</string>
+    <string name="highlights_settings_home_title">全新设置界面</string>
+    <string name="highlights_settings_home">设置分为常用、净化、增强、模块四页，搭配悬浮底栏与顶栏；常用开关可收藏、拖动排序，搜索可跨页直达任意设置。</string>
+    <string name="highlights_motion_title">动画与手感</string>
+    <string name="highlights_motion">长按卡片或按钮即可拖动，松手自然回弹；展开、弹出与页面转场连贯流畅；滚动到底的回弹可随时按住停下，不会误触下方内容。</string>
+    <string name="highlights_host_compat_title">平板与新版适配</string>
+    <string name="highlights_host_compat">平板模式下的底栏、首页顶栏标签与首页组件隐藏恢复生效；底栏隐藏不再因哔哩哔哩更换图标而失效；适配哔哩哔哩 9.13.0。</string>
     <string name="component_snapshot_cached_notice">正在显示上次保存的扫描结果，尚未确认哔哩哔哩当前状态。</string>
     <string name="hide_player_popup_promotion">隐藏播放器弹窗推广</string>
     <string name="hide_player_popup_promotion_tip">隐藏播放器内的小程序等通用悬浮推广卡片，保留其他互动组件和普通弹幕。</string>
