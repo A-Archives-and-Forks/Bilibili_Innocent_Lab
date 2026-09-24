@@ -22,8 +22,10 @@ internal object ReleaseHighlightsCatalog {
     // "新设置必须有公告与导航目标"这条门禁不需要新增条目；批次 1 本身在
     // v1.1.5 时还不存在，从未随发布展示过，也不该拆成新批次。
     // 18 → 19（1.1.8）：新增批次 2，见下方批次 2 的注释。
+    // 19 → 20（1.1.9）：复核结论是批次内容不变。本轮是浅色模式适配、动画跳变修复与性能优化，
+    // 没有引入新设置，不需要新增条目。
     // 注意以后改版本号都要改一下这个地方的版本号，下面这个REVIEWED，不然过不了ci
-    const val REVIEWED_VERSION_CODE = 19
+    const val REVIEWED_VERSION_CODE = 20
     const val SETTINGS_BASELINE_VERSION = 13
     val batches = listOf(ReleaseHighlightsBatch(1, listOf(
         ReleaseHighlight("player-end-page-recommend", HighlightKind.NEW,
