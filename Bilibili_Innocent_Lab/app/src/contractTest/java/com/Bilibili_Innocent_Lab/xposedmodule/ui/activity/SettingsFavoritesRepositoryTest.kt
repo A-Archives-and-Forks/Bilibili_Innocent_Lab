@@ -4,6 +4,8 @@ import java.util.ArrayDeque
 import java.util.concurrent.Executor
 import org.junit.Assert.*
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 class SettingsFavoritesRepositoryTest {
     private class ControlledExecutor : Executor {
@@ -116,9 +118,9 @@ class SettingsFavoritesRepositoryTest {
         assertTrue(presenter.contains("pager.onMotionStarted = { stretches.forEach(finishStretch) }"))
         assertTrue(presenter.contains("pager.onUserInteraction = { if (!revealingPage) userNavigated() }"))
         assertTrue(presenter.contains("userNavigationGeneration == 0L"))
-        val down = scroll.substringAfter("MotionEvent.ACTION_DOWN ->").substringBefore("MotionEvent.ACTION_MOVE ->")
+        val down = scroll.after("MotionEvent.ACTION_DOWN ->").before("MotionEvent.ACTION_MOVE ->")
         assertFalse(down.contains("onUserScroll()"))
-        val move = scroll.substringAfter("MotionEvent.ACTION_MOVE ->").substringBefore("MotionEvent.ACTION_POINTER_UP ->")
+        val move = scroll.after("MotionEvent.ACTION_MOVE ->").before("MotionEvent.ACTION_POINTER_UP ->")
         assertTrue(move.contains("dy > slop && dy > dx * 1.2f"))
         assertTrue(move.contains("onUserScroll()"))
         assertTrue(scroll.contains("return super.dispatchTouchEvent(event)"))

@@ -218,7 +218,11 @@ internal object SettingsBackupMotionSpec {
         SettingsBackupContentTiming.TIMED -> smoothStep(0.86f, 0.985f, expansion)
         // 预测式返回的 expansion 已经过强非线性手势映射，需要更宽的正文区间；否则正文会在
         // BackEvent 原始 progress 的最初约 1% 内近乎瞬间消失。
-        SettingsBackupContentTiming.PREDICTIVE -> smoothStep(0.22f, 0.72f, expansion)
+        // 2026-09-24：下沿由 0.22 收到 0.45。旧区间让正文一直留到形变框缩到来源卡片附近，
+        // 框里残留半透明的卡片碎片（标题带 + 下一张卡片上沿），读成"两个画面割断"；卡片是
+        // 玻璃表面，自定义背景下碎片里还会露出折射过的背景块。原始 progress 上正文约在
+        // 2.5%～12% 之间淡出，仍不是瞬间消失。
+        SettingsBackupContentTiming.PREDICTIVE -> smoothStep(0.45f, 0.8f, expansion)
     }
 
     internal fun smoothStep(edgeStart: Float, edgeEnd: Float, value: Float): Float {

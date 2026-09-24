@@ -5,12 +5,15 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
 
 /** 结构门禁不代替设备上的 Liquid/IME/图标尾帧验收。 */
 class BubbleLayerIntegrationTest {
     private fun source(name: String): String {
         val path = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/$name.kt"
-        return sequenceOf(File(path), File("app/$path")).first(File::isFile).readText()
+        return SourceContract.read(path)
     }
 
     @Test fun bubbleContentIsNotScaledWithItsSkinSurface() {
@@ -26,7 +29,7 @@ class BubbleLayerIntegrationTest {
 
     @Test fun bubbleBorrowsTheModalSkinInsteadOfReplacingItWithAnOpaquePath() {
         val main = source("MainActivity")
-        val bubble = main.substringAfter("fun applyBubbleSurface(").substringBefore("val morphLayer =")
+        val bubble = main.after("fun applyBubbleSurface(").before("val morphLayer =")
         assertFalse(bubble.contains("BubbleSurfaceDrawable("))
         assertTrue(bubble.contains("modalBackground ?: skinModalBackground"))
         assertTrue(bubble.contains("skinModalBackground(monetColors.surface, 0f)"))
@@ -61,7 +64,7 @@ class BubbleLayerIntegrationTest {
         assertFalse(icon.contains("source.draw("))
         assertFalse(icon.contains("drawable.setBounds("))
         assertFalse(icon.contains(".recycle()"))
-        val frame = icon.substringAfter("fun updateFrame(").substringBefore("fun drawIcon(")
+        val frame = icon.after("fun updateFrame(").before("fun drawIcon(")
         assertFalse(frame.contains("Bitmap.createBitmap"))
     }
 
@@ -124,15 +127,15 @@ class BubbleLayerIntegrationTest {
         assertTrue(search.contains("SOFT_INPUT_STATE_ALWAYS_HIDDEN"))
         for (name in listOf("BubbleMotionController", "IconAnchoredMotionController")) {
             assertTrue(source(name).contains("if (!entryNotified)"))
-            val close = source(name).substringAfter("fun requestClose(")
-                .substringBefore("fun handleWindowSizeChange(")
+            val close = source(name).after("fun requestClose(")
+                .before("fun handleWindowSizeChange(")
             assertFalse(close.contains("onExpanded()"))
         }
     }
 
     @Test fun independentGeometryRefreshWaitsForActualLayoutAndKeepsPendingChanges() {
-        val code = source("MainActivity").substringAfter("fun updateBubbleGeometry(): Boolean")
-            .substringBefore("val bubbleLayoutListener")
+        val code = source("MainActivity").after("fun updateBubbleGeometry(): Boolean")
+            .before("val bubbleLayoutListener")
         assertTrue(code.contains("bubbleGeometryPending || geometryChanged || actualBoundsChanged"))
         assertTrue(code.contains("!layoutChanged && !container.isLayoutRequested"))
         assertTrue(code.indexOf("bubbleLayer?.setAnchor(localAnchor)") < code.indexOf("handleWindowSizeChange()"))

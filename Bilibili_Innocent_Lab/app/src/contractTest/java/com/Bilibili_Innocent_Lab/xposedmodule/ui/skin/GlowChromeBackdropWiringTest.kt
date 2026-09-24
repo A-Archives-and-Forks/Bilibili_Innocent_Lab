@@ -4,6 +4,9 @@ import java.io.File
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 /**
  * 2026-09-23 悬浮栏可读性改造 B 期：内容节点玻璃的装配约束。
@@ -11,13 +14,13 @@ import org.junit.Test
  */
 class GlowChromeBackdropWiringTest {
     private fun source(relative: String): String =
-        sequenceOf(File(relative), File("app/$relative")).first(File::isFile).readText().replace("\r\n", "\n")
+        SourceContract.read(relative).replace("\r\n", "\n")
 
     private val base = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin"
 
     @Test fun contentIsRecordedOnceAndDrawnOnceOnlyOnHardwareCanvases() {
         val target = source("$base/engine/GlowBackdropTarget.kt")
-        val draw = target.substringAfter("override fun dispatchDraw(canvas: Canvas) {").substringBefore("\n    }\n")
+        val draw = target.after("override fun dispatchDraw(canvas: Canvas) {").before("\n    }\n")
         // 软件画布（探针、截图）照常画，不碰内容节点。
         assertTrue(draw.contains("!canvas.isHardwareAccelerated"))
         assertTrue(draw.contains("Build.VERSION.SDK_INT < Build.VERSION_CODES.S"))
@@ -51,7 +54,7 @@ class GlowChromeBackdropWiringTest {
         assertTrue(renderer.contains("val drewChrome = chrome != null && host != null &&\n" +
             "                        drawChromeBackdrop(chrome, canvas, bounds, effectiveRadiusPx, alpha, host)\n" +
             "                    if (!drewChrome) {"))
-        val chromeDraw = renderer.substringAfter("private fun drawChromeBackdrop(").substringBefore("\n    }\n")
+        val chromeDraw = renderer.after("private fun drawChromeBackdrop(").before("\n    }\n")
         // 自带 runCatching：drawWithFallback 不能把它算成主后端失败。
         assertTrue(chromeDraw.contains("return runCatching {"))
         assertTrue(chromeDraw.contains("chromeBackdropBroken = true"))
@@ -62,14 +65,14 @@ class GlowChromeBackdropWiringTest {
 
     @Test fun chromeUnregistersBarsBeforeStoppingTheContentRecording() {
         val chrome = source("$base/engine/GlowFloatingChrome.kt")
-        val sync = chrome.substringAfter("private fun syncBackdrops(").substringBefore("\n    }\n")
-        val disabled = sync.substringAfter("} else {")
+        val sync = chrome.after("private fun syncBackdrops(").before("\n    }\n")
+        val disabled = sync.after("} else {")
         assertTrue(disabled.indexOf("setSurfaceBackdrop(surface.host, null)") <
             disabled.indexOf("target.contentCaptureEnabled = false"))
-        val enabled = sync.substringBefore("} else {")
+        val enabled = sync.before("} else {")
         assertTrue(enabled.indexOf("target.contentCaptureEnabled = true") <
             enabled.indexOf("setSurfaceBackdrop(surface.host, target)"))
-        val dispose = chrome.substringAfter("fun dispose() {").substringBefore("\n    }\n")
+        val dispose = chrome.after("fun dispose() {").before("\n    }\n")
         assertTrue(dispose.indexOf("setSurfaceBackdrop(surface.host, null)") <
             dispose.indexOf("target.contentCaptureEnabled = false"))
         assertFalse(chrome.contains("setSurfaceBackdrop(it, target)"))

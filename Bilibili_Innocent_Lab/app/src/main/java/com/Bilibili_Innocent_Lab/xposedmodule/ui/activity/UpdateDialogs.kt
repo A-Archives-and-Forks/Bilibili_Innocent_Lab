@@ -55,8 +55,24 @@ import android.widget.TextView as NativeTextView
  */
 
 /** 「更新渠道」选择弹窗：稳定版 / 预览版（含 Alpha），风格与 GitHub 二级界面统一。 */
-internal fun MainActivity.showUpdateChannelDialog() {
+/**
+ * @param origin / @param cover / @param parentDialog / @param parentContainer 与
+ *   [showTelemetryInfoDialog] 同义：从 GitHub 面板里打开时，本面板从「更新渠道」行长出来、
+ *   盖住 GitHub 面板而不关闭它；全部为 null 时退回居中缩放入场。
+ */
+internal fun MainActivity.showUpdateChannelDialog(
+    origin: SettingsBackupMotionRect? = null,
+    cover: SettingsBackupMotionRect? = null,
+    parentDialog: Dialog? = null,
+    parentContainer: NativeLinearLayout? = null
+) {
     val density = resources.displayMetrics.density
+    // 选定渠道后两张卡片一起退场：父面板上"当前渠道"已过期，不能再把它露出来。
+    fun closeCoveredParent() {
+        val parent = parentDialog ?: return
+        val parentView = parentContainer ?: return
+        if (parent.isShowing) dismissWithAnimation(parent, parentView) {}
+    }
     val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
     val container = createModalContainer()
     val updatePrefs = applicationContext.getSharedPreferences(UpdateChannelStore.PREF_FILE, MODE_PRIVATE)
@@ -81,6 +97,7 @@ internal fun MainActivity.showUpdateChannelDialog() {
             subtitle = getString(R.string.update_channel_stable_desc),
             highlight = current == GitHubReleaseChecker.UpdateChannel.STABLE
         ) {
+            closeCoveredParent()
             dismissWithAnimation(dialog, container) {
                 applyUpdateChannel(GitHubReleaseChecker.UpdateChannel.STABLE)
             }
@@ -93,6 +110,7 @@ internal fun MainActivity.showUpdateChannelDialog() {
                 getString(R.string.update_channel_preview_warning),
             highlight = current == GitHubReleaseChecker.UpdateChannel.PREVIEW
         ) {
+            closeCoveredParent()
             dismissWithAnimation(dialog, container) {
                 applyUpdateChannel(GitHubReleaseChecker.UpdateChannel.PREVIEW)
             }
@@ -103,29 +121,20 @@ internal fun MainActivity.showUpdateChannelDialog() {
         ).apply { topMargin = (6 * density).toInt() }
     )
 
-    // 与 GitHub 二级界面一致的关闭按钮。
+    // 盖住 GitHub 面板时卡片被抬到父面板高度，多出的空档默认落在最后一行下面，"关闭"会浮在
+    // 半空、和父面板那颗对不上（2026-09-24 用户报告"下面整个空着"）。与遥测说明面板同一做法：
+    // weight 弹性占位把空档收到关闭行上面，关闭行贴着卡片底边；按钮与 GitHub 面板共用
+    // createPanelCloseButton，两张卡片的底边与内边距相同，位置自然重合。非覆盖场景卡片是
+    // WRAP_CONTENT，占位高度恒为 0。
+    container.addView(
+        android.view.View(this),
+        NativeLinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+    )
     val buttonRow = NativeLinearLayout(this).apply {
         orientation = NativeLinearLayout.HORIZONTAL
         gravity = Gravity.END or Gravity.CENTER_VERTICAL
+        addView(createPanelCloseButton { dismissWithAnimation(dialog, container) {} })
     }
-    buttonRow.addView(
-        NativeTextView(this).apply {
-            text = getString(R.string.dialog_close)
-            textColor = getColor(R.color.colorTextGray)
-            textSize = 15f
-            gravity = Gravity.CENTER
-            setPadding(
-                (20 * density).toInt(),
-                (11 * density).toInt(),
-                (20 * density).toInt(),
-                (11 * density).toInt()
-            )
-            background = selfRippleBackground(14f)
-            isClickable = true
-            isFocusable = true
-            setOnClickListener { dismissWithAnimation(dialog, container) {} }
-        }
-    )
     container.addView(
         buttonRow,
         NativeLinearLayout.LayoutParams(
@@ -134,7 +143,7 @@ internal fun MainActivity.showUpdateChannelDialog() {
         ).apply { topMargin = (22 * density).toInt() }
     )
 
-    presentModalDialog(dialog, container)
+    presentModalDialog(dialog, container, morphAnchorBounds = origin, coverBounds = cover)
 }
 
 /** Avoids replacing a confirmation dialog the user is already interacting with. */

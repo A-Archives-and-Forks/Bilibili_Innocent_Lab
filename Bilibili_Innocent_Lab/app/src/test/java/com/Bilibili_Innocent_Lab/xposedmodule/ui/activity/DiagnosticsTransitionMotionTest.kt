@@ -161,4 +161,17 @@ class DiagnosticsTransitionMotionTest {
         dx: Float = 0f,
         dy: Float = 0f
     ) = SettingsBackupMotionRect(left + dx, top + dy, right + dx, bottom + dy)
+
+    /** 2026-09-24：入口与形变表面底色随主题——浅色用表面色（柔光浅色下原来是一块中灰）。 */
+    @Test
+    fun entrySurfaceUsesTheSurfaceColorInLightTheme() {
+        val gray = 0xFF323B42.toInt()
+        val surface = 0xFFF4F4F6.toInt()
+        val light = DiagnosticsEntryVisualSpec.surfaceColor(false, gray, surface)
+        val dark = DiagnosticsEntryVisualSpec.surfaceColor(true, gray, surface)
+        assertEquals(surface and 0x00FFFFFF, light and 0x00FFFFFF)
+        assertEquals(gray and 0x00FFFFFF, dark and 0x00FFFFFF)
+        assertEquals(DiagnosticsEntryVisualSpec.scrimAlpha(false), light ushr 24)
+        assertEquals(DiagnosticsEntryVisualSpec.scrimAlpha(true), dark ushr 24)
+    }
 }

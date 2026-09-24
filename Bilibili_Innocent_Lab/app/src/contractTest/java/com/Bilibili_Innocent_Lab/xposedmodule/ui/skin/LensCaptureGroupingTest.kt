@@ -5,6 +5,9 @@ import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 /**
  * 柔光透镜采集的录制分组（2026-09-23）：顶栏胶囊与它上面的三个圆按钮采样区重叠，原来是
@@ -41,7 +44,7 @@ class LensCaptureGroupingTest {
 
     private fun source(relative: String): String {
         val path = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/$relative"
-        return sequenceOf(File(path), File("app/$path")).first(File::isFile).readText()
+        return SourceContract.read(path)
     }
 
     /**
@@ -57,15 +60,30 @@ class LensCaptureGroupingTest {
         val renderer = source("material/FrostedMaterialRenderer.kt")
         assertTrue(renderer.contains("LiveBackdropSampler(density, samplingMatrices)"))
         val matrices = source("geometry/ViewSamplingMatrix.kt")
-        val scope = matrices.substringAfter("fun <T> withAncestorMemo(").substringBefore("fun localToScreen(")
+        val scope = matrices.after("fun <T> withAncestorMemo(").before("fun localToScreen(")
         assertTrue("作用域结束必须清空备忘，不跨帧保留任何 View",
             scope.contains("finally") && scope.contains("memo.clear()") && scope.contains("memoActive = false"))
-        val grouped = sampler.substringAfter("private fun capture(").substringBefore("private fun job(")
+        val grouped = sampler.after("private fun capture(").before("private fun job(")
         assertTrue("单成员组必须保持带完整变换录制（与合并前逐字节相同）",
             grouped.contains("if (members.size == 1)") && grouped.contains("recording.concat(entry.sourceToTarget)"))
         assertTrue("多成员组的回放变换必须与单成员录制同一次序，最后平移回组原点",
             grouped.indexOf("entry.replay.setScale(") < grouped.indexOf("entry.replay.preConcat(entry.sourceToTarget)") &&
                 grouped.indexOf("entry.replay.preConcat(entry.sourceToTarget)") <
                 grouped.indexOf("entry.replay.preTranslate(originX.toFloat(), originY.toFloat())"))
+    }
+
+    /**
+     * 采样器不能被自己失效的宿主反复唤醒（2026-09-24：柔光皮肤静止时持续 ~62fps 重绘，
+     * 调用栈全部是 onBatchDone → 位于内容层内部的宿主 invalidate → 内容层变脏 → 下一帧再采样）。
+     */
+    @Test fun samplerIgnoresDirtinessItCausedItself() {
+        val sampler = SourceContract.read("ui/skin/material/LiveBackdropSampler.kt")
+        val done = sampler.after("private fun onBatchDone(").before("private fun isInside(")
+        assertTrue(done.contains("if (!dirty && isInside(job.view, source)) ignoreSelfInflictedDirty = true"))
+        val preDraw = sampler.after("private fun onPreDraw()").before("private fun collectJobs(")
+        val gate = preDraw.indexOf("if (!dirty && !content.isDirty) return")
+        val skip = preDraw.indexOf("if (ignoreSelfInflictedDirty)")
+        assertTrue(gate in 0 until skip)
+        assertTrue(preDraw.contains("if (!dirty) return"))
     }
 }

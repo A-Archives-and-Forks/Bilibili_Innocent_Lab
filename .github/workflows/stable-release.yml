@@ -158,7 +158,13 @@ jobs:
         shell: bash
         run: sdkmanager "${CI_COMPILE_SDK_PACKAGE}" "build-tools;${CI_BUILD_TOOLS}"
 
-      - name: Build, test, lint and validate Release minification
+      # 门禁拆成带名字的步骤（2026-09-24 门禁整合）。覆盖范围与原来的单条
+      # `assembleDebug testDebugUnitTest lintDebug minifyReleaseWithR8` 完全相同；
+      # 失败时直接看出是构建、行为测试、源码契约、Lint 还是混淆出了问题。
+      # 构建成功后其余步骤都会运行（互不短路），一次拿到全部结果。
+      # 行为测试 / 源码契约的划分见 app/build.gradle.kts 的 innocentLab.testLayer。
+      - name: Build debug APK
+        id: build
         working-directory: Bilibili_Innocent_Lab
         shell: bash
         run: |
@@ -166,8 +172,73 @@ jobs:
           ./gradlew \
             "-Dorg.gradle.jvmargs=-Xmx6144m -Dfile.encoding=UTF-8" \
             "-Pproject.android.compileSdk=${CI_COMPILE_SDK}" \
-            assembleDebug testDebugUnitTest lintDebug minifyReleaseWithR8 \
+            assembleDebug \
             --console=plain --no-daemon
+
+      - name: Unit tests (behavior)
+        id: unit_tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        working-directory: Bilibili_Innocent_Lab
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew \
+            "-Dorg.gradle.jvmargs=-Xmx6144m -Dfile.encoding=UTF-8" \
+            "-Pproject.android.compileSdk=${CI_COMPILE_SDK}" \
+            -PinnocentLab.testLayer=unit \
+            testDebugUnitTest \
+            --console=plain --no-daemon
+
+      - name: Source contract tests
+        id: contract_tests
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        working-directory: Bilibili_Innocent_Lab
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew \
+            "-Dorg.gradle.jvmargs=-Xmx6144m -Dfile.encoding=UTF-8" \
+            "-Pproject.android.compileSdk=${CI_COMPILE_SDK}" \
+            -PinnocentLab.testLayer=contract \
+            testDebugUnitTest \
+            --console=plain --no-daemon
+
+      - name: Lint
+        id: lint
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        working-directory: Bilibili_Innocent_Lab
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew \
+            "-Dorg.gradle.jvmargs=-Xmx6144m -Dfile.encoding=UTF-8" \
+            "-Pproject.android.compileSdk=${CI_COMPILE_SDK}" \
+            lintDebug \
+            --console=plain --no-daemon
+
+      - name: Validate Release minification
+        id: minify
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        working-directory: Bilibili_Innocent_Lab
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./gradlew \
+            "-Dorg.gradle.jvmargs=-Xmx6144m -Dfile.encoding=UTF-8" \
+            "-Pproject.android.compileSdk=${CI_COMPILE_SDK}" \
+            minifyReleaseWithR8 \
+            --console=plain --no-daemon
+
+      - name: Upload test and lint reports
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-reports
+          path: |
+            Bilibili_Innocent_Lab/app/build/reports/tests/
+            Bilibili_Innocent_Lab/app/build/reports/lint-results-debug.*
+          if-no-files-found: ignore
+          retention-days: 7
 
   publish:
     name: Publish Stable Release

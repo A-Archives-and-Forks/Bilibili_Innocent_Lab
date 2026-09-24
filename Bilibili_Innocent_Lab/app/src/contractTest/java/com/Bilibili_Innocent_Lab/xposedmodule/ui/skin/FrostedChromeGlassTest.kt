@@ -7,6 +7,9 @@ import kotlin.math.ceil
 import kotlin.math.roundToInt
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 /**
  * 2026-09-23 悬浮栏可读性改造 C 期：柔光悬浮栏的内容节点玻璃必须与软件透镜同一套光学。
@@ -29,7 +32,7 @@ class FrostedChromeGlassTest {
     }
 
     private fun source(relative: String): String =
-        sequenceOf(File(relative), File("app/$relative")).first(File::isFile).readText().replace("\r\n", "\n")
+        SourceContract.read(relative).replace("\r\n", "\n")
 
     private val base = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin"
 
@@ -81,17 +84,17 @@ class FrostedChromeGlassTest {
 
     @Test fun nodeGlassReplacesSoftwareSamplingOnlyWhenItActuallyDrew() {
         val renderer = source("$base/material/FrostedMaterialRenderer.kt")
-        val live = renderer.substringAfter("internal fun drawLiveSample(").substringBefore("\n    }\n")
+        val live = renderer.after("internal fun drawLiveSample(").before("\n    }\n")
         assertTrue(live.contains("canvas.isHardwareAccelerated && drawChromeGlass("))
         // 接管成功才摘掉软件采样；节点暂不可用时照常登记，栏不会一帧空白。
         assertTrue(live.indexOf("live.unregister(view)") < live.indexOf("live.register(view)"))
         assertTrue(renderer.contains("underlay = null"))
-        val set = renderer.substringAfter("override fun setSurfaceBackdrop(").substringBefore("\n    }\n")
+        val set = renderer.after("override fun setSurfaceBackdrop(").before("\n    }\n")
         assertTrue(set.contains("runCatching { FrostedChromeGlassApi31.create(density) }"))
-        val close = renderer.substringAfter("override fun close() {").substringBefore("\n    }\n")
+        val close = renderer.after("override fun close() {").before("\n    }\n")
         assertTrue(close.contains("chromeGlass.values.forEach(::closeChromeGlass)"))
         val sampler = source("$base/material/LiveBackdropSampler.kt")
-        val unregister = sampler.substringAfter("fun unregister(view: View) {").substringBefore("\n    }\n")
+        val unregister = sampler.after("fun unregister(view: View) {").before("\n    }\n")
         // 不 recycle：宿主上一份 display list 可能还引用着纹理。
         assertTrue(unregister.contains("entry.generation++"))
         assertTrue(!unregister.contains("recycle"))

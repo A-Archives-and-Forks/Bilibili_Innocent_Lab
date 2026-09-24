@@ -5,6 +5,9 @@ import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid.LiquidRefreshVisibi
 import org.junit.Assert.*
 import org.junit.Test
 import java.io.File
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 class LiquidRefreshBatchTest {
     @Test fun preDrawReadsFinalTransformsOnceAndMergesNewContentInTheSameWindow() {
@@ -74,25 +77,25 @@ class LiquidRefreshBatchTest {
 
     @Test fun onlyTheCaptureCommitIsCaptureOnlyAndNodeUseIsTrackedPerDraw() {
         val path = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/liquid/LiquidActivityRenderer.kt"
-        val renderer = sequenceOf(File(path), File("app/$path")).first(File::isFile).readText()
+        val renderer = SourceContract.read(path)
         // 定义一处 + 调用一处：只有截图提交走 captureOnly。
         assertEquals(2, renderer.split("invalidateRealtimeCaptureConsumers()").size - 1)
         assertEquals(1, renderer.split("captureOnly = true").size - 1)
-        val commit = renderer.substringAfter("private fun handleRealtimeCaptureResult(")
-            .substringBefore("private fun applyCaptureThroughputSample(")
+        val commit = renderer.after("private fun handleRealtimeCaptureResult(")
+            .before("private fun applyCaptureThroughputSample(")
         assertTrue(commit.contains("invalidateRealtimeCaptureConsumers()"))
         assertFalse(commit.contains("invalidateRegisteredSurfaces()"))
         // 每次绘制先复位、节点玻璃画成功才置位：退回窗口玻璃的那一帧必须重新跟随截图。
-        val draw = renderer.substringAfter("internal fun drawSurface(").substringBefore("private fun drawSurfaceLayers(")
+        val draw = renderer.after("internal fun drawSurface(").before("private fun drawSurfaceLayers(")
         assertTrue(draw.indexOf("chrome?.drewByNode = false") in 0 until draw.indexOf("drawWithFallback {"))
         assertTrue(draw.contains("chrome?.drewByNode = drewChrome"))
-        val flush = renderer.substringAfter("private fun flushSurfaceRefresh(").substringBefore("private fun isSurfacePotentiallyVisible(")
+        val flush = renderer.after("private fun flushSurfaceRefresh(").before("private fun isSurfacePotentiallyVisible(")
         assertTrue(flush.contains("LiquidRefreshBatch.surfaceContentChanged("))
         assertTrue(flush.contains("captureIndependent = isCaptureIndependent(view)"))
         // 截图换代仍算内容变化：不能因此误判为纯位移而进入滚动抑制。
         assertTrue(flush.contains("val contentChanged = LiquidRefreshBatch.anyContent(changes)"))
         assertTrue(flush.contains("if (surfaceMoved && !contentChanged) suppressRealtimeSamplingWhileScrolling()"))
-        val trigger = renderer.substringAfter("private fun triggerSurfaceFrame(").substringBefore("private fun flushSurfaceRefresh(")
+        val trigger = renderer.after("private fun triggerSurfaceFrame(").before("private fun flushSurfaceRefresh(")
         assertTrue(trigger.contains("if (captureOnly && isCaptureIndependent(view)) continue"))
     }
 }

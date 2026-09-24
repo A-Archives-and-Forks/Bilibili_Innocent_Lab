@@ -147,6 +147,16 @@ internal class LiveBackdropSampler(
 
     /** 同一时刻至多一批作业在后台；在飞期间的新位移只记 dirty，批次回来后续采。 */
     private var inFlight = false
+
+    /**
+     * 本次内容层"脏"是我们自己造成的：批次回来时失效了位于内容层**内部**的宿主（如「管理常用」
+     * 按钮），整条祖先链连同内容层都被标脏，下一帧 pre-draw 又据此重采样、再失效宿主——
+     * 每帧一次的自激循环。2026-09-24 实测：柔光皮肤静止时持续 ~62fps 重绘（5 秒 310 帧），
+     * 调用栈全部来自 onBatchDone → 宿主 invalidate。已提交版本同样存在。
+     * 置位后下一次 pre-draw 若没有显式内容变化（[dirty]）就跳过；真实位移走 [invalidate]
+     * 显式置 dirty，持续动画会连续多帧弄脏内容层，都不受影响。
+     */
+    private var ignoreSelfInflictedDirty = false
     /** 释放/关闭时递增，让已经在飞的批次回来时自知过期。 */
     private var batchToken = 0
     private var workerStarted = false
@@ -205,6 +215,10 @@ internal class LiveBackdropSampler(
         val content = source ?: return
         if (!content.isAttachedToWindow || content.width <= 0 || content.height <= 0) return
         if (!dirty && !content.isDirty) return
+        if (ignoreSelfInflictedDirty) {
+            ignoreSelfInflictedDirty = false
+            if (!dirty) return
+        }
         // 上一批还在后台：保持 dirty，批次回来时会拉起下一趟 traversal 续采。
         if (inFlight) return
         // 节流：连续运动时不必每个 vsync 都重采样一遍内容层。落在间隔内就保持 dirty、
@@ -417,6 +431,7 @@ internal class LiveBackdropSampler(
             texture.setPixels(job.out, 0, job.outWidth, 0, 0, job.outWidth, job.outHeight)
             entry.valid = true
             job.view.invalidate()
+            if (!dirty && isInside(job.view, source)) ignoreSelfInflictedDirty = true
         }
         // 批次在飞期间又有位移：上面的 invalidate 通常已经拉起下一趟 pre-draw；这里兜底，
         // 保证即使本批结果全被丢弃，停下来的那一帧也一定会被补采。
@@ -424,6 +439,16 @@ internal class LiveBackdropSampler(
             val elapsedMs = (System.nanoTime() - lastSampleNanos) / NANOS_PER_MILLISECOND
             scheduleTrailingSample(ModernMaterialPolicy.LIVE_SAMPLE_MIN_INTERVAL_MS - elapsedMs)
         }
+    }
+
+    private fun isInside(view: View, ancestor: View?): Boolean {
+        if (ancestor == null) return false
+        var parent = view.parent
+        while (parent is View) {
+            if (parent === ancestor) return true
+            parent = parent.parent
+        }
+        return false
     }
 
     private fun fail() {

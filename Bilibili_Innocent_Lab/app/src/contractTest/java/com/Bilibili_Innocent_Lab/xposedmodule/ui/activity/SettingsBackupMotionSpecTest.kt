@@ -3,6 +3,9 @@ package com.Bilibili_Innocent_Lab.xposedmodule.ui.activity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
 
 class SettingsBackupMotionSpecTest {
 
@@ -54,9 +57,9 @@ class SettingsBackupMotionSpecTest {
 
     @Test
     fun predictiveContentUsesWiderRangeThanTimedAnimation() {
-        val predictiveStart = frame(0.22f, SettingsBackupContentTiming.PREDICTIVE)
-        val predictiveMiddle = frame(0.47f, SettingsBackupContentTiming.PREDICTIVE)
-        val predictiveEnd = frame(0.72f, SettingsBackupContentTiming.PREDICTIVE)
+        val predictiveStart = frame(0.45f, SettingsBackupContentTiming.PREDICTIVE)
+        val predictiveMiddle = frame(0.6f, SettingsBackupContentTiming.PREDICTIVE)
+        val predictiveEnd = frame(0.8f, SettingsBackupContentTiming.PREDICTIVE)
 
         assertEquals(0f, predictiveStart.contentAlpha, 0f)
         assertTrue(predictiveMiddle.contentAlpha in 0f..1f)
@@ -127,4 +130,41 @@ class SettingsBackupMotionSpecTest {
             contentTravelPx = 36f,
             contentTiming = contentTiming
         )
+
+    /**
+     * 形变中正文钉在框顶随框平移（2026-09-24 用户报告"二级页展开/收回时中间两个画面割断"）：
+     * 原来正文只按淡入行程平移、不跟框走，缩小的轮廓从页面中段裁出半透明的卡片碎片。
+     */
+    @Test
+    fun morphingContentIsPinnedToTheFrameTop() {
+        val path = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/SettingsBackupMotionHost.kt"
+        val host = SourceContract.read(path)
+        val apply = host.after("fun applyExpansion(").before("fun applyFallbackExpansion(")
+        assertTrue(apply.contains("(motionFrame.top - geometry.expandedBounds.top)"))
+        // 只平移不缩放：玻璃卡片按屏幕位置采样背景，缩放会让卡片里的背景错位。
+        val page = apply.after("currentPage?.apply {").before("}")
+        assertTrue(!page.contains("scaleX =") && !page.contains("scaleY ="))
+    }
+
+    /**
+     * 正文平移/缩放必须通知皮肤重录移动过的玻璃（2026-09-24 真机逐帧：动画结束约 0.35s 后
+     * 两张卡片内部反向变色 4～5 级——父层 translation 不让子 View 重录，卡片一直按过期屏幕
+     * 位置采样背景，直到抑制解除整组重录才对齐）。
+     */
+    @Test
+    fun movingPageContentNotifiesTheSkin() {
+        fun read(name: String): String {
+            val path = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/$name.kt"
+            return SourceContract.read(path)
+        }
+        val host = read("SettingsBackupMotionHost")
+        // 三处写正文位移的地方都要比对并回调。
+        assertEquals(3, host.split("notifyIfMoved(beforeY,").size - 1)
+        assertTrue(host.contains("onContentMoved?.invoke()"))
+        for (activity in listOf("SettingsBackupActivity", "DiagnosticsActivity")) {
+            val source = read(activity)
+            assertTrue(activity, source.contains("motionHost.onContentMoved = ::notifyPreparedSkinPositionChanged"))
+            assertTrue(activity, source.contains("motionHost.onContentMoved = null"))
+        }
+    }
 }

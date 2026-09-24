@@ -79,7 +79,8 @@ import java.util.concurrent.Future
 import kotlin.math.abs
 
 /** SAF 驱动的设置备份、兼容性预览和确认导入页面。 */
-class SettingsBackupActivity : SkinnedActivity() {
+class SettingsBackupActivity : SkinnedActivity(),
+    com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid.LiquidStaticBackdropHost {
 
     private enum class Page {
         HOME,
@@ -184,6 +185,7 @@ class SettingsBackupActivity : SkinnedActivity() {
         )
         motionHost.setMotionSurfaceBackground(skinMotionSurfaceBackground(monetColors.surfaceVariant, 15f))
         motionHost.onWindowSizeChangedDuringMotion = ::handleMotionWindowSizeChange
+        motionHost.onContentMoved = ::notifyPreparedSkinPositionChanged
         setContentView(motionHost)
         motionHost.installContentInsets()
         bindPreparedSkinRoot(motionHost.liquidBackdropRoot()) {
@@ -229,6 +231,7 @@ class SettingsBackupActivity : SkinnedActivity() {
         cancelMotionAnimator()
         if (::motionHost.isInitialized) {
             motionHost.onWindowSizeChangedDuringMotion = null
+            motionHost.onContentMoved = null
         }
         operationGeneration += 1L
         activeFuture?.cancel(true)

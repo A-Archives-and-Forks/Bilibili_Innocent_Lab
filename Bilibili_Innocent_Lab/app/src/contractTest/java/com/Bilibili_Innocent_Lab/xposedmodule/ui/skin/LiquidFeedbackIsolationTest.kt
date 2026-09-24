@@ -4,6 +4,9 @@ import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid.LiquidRealtimeCaptu
 import java.io.File
 import org.junit.Assert.*
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 class LiquidFeedbackIsolationTest {
     @Test fun ownedOutputHasZeroRecursiveContributionAndUnmaskedPixelsStayLive() {
@@ -22,15 +25,15 @@ class LiquidFeedbackIsolationTest {
 
     @Test fun sourceWiringFreezesMasksBeforeCaptureAndSanitationReplacesOwnedOutput() {
         val renderer = source("LiquidActivityRenderer")
-        val request = renderer.substringAfter("private fun requestRealtimeCapture(").substringBefore("private fun handleRealtimeCaptureResult")
+        val request = renderer.after("private fun requestRealtimeCapture(").before("private fun handleRealtimeCaptureResult")
         assertTrue(request.indexOf("buildSuppressionMask") < request.indexOf("PixelCopy.request"))
-        val result = renderer.substringAfter("private fun handleRealtimeCaptureResult").substringBefore("private fun applyCaptureThroughputSample")
+        val result = renderer.after("private fun handleRealtimeCaptureResult").before("private fun applyCaptureThroughputSample")
         // 2026-09-23 抑制在截图线程完成；提交端必须先看它的结论再绑定。
         assertTrue(result.indexOf("request.outcome") in 0 until result.indexOf("bindPreparedBackendsToBackdrop"))
-        assertTrue(renderer.substringAfter("private fun postProcessRealtimeCapture(").contains("sanitizeRealtimeCapture"))
+        assertTrue(renderer.after("private fun postProcessRealtimeCapture(").contains("sanitizeRealtimeCapture"))
         // 2026-09-23 遮罩构建随抑制器拆到 LiquidFeedbackSuppressor（凝光视效引擎重构）。
-        val mask = source("LiquidFeedbackSuppressor").substringAfter("fun buildSuppressionMask(")
-            .substringBefore("fun sanitizeRealtimeCapture")
+        val mask = source("LiquidFeedbackSuppressor").after("fun buildSuppressionMask(")
+            .before("fun sanitizeRealtimeCapture")
         assertTrue(mask.contains("mask.addRoundRect"))
         // 未绘制边界环的 viewport 不进入抑制遮罩：遮罩只覆盖真实玻璃表面。
         assertFalse(mask.contains("stretchViewports"))
@@ -70,7 +73,7 @@ class LiquidFeedbackIsolationTest {
      */
     @Test fun stretchOpticsFollowTheActiveEdgeDirection() {
         val renderer = source("LiquidActivityRenderer")
-        val handler = renderer.substringAfter("private fun onStretchDistanceChanged(")
+        val handler = renderer.after("private fun onStretchDistanceChanged(")
             .substringBefore("@MainThread", "MISSING")
         assertTrue(handler.contains("LiquidStretchEdge.TOP"))
         assertTrue(handler.contains("LiquidStretchEdge.BOTTOM"))
@@ -92,33 +95,33 @@ class LiquidFeedbackIsolationTest {
      */
     @Test fun scrollingSuppressesStaleRealtimeSampling() {
         val renderer = source("LiquidActivityRenderer")
-        val moved = renderer.substringAfter("private fun invalidateMovedSurfaces()")
-            .substringBefore("private fun invalidateRegisteredSurfaces()")
+        val moved = renderer.after("private fun invalidateMovedSurfaces()")
+            .before("private fun invalidateRegisteredSurfaces()")
         assertTrue(moved.contains("lastContentShiftNanos"))
         assertTrue(moved.contains("suppressRealtimeSamplingWhileScrolling()"))
 
         // 显式变换回调（按下缩放/弹性拖拽）不等于内容位移：必须先经
         // flushSurfaceRefresh 的"表面原点真的变化"门控，否则点击/按压
         // 也会在无事发生时把底图 real→stable 闪一下（2026-09-21 真机实证）。
-        val notify = renderer.substringAfter("fun notifyPositionChanged()")
+        val notify = renderer.after("fun notifyPositionChanged()")
             .substringBefore("private fun invalidateMovedSurfaces()", "MISSING")
         assertNotEquals("MISSING", notify)
         assertFalse("transform callbacks must not suppress unconditionally",
             notify.contains("suppressRealtimeSamplingWhileScrolling()"))
-        val flush = renderer.substringAfter("private fun flushSurfaceRefresh(")
+        val flush = renderer.after("private fun flushSurfaceRefresh(")
         assertTrue(flush.contains("surfaceMoved"))
         assertTrue(flush.contains("suppressRealtimeSamplingWhileScrolling()"))
 
-        val suppress = renderer.substringAfter("private fun suppressRealtimeSamplingWhileScrolling()")
-            .substringBefore("private fun onScrollSettleCheck()")
+        val suppress = renderer.after("private fun suppressRealtimeSamplingWhileScrolling()")
+            .before("private fun onScrollSettleCheck()")
         assertTrue(suppress.contains("bindPreparedBackendsToBackdrop(stable)"))
 
-        val request = renderer.substringAfter("private fun requestRealtimeCapture(")
-            .substringBefore("private fun handleRealtimeCaptureResult")
+        val request = renderer.after("private fun requestRealtimeCapture(")
+            .before("private fun handleRealtimeCaptureResult")
         assertTrue(request.contains("realtimeSamplingSuppressed"))
 
-        val result = renderer.substringAfter("private fun handleRealtimeCaptureResult")
-            .substringBefore("private fun applyCaptureThroughputSample")
+        val result = renderer.after("private fun handleRealtimeCaptureResult")
+            .before("private fun applyCaptureThroughputSample")
         assertTrue(result.contains("if (!realtimeSamplingSuppressed)"))
 
         assertTrue(renderer.contains("SCROLL_QUIET_MS"))
@@ -133,13 +136,13 @@ class LiquidFeedbackIsolationTest {
      */
     @Test fun suppressedSurfacesStayRefractiveInLiteMode() {
         val renderer = source("LiquidActivityRenderer")
-        val draw = renderer.substringAfter("internal fun drawSurface(")
-            .substringBefore("private fun drawSurfaceLayers(")
-        val optical = draw.substringAfter("if (foreignWindow) {")
+        val draw = renderer.after("internal fun drawSurface(")
+            .before("private fun drawSurfaceLayers(")
+        val optical = draw.after("if (foreignWindow) {")
             .substringBefore("} else {", "MISSING")
         assertNotEquals("MISSING", optical)
         assertTrue(optical.contains("drawOpticalRegion("))
-        assertTrue(draw.contains("motionLite = realtimeSamplingSuppressed"))
+        assertTrue(draw.contains("motionLite = (realtimeSamplingSuppressed && !suppressionFromMorphOnly)"))
         // 回弹期一并降级：lite 是同一条 shader 少取样，边缘光逐项保留；只有**切换绘制
         // 路径**才会被看成跳变（2026-09-21（九）），这里没有切路径。
         assertTrue(draw.contains("stretchOpticalIntensity > 1f"))
@@ -148,7 +151,7 @@ class LiquidFeedbackIsolationTest {
         assertTrue(backend.contains("uniform float motionLite"))
         // lite 分支必须走单次取样而非多抽样散射
         assertTrue(backend.contains("if (motionLite > 0.5)"))
-        val lite = backend.substringAfter("if (motionLite > 0.5)")
+        val lite = backend.after("if (motionLite > 0.5)")
         assertTrue(lite.contains("sampleContent("))
         // lite 必须保留与完整路径同一条内容感知焦散——缺了它，lite/full
         // 切换瞬间边缘高光亮度差一档，表现为滑动起止处的轻微闪动。
@@ -168,7 +171,7 @@ class LiquidFeedbackIsolationTest {
     @Test fun theInteriorFastPathOnlyFiresWhereItIsProvablyEquivalent() {
         val backend = source("LiquidRefractionBackendApi33")
         val main = backend.substringAfter("half4 main(float2 coord)", "MISSING")
-            .substringBefore("float smoothRadius")
+            .before("float smoothRadius")
         assertNotEquals("MISSING", main)
         val guard = main.substringAfter("if (interiorDistortion <= 0.001", "MISSING")
         assertNotEquals("MISSING", guard)
@@ -193,7 +196,7 @@ class LiquidFeedbackIsolationTest {
     @Test fun theMotionLiteInteriorSkipsTheEdgeMath() {
         val backend = source("LiquidRefractionBackendApi33")
         val fast = backend.substringAfter("if (motionLite > 0.5 && deepInterior)", "MISSING")
-            .substringBefore("float smoothRadius")
+            .before("float smoothRadius")
         assertNotEquals("MISSING", fast)
         assertTrue("必须仍按 interiorOffset 取样（realtime 档 interiorDistortion≠0）",
             fast.contains("interiorOffset * liteReach"))
@@ -209,7 +212,7 @@ class LiquidFeedbackIsolationTest {
     @Test fun chromaticDispersionIsConfinedToTheRimBand() {
         val backend = source("LiquidRefractionBackendApi33")
         val fn = backend.substringAfter("half4 sampleRefracted(", "MISSING")
-            .substringBefore("half4 sampleScattered(")
+            .before("half4 sampleScattered(")
         assertNotEquals("MISSING", fn)
         assertTrue("位移必须乘 edgeWeight", fn.contains("chromaticShift * edgeBoost * edgeWeight"))
         assertTrue("亚像素位移直接跳过两次取样", fn.contains("if (shift < 0.02) return center;"))
@@ -228,13 +231,13 @@ class LiquidFeedbackIsolationTest {
      */
     @Test fun stretchKeepsTheRefractivePathAndTheRestingGlow() {
         val renderer = source("LiquidActivityRenderer")
-        val handler = renderer.substringAfter("private fun onStretchDistanceChanged(")
+        val handler = renderer.after("private fun onStretchDistanceChanged(")
             .substringBefore("@MainThread", "MISSING")
         assertNotEquals("MISSING", handler)
         assertFalse("stretch must not switch sampling paths",
             handler.contains("suppressRealtimeSamplingWhileScrolling()"))
 
-        val settle = renderer.substringAfter("private fun onScrollSettleCheck()")
+        val settle = renderer.after("private fun onScrollSettleCheck()")
             .substringBefore("private fun clearScrollSuppression()", "MISSING")
         assertNotEquals("MISSING", settle)
         assertTrue("settle must not lift suppression while stretched",
@@ -252,14 +255,14 @@ class LiquidFeedbackIsolationTest {
      */
     @Test fun cheapOpticalPathKeepsALuminousEdgeOnEveryRole() {
         val renderer = source("LiquidActivityRenderer")
-        val layers = renderer.substringAfter("private fun drawSurfaceLayers(")
+        val layers = renderer.after("private fun drawSurfaceLayers(")
             .substringBefore("private inline fun drawWithFallback", "MISSING")
         assertNotEquals("MISSING", layers)
         assertTrue(layers.contains("luminousEdge"))
         assertTrue(layers.contains("modalEdgePaint"))
         assertTrue(layers.contains("edgeBandPaint"))
-        val draw = renderer.substringAfter("internal fun drawSurface(")
-            .substringBefore("private fun drawSurfaceLayers(")
+        val draw = renderer.after("internal fun drawSurface(")
+            .before("private fun drawSurfaceLayers(")
         // 窗口内表面抑制期留在折射 lite 路径——发光边缘只需补外部窗口的直采表面。
         assertTrue(draw.contains("luminousEdge = foreignWindow"))
         // 直采路径的填充透明度必须与折射路径同源：浮动条透出真实下层内容。
@@ -274,11 +277,11 @@ class LiquidFeedbackIsolationTest {
      */
     @Test fun stretchEffectsOnlyDrawOnHardwareCanvases() {
         val viewport = source("LiquidStretchViewport")
-        val draw = viewport.substringAfter("override fun draw(canvas: Canvas)")
+        val draw = viewport.after("override fun draw(canvas: Canvas)")
             .substringBefore("override fun onStartNestedScroll", "MISSING")
         assertNotEquals("MISSING", draw)
         assertTrue(draw.contains("canvas.isHardwareAccelerated"))
-        val guarded = draw.substringAfter("isHardwareAccelerated")
+        val guarded = draw.after("isHardwareAccelerated")
         assertTrue(guarded.indexOf("topEffect.draw(canvas)") < guarded.indexOf("topEffect.draw(canvas)") + 400)
     }
 
@@ -296,7 +299,7 @@ class LiquidFeedbackIsolationTest {
     @Test fun motionSurfaceSamplingOriginStaysAtViewOrigin() {
         // 2026-09-23 表面 Drawable 拆到 LiquidSurfaceDrawables（凝光视效引擎重构）。
         val renderer = source("LiquidSurfaceDrawables")
-        val provider = renderer.substringAfter("val motionProvider = view as? LiquidMotionSurfaceFrameProvider")
+        val provider = renderer.after("val motionProvider = view as? LiquidMotionSurfaceFrameProvider")
             .substringBefore("if (view != null) {", "MISSING")
         assertNotEquals("MISSING", provider)
         assertFalse(provider.contains("drawX += motionBounds"))
@@ -317,7 +320,7 @@ class LiquidFeedbackIsolationTest {
      */
     @Test fun drawableAlphaScalesTheGlassFillOnBothPaths() {
         val renderer = source("LiquidActivityRenderer")
-        val draw = renderer.substringAfter("internal fun drawSurface(")
+        val draw = renderer.after("internal fun drawSurface(")
             .substringBefore("private fun drawSurfaceLayers(", "MISSING")
         assertNotEquals("MISSING", draw)
         assertTrue("optical region must scale with drawable alpha",
@@ -339,30 +342,86 @@ class LiquidFeedbackIsolationTest {
     @Test fun theSuppressionReleaseWaitsOutAnActiveGesture() {
         val renderer = source("LiquidActivityRenderer")
         val settle = renderer.substringAfter("private fun onScrollSettleCheck()", "MISSING")
-            .substringBefore("private fun clearScrollSuppression()")
+            .before("private fun clearScrollSuppression()")
         assertNotEquals("MISSING", settle)
         assertTrue("按着时必须推迟解除", settle.contains("gestureHoldsRelease("))
         assertTrue("推迟后要继续排查，不能丢掉这次解除", settle.contains("scrollSettlePending = true"))
-        val hold = renderer.substringAfter("private fun gestureHoldsRelease(")
-            .substringBefore("private fun onScrollSettleCheck()")
+        val hold = renderer.after("private fun gestureHoldsRelease(")
+            .before("private fun onScrollSettleCheck()")
         assertTrue("推迟必须有上界", hold.contains("GESTURE_RELEASE_HOLD_MS"))
         assertTrue(renderer.contains("private const val GESTURE_RELEASE_HOLD_MS"))
 
         // 手势起止由 Activity 的 dispatchTouchEvent 统一转发，覆盖所有滚动容器。
         val activity = source2("ui/skin/activity/SkinnedActivity.kt")
-        val dispatch = activity.substringAfter("override fun dispatchTouchEvent(")
-            .substringBefore("protected fun clearElasticInteractions()")
+        val dispatch = activity.after("override fun dispatchTouchEvent(")
+            .before("protected fun clearElasticInteractions()")
         assertTrue(dispatch.contains("MotionEvent.ACTION_DOWN -> skinSessionOrNull?.notifyGestureActive(true)"))
         assertTrue(dispatch.contains("notifyGestureActive(false)"))
     }
 
-    private fun source2(relative: String): String = sequenceOf(
-        java.io.File("src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/$relative"),
-        java.io.File("app/src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/$relative")
-    ).first(java.io.File::isFile).readText()
+    private fun source2(relative: String): String = SourceContract.read("src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/$relative")
 
-    private fun source(name: String): String = sequenceOf(
-        File("src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/liquid/$name.kt"),
-        File("app/src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/liquid/$name.kt")
-    ).first(File::isFile).readText()
+    private fun source(name: String): String = SourceContract.read("src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/liquid/$name.kt")
+
+    /**
+     * 形变表面（二级页容器展开/收回、预测式返回）只改内部矩形、View 不动，必须同样触发抑制：
+     * 否则玻璃折射的实时截图里留着旧帧的反馈遮罩轮廓，框内出现一道圆角缝（2026-09-24 真机：
+     * 关实时截图缝即消失）。这种抑制只换底图、不降级着色，动画结束解除时光影不跳变；
+     * 一旦有真实滚动立即回到 lite。
+     */
+    @Test fun morphingSurfacesSampleTheStableBackdropWithoutLiteShading() {
+        val renderer = source("LiquidActivityRenderer")
+        val register = renderer.after("internal fun registerSurfaceView(")
+            .before("override fun notifyPositionChanged()")
+        assertTrue(register.contains("view is LiquidMotionSurfaceFrameProvider"))
+        assertTrue(register.indexOf("suppressRealtimeSamplingWhileScrolling()") in
+            0 until register.indexOf("footprint.update(bounds, radiusPx, originX, originY)"))
+        assertTrue(register.contains("if (!wasSuppressed && realtimeSamplingSuppressed) suppressionFromMorphOnly = true"))
+        val moved = renderer.after("private fun invalidateMovedSurfaces()")
+            .before("private fun invalidateRegisteredSurfaces()")
+        assertTrue("真实滚动撤销形变豁免", moved.contains("suppressionFromMorphOnly = false"))
+        val settle = renderer.after("private fun onScrollSettleCheck()")
+            .before("private fun invalidateRegisteredSurfaces()")
+        assertTrue(Regex("""realtimeSamplingSuppressed = false\s+suppressionFromMorphOnly = false""")
+            .findAll(settle).count() == 2)
+    }
+
+    /**
+     * 二级页（设置备份、统一诊断）从不发起实时截图（2026-09-24 用户报告：动画结束约 0.5s
+     * 后控件光影跳变，正是采样源从稳定底图换成截图的时刻）。卡片背后只有背景，截图无收益。
+     */
+    @Test fun staticBackdropHostsNeverStartRealtimeCapture() {
+        val renderer = source("LiquidActivityRenderer")
+        assertTrue(renderer.contains("private val staticBackdropHost = activity is LiquidStaticBackdropHost"))
+        val post = renderer.after("private fun postRealtimeFrameCallback()").take(400)
+        assertTrue(post.contains("staticBackdropHost"))
+        val request = renderer.after("private fun requestRealtimeCapture(").take(400)
+        assertTrue(request.contains("staticBackdropHost"))
+        for (name in listOf("SettingsBackupActivity", "DiagnosticsActivity")) {
+            val path = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/$name.kt"
+            val activity = SourceContract.read(path)
+            assertTrue(name, activity.contains("LiquidStaticBackdropHost {"))
+        }
+        // 主界面必须保留实时截图：悬浮栏与卡片背后有滚动内容。
+        val mainPath = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/MainActivity.kt"
+        val main = SourceContract.read(mainPath)
+        assertFalse(main.contains("LiquidStaticBackdropHost"))
+    }
+
+    /**
+     * 主窗口失焦（弹窗盖在上面）期间不发 PixelCopy（2026-09-24 atrace：面板入场收尾时主窗口
+     * 连截 3 张、偶有 12–16ms 一张顶掉一帧）。重新获焦补排一次采集，监听随关闭摘除。
+     */
+    @Test fun unfocusedWindowSkipsRealtimeCapture() {
+        val renderer = source("LiquidActivityRenderer")
+        val post = renderer.after("private fun postRealtimeFrameCallback()").take(300)
+        assertTrue(post.contains("windowObscured"))
+        val request = renderer.after("private fun requestRealtimeCapture(").take(400)
+        assertTrue(request.contains("windowObscured"))
+        val listener = renderer.after("private val windowFocusListener").take(500)
+        assertTrue(listener.contains("windowObscured = true"))
+        assertTrue(listener.contains("scheduleRealtimeCapture(LiquidRealtimeCapturePolicy.INITIAL_DELAY_MS)"))
+        assertTrue(renderer.contains("addOnWindowFocusChangeListener(windowFocusListener)"))
+        assertTrue(renderer.contains("removeOnWindowFocusChangeListener(windowFocusListener)"))
+    }
 }

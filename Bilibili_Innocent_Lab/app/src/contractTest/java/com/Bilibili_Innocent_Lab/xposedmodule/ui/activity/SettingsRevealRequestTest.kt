@@ -2,6 +2,8 @@ package com.Bilibili_Innocent_Lab.xposedmodule.ui.activity
 
 import org.junit.Assert.*
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 class SettingsRevealRequestTest {
     @Test fun replacementReleasesOldLayoutWorkAndRejectsLateCompletionOnTheSamePage() {
@@ -61,11 +63,11 @@ class SettingsRevealRequestTest {
         val install = SettingsUiSource.function("installSettingsHome")
         assertTrue(install.contains("if (settingsRevealRequest.isActive) cancelSettingsReveal()"))
         val scroll = SettingsUiSource.file("SettingsHomeScrollView")
-        val down = scroll.substringAfter("MotionEvent.ACTION_DOWN ->").substringBefore("MotionEvent.ACTION_MOVE ->")
+        val down = scroll.after("MotionEvent.ACTION_DOWN ->").before("MotionEvent.ACTION_MOVE ->")
         assertTrue(down.contains("onContentTouch()"))
         val reveal = SettingsUiSource.function("revealSettingsSearchTarget")
-        val release = reveal.substringAfter("token = settingsRevealRequest.begin {")
-            .substringBefore("observer.addOnPreDrawListener")
+        val release = reveal.after("token = settingsRevealRequest.begin {")
+            .before("observer.addOnPreDrawListener")
         assertTrue(release.contains("removeOnPreDrawListener(listener)"))
         assertTrue(release.contains("scrollMotion.cancel()"))
         assertTrue(release.contains("scrollAnimator?.cancel()"))

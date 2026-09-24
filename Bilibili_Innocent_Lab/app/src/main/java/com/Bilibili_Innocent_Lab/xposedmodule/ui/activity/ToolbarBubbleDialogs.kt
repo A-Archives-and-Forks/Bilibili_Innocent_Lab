@@ -76,16 +76,24 @@ internal fun MainActivity.showGitHubMenuDialog(anchor: View? = null) {
             }
         }
     )
+    // 更新渠道是覆盖式子面板（与匿名适配遥测的 ⓘ 同一套）：GitHub 面板**不关**，子面板从
+    // 这一行长出来、展开端正好盖住本卡片，收起时再露出它。原来先关本面板再居中弹出，两段
+    // 动画割开（2026-09-24 用户要求补全连贯动画）。两张矩形都必须在点击那一刻取。
+    lateinit var channelRow: View
+    channelRow = createGitHubMenuRow(
+        title = getString(R.string.update_channel),
+        subtitle = getString(channelSubtitleRes()),
+        highlight = false
+    ) {
+        showUpdateChannelDialog(
+            origin = modalAnchorBounds(channelRow),
+            cover = modalSurfaceBounds(dialog, container),
+            parentDialog = dialog,
+            parentContainer = container
+        )
+    }
     container.addView(
-        createGitHubMenuRow(
-            title = getString(R.string.update_channel),
-            subtitle = getString(channelSubtitleRes()),
-            highlight = false
-        ) {
-            dismissWithAnimation(dialog, container) {
-                showUpdateChannelDialog()
-            }
-        },
+        channelRow,
         NativeLinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT

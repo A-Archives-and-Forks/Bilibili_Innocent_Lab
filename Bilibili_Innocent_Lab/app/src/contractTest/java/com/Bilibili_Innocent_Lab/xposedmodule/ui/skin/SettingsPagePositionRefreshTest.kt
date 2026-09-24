@@ -4,12 +4,13 @@ import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid.LiquidSurfaceRefres
 import java.io.File
 import org.junit.Assert.*
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
 
 /** Source wiring guards plus the existing refresh state; not a RenderThread timing test. */
 class SettingsPagePositionRefreshTest {
     private fun source(relative: String): String {
         val path = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/$relative.kt"
-        return sequenceOf(File(path), File("app/$path")).first(File::isFile).readText()
+        return SourceContract.read(path)
     }
 
     private fun function(source: String, signature: String): String {

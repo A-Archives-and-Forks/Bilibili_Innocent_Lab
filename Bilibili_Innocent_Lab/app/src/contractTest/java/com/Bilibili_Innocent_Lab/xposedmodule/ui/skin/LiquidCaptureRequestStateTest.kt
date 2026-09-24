@@ -4,6 +4,9 @@ import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid.LiquidCaptureReques
 import java.io.File
 import org.junit.Assert.*
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 class LiquidCaptureRequestStateTest {
     @Test fun oldSuccessAndFailureAfterStopResumeCannotPublishOrTouchFailureCounters() {
@@ -45,8 +48,8 @@ class LiquidCaptureRequestStateTest {
     // 断言从 MaskAndRetirements 收窄为 Mask。
     @Test fun productionCallbackOwnsItsSourceRootSizeAndMask() {
         val relative = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/liquid/LiquidActivityRenderer.kt"
-        val source = sequenceOf(File(relative), File("app/$relative")).first(File::isFile).readText()
-        val callback = source.substringAfter("private fun handleRealtimeCaptureResult(").substringBefore("private fun applyCaptureThroughputSample")
+        val source = SourceContract.read(relative)
+        val callback = source.after("private fun handleRealtimeCaptureResult(").before("private fun applyCaptureThroughputSample")
         assertTrue(callback.indexOf("realtimeCaptureInFlight !== request") < callback.indexOf("realtimeCaptureInFlight = null"))
         // 2026-09-23 截图后处理移到截图线程：主线程提交先验票，再采信后台结论。
         assertTrue(callback.indexOf("Completion.CURRENT") < callback.indexOf("request.outcome"))
@@ -54,13 +57,13 @@ class LiquidCaptureRequestStateTest {
         assertTrue(callback.contains("root.width != request.width || root.height != request.height"))
         assertTrue(source.contains("handleRealtimeCaptureResult(request, result)"))
         // 2026-09-23 抑制器拆出（凝光视效引擎重构）：请求借出的遮罩原样交给抑制器应用。
-        val postProcess = source.substringAfter("private fun postProcessRealtimeCapture(")
-            .substringBefore("\n}")
+        val postProcess = source.after("private fun postProcessRealtimeCapture(")
+            .before("\n}")
         assertTrue(postProcess.contains("request.source, request.stableBackdrop, request.mask, request.maskReady"))
         val suppressorPath = relative.replace("LiquidActivityRenderer.kt", "LiquidFeedbackSuppressor.kt")
-        val suppressor = sequenceOf(File(suppressorPath), File("app/$suppressorPath")).first(File::isFile).readText()
+        val suppressor = SourceContract.read(suppressorPath)
         assertTrue(suppressor.contains("canvas.drawPath(requestMask, suppressionPaint)"))
-        val close = source.substringAfter("override fun close()")
+        val close = source.after("override fun close()")
         assertTrue(close.contains("captureRequests.invalidate()"))
         assertFalse(close.contains("realtimeCaptureInFlight = null"))
     }

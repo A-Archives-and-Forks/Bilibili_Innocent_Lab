@@ -3,18 +3,18 @@ package com.Bilibili_Innocent_Lab.xposedmodule.ui.skin
 import java.io.File
 import org.junit.Assert.*
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 class ModernMaterialIntegrationTest {
-    private fun source(path: String): String = sequenceOf(
-        File("src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/$path"),
-        File("app/src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/$path")
-    ).first(File::isFile).readText()
+    private fun source(path: String): String = SourceContract.read("src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/$path")
 
     @Test fun neutralModulePaletteDoesNotChangeHostWallpaperPaletteImplementation() {
         val skin = source("ui/skin/activity/SkinnedActivity.kt")
         assertTrue(skin.contains("ModernPalette.resolve(this)"))
         assertFalse(source("ui/theme/MonetColors.kt").contains("ModernPalette"))
-        val neutral = skin.substringAfter("internal fun neutralWindowBackground()").substringBefore("internal fun skinFloatingBackground")
+        val neutral = skin.after("internal fun neutralWindowBackground()").before("internal fun skinFloatingBackground")
         assertTrue(neutral.contains("ModernMaterialDrawables.neutralWindow(monetColors)"))
         assertFalse(neutral.contains("prepareSkinSession"))
         assertFalse(neutral.contains("SkinPrefs"))
@@ -50,8 +50,8 @@ class ModernMaterialIntegrationTest {
         assertTrue(renderer.contains("observer.addOnDrawListener(draw)"))
         assertTrue(renderer.contains("observer.removeOnDrawListener(state.draw)"))
         // 登记与批量比较须用同一矩阵乘法次序，避免浮点结合差异造成静止表面反复失效。
-        val registration = renderer.substringAfter("internal fun register(").substringBefore("private fun registerRefreshWindow")
-        val refresh = renderer.substringAfter("private fun flushPositionChanges").substringBefore("fun releaseMemory")
+        val registration = renderer.after("internal fun register(").before("private fun registerRefreshWindow")
+        val refresh = renderer.after("private fun flushPositionChanges").before("fun releaseMemory")
         assertTrue(registration.contains("samplingMatrices.withAncestorMemo"))
         assertTrue(refresh.contains("samplingMatrices.withAncestorMemo"))
         assertTrue(renderer.contains("ValueAnimator.areAnimatorsEnabled()"))

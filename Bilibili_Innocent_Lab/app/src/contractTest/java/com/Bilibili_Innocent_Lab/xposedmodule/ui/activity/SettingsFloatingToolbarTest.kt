@@ -4,6 +4,9 @@ import java.io.File
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 /**
  * 顶部工具栏悬浮层约定：三个按钮连同磨砂表面一起浮在滚动内容之上，
@@ -11,7 +14,7 @@ import org.junit.Test
  */
 class SettingsFloatingToolbarTest {
     private fun source(relative: String): String =
-        sequenceOf(File(relative), File("app/$relative")).first(File::isFile).readText()
+        SourceContract.read(relative)
 
     @Test fun toolbarIsLiftedIntoThePageLayerAboveTheScrollingPages() {
         val home = source(
@@ -38,7 +41,7 @@ class SettingsFloatingToolbarTest {
     @Test fun statusBarAlwaysShowsContentScrollingBehindIt() {
         val home = source(
             "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/SettingsHomePresenter.kt")
-        val install = home.substringAfter("private fun installTopInset()").substringBefore("private fun applyScrollInsets()")
+        val install = home.after("private fun installTopInset()").before("private fun applyScrollInsets()")
         assertTrue(install.contains("ViewCompat.setOnApplyWindowInsetsListener(shell)"))
         assertTrue(install.contains("WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()"))
         // 只接管顶部：左、右、下照旧缩进，底栏与导航栏行为不变。
@@ -52,15 +55,15 @@ class SettingsFloatingToolbarTest {
     @Test fun capsuleItselfIsAnElasticTargetWhileButtonsKeepTheirOwnGroups() {
         val home = source(
             "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/SettingsHomePresenter.kt")
-        val header = home.substringAfter("val header = FrameLayout(activity).apply {")
-            .substringBefore("pageLayer.addView(header")
+        val header = home.after("val header = FrameLayout(activity).apply {")
+            .before("pageLayer.addView(header")
         // 胶囊可点击才能消费 DOWN、成为弹性手势目标：长按拖动磨砂区域时
         // 整条胶囊（含三枚按钮）一起形变位移。
         assertTrue(header.contains("isClickable = true"))
         // 工具栏行必须保持透明：背景若加在行上，弹性提升会把三枚图标并成一个组。
         val main = source(
             "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/MainActivity.kt")
-        val rowInit = main.substringAfter("settingsFloatingToolbar = this").substringBefore("}")
+        val rowInit = main.after("settingsFloatingToolbar = this").before("}")
         assertFalse(rowInit.contains("background ="))
         assertFalse(rowInit.contains("skinFloatingBackground"))
         assertFalse(rowInit.contains("skinTopBarBackground"))
@@ -69,8 +72,8 @@ class SettingsFloatingToolbarTest {
     @Test fun searchRevealStopsBelowTheFloatingHeader() {
         val reveal = source(
             "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/MainActivity.kt")
-            .substringAfter("internal fun revealSettingsSearchTarget(")
-            .substringBefore("private fun launchSettingsBackup()")
+            .after("internal fun revealSettingsSearchTarget(")
+            .before("private fun launchSettingsBackup()")
         assertTrue(reveal.contains("home?.currentHeaderInset"))
         assertTrue(reveal.indexOf("val topOffset") < reveal.indexOf("val desiredY"))
     }
@@ -82,7 +85,7 @@ class SettingsFloatingToolbarTest {
         // 磨砂背景只加在 presenter 包的外壳上。工具栏行若自带背景，弹性手势会按
         // "有表面的控件"把三枚图标并成一个形变组，各自回弹随之失效。
         // 只取行的 init 块（到最近的 } 为止）：子图标各自的圆形背景不算。
-        val rowInit = main.substringAfter("settingsFloatingToolbar = this").substringBefore("}")
+        val rowInit = main.after("settingsFloatingToolbar = this").before("}")
         assertFalse(rowInit.contains("background ="))
         assertFalse(rowInit.contains("skinTopBarBackground"))
     }

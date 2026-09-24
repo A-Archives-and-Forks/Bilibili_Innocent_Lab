@@ -127,6 +127,9 @@ internal class LiquidActivityRenderer(
     private val effectProfile = if (realtimeCaptureRequested && realtimeCaptureSupported) {
         LiquidEffectProfile.REALTIME_CAPTURE
     } else LiquidEffectProfile.STANDARD
+
+    /** 见 [LiquidStaticBackdropHost]：保留实时档参数，但从不发起截图。 */
+    private val staticBackdropHost = activity is LiquidStaticBackdropHost
     private val visualTuning = LiquidVisualTuningPolicy.resolve(
         dark = darkPalette
     )
@@ -136,7 +139,8 @@ internal class LiquidActivityRenderer(
     }
     private val parameters: LiquidParameters = LiquidTokenResolver.resolve(
         tuning = visualTuning,
-        profile = effectProfile
+        profile = effectProfile,
+        dark = darkPalette
     )
     /** 渲染后端的准备、降级链与底图绑定，见 [LiquidBackendSet]。 */
     private val backends = LiquidBackendSet(
@@ -173,16 +177,23 @@ internal class LiquidActivityRenderer(
     private val rootFallbackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = palette.background
     }
-    // 可读性补偿的边缘加深：暗色细描边 + 内缩暗带，只在 edgeDefinition > 0 的悬浮栏上画。
+    // 可读性补偿的边缘：细描边 + 内缩渐变带，只在 edgeDefinition > 0 的悬浮栏上画。
+    // 深色主题用黑（暗边），浅色主题用白（亮边），见 LiquidLegibilityTuning。
+    private val legibilityEdgeColor = if (darkPalette) Color.BLACK else Color.WHITE
+    private val legibilityRingAlpha = if (darkPalette) LiquidLegibilityTuning.EDGE_RING_ALPHA
+        else LiquidLegibilityTuning.EDGE_RING_ALPHA_LIGHT
+    private val legibilityBandPeak = if (darkPalette) LiquidLegibilityTuning.EDGE_BAND_PEAK_ALPHA
+        else LiquidLegibilityTuning.EDGE_BAND_PEAK_ALPHA_LIGHT
+    private val legibilityBandDp = if (darkPalette) LiquidLegibilityTuning.EDGE_BAND_DP
+        else LiquidLegibilityTuning.EDGE_BAND_DP_LIGHT
     private val legibilityRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        color = Color.BLACK
+        color = legibilityEdgeColor
         strokeWidth = density
     }
     private val legibilityBandPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        color = Color.BLACK
-        strokeWidth = LiquidLegibilityTuning.EDGE_BAND_DP * density
+        color = legibilityEdgeColor
     }
     /** 悬浮栏宿主 → 可读性补偿；弱键，不延长 View 生命周期。 */
     private val surfaceLegibility = WeakHashMap<View, GlowLegibility>()
@@ -257,6 +268,24 @@ internal class LiquidActivityRenderer(
     private val realtimeDrawListener = ViewTreeObserver.OnDrawListener {
         if (realtimeIdle) leaveRealtimeIdle(LiquidRealtimeCapturePolicy.WAKE_SETTLE_FRAMES)
     }
+    /**
+     * 主窗口失去焦点（面板、确认框等弹窗盖在上面）期间不发 PixelCopy。
+     *
+     * 弹窗下的主窗口被压暗层盖住，此时的截图没有可见收益；而弹窗入场收尾时主窗口仍会连着
+     * 截 3 张，偶有一张在 RenderThread 上占 12–16ms，正好顶掉面板动画的一帧（2026-09-24
+     * atrace：9 次开面板，打开后 500–580ms 处 copySurfaceInto 12.4/16.0/8.5ms）。
+     * 重新获得焦点时补排一次采集，玻璃立刻跟上弹窗期间的内容变化。
+     */
+    private var windowObscured = false
+    private val windowFocusListener = ViewTreeObserver.OnWindowFocusChangeListener { hasFocus ->
+        if (closed) return@OnWindowFocusChangeListener
+        if (!hasFocus) {
+            windowObscured = true
+        } else if (windowObscured) {
+            windowObscured = false
+            scheduleRealtimeCapture(LiquidRealtimeCapturePolicy.INITIAL_DELAY_MS)
+        }
+    }
     private val realtimeIdleProbe = Runnable {
         if (!realtimeIdle) return@Runnable
         // 探测只需再确认一张：相同就立刻回到静止，不必重新攒两张。
@@ -285,6 +314,15 @@ internal class LiquidActivityRenderer(
      */
     private var lastContentShiftNanos = 0L
     private var realtimeSamplingSuppressed = false
+
+    /**
+     * 本轮抑制完全由形变表面触发（二级页展开/收回），期间没有真实滚动。
+     *
+     * 这种抑制只换采样源、不降级着色：二级页卡片背后只有背景，稳定底图与实时截图几乎一致；
+     * 若同时走 lite，动画结束后解除抑制时整组控件一次性补回散射与色散，rim 光影明显"跳变
+     * 加载"（2026-09-24 用户报告）。真实滚动一旦发生即清零，恢复原来的 lite 降级。
+     */
+    private var suppressionFromMorphOnly = false
     private var scrollSettlePending = false
     private val scrollSettleCheck = Runnable { onScrollSettleCheck() }
     private var stretchOpticalIntensity = 1f
@@ -505,6 +543,7 @@ internal class LiquidActivityRenderer(
         root.viewTreeObserver.addOnScrollChangedListener(scrollListener)
         if (effectProfile == LiquidEffectProfile.REALTIME_CAPTURE) {
             root.viewTreeObserver.addOnDrawListener(realtimeDrawListener)
+            root.viewTreeObserver.addOnWindowFocusChangeListener(windowFocusListener)
         }
 
         rebuildBackdrop(root)
@@ -768,7 +807,8 @@ internal class LiquidActivityRenderer(
                             // 约 6% 的散射混合。短页面里所有玻璃表面都在屏幕上，回弹期跑全量
                             // 散射就是 GPU 墙——用户实测帧间隔 18% 超 12.5ms、`High input
                             // latency` 占 73% 帧，而 UI 线程只占 5.4ms，其余全在 GPU。
-                            motionLite = realtimeSamplingSuppressed || stretchOpticalIntensity > 1f
+                            motionLite = (realtimeSamplingSuppressed && !suppressionFromMorphOnly) ||
+                                stretchOpticalIntensity > 1f
                         )
                     }
                     chrome?.drewByNode = drewChrome
@@ -882,13 +922,14 @@ internal class LiquidActivityRenderer(
     }
 
     /**
-     * 亮背景上的浅色胶囊：暗色细描边勾出轮廓，内缩暗带给出厚度（Apple 称 darkened edge）。
+     * 悬浮栏的边缘定义：细描边勾出轮廓，内缩渐变带给出厚度。深色主题画暗边（Apple 称
+     * darkened edge），浅色主题画亮边（白描边 + 向内渐隐的白带），颜色见 legibilityEdgeColor。
      * 画在白色高光描边之后，两者叠成"外暗内亮"的玻璃边，而不是互相抵消。
      */
     private fun drawLegibilityEdge(canvas: Canvas, bounds: Rect, radiusPx: Float, strength: Float) {
         val ringInset = legibilityRingPaint.strokeWidth * 0.5f
         legibilityRingPaint.alpha =
-            (255f * LiquidLegibilityTuning.EDGE_RING_ALPHA * strength).roundToInt().coerceIn(0, 255)
+            (255f * legibilityRingAlpha * strength).roundToInt().coerceIn(0, 255)
         canvas.drawRoundRect(
             bounds.left + ringInset, bounds.top + ringInset,
             bounds.right - ringInset, bounds.bottom - ringInset,
@@ -896,16 +937,24 @@ internal class LiquidActivityRenderer(
             (radiusPx - ringInset).coerceAtLeast(0f),
             legibilityRingPaint
         )
-        val bandHalf = legibilityBandPaint.strokeWidth * 0.5f
-        legibilityBandPaint.alpha =
-            (255f * LiquidLegibilityTuning.EDGE_BAND_ALPHA * strength).roundToInt().coerceIn(0, 255)
-        canvas.drawRoundRect(
-            bounds.left + bandHalf, bounds.top + bandHalf,
-            bounds.right - bandHalf, bounds.bottom - bandHalf,
-            (radiusPx - bandHalf).coerceAtLeast(0f),
-            (radiusPx - bandHalf).coerceAtLeast(0f),
-            legibilityBandPaint
-        )
+        // 渐变暗带：外沿对齐、宽度递增的描边叠加，贴边最深、向内缓出归零，见 LiquidLegibilityTuning。
+        val bandWidth = legibilityBandDp * density
+        for (step in 1..LiquidLegibilityTuning.EDGE_BAND_STEPS) {
+            val stepAlpha = LiquidLegibilityTuning.edgeBandStepAlpha255(step, strength, legibilityBandPeak,
+                lightProfile = !darkPalette).coerceIn(0, 255)
+            if (stepAlpha == 0) continue
+            val width = bandWidth * step / LiquidLegibilityTuning.EDGE_BAND_STEPS
+            val bandHalf = width * 0.5f
+            legibilityBandPaint.strokeWidth = width
+            legibilityBandPaint.alpha = stepAlpha
+            canvas.drawRoundRect(
+                bounds.left + bandHalf, bounds.top + bandHalf,
+                bounds.right - bandHalf, bounds.bottom - bandHalf,
+                (radiusPx - bandHalf).coerceAtLeast(0f),
+                (radiusPx - bandHalf).coerceAtLeast(0f),
+                legibilityBandPaint
+            )
+        }
     }
 
     private inline fun drawWithFallback(draw: (LiquidBackendDriver) -> Unit) {
@@ -1092,8 +1141,24 @@ internal class LiquidActivityRenderer(
     ) {
         if (closed) return
         registerRefreshWindow(view.rootView)
-        val footprint = surfaceViews[view] ?: LiquidSurfaceFootprint().also {
+        val existing = surfaceViews[view]
+        val footprint = existing ?: LiquidSurfaceFootprint().also {
             surfaceViews[view] = it
+        }
+        // 形变表面（二级页容器展开/收回、预测式返回）：View 本身不动，只有内部矩形在变，
+        // 滚动那条"原点变了就抑制"的判定抓不到。形变期继续折射实时截图，截图里的反馈抑制
+        // 遮罩还是之前某一帧的轮廓，玻璃里就会留下一道旧轮廓的圆角缝，上下两块折射的是
+        // 背景的不同位置——"两个画面割断"，自定义背景下尤其明显（2026-09-24 真机实证：
+        // 关掉实时截图缝即消失）。与滚动同一机制：形变期改采稳定底图，静默后自动回到实时档。
+        if (existing != null && view is LiquidMotionSurfaceFrameProvider && (
+                existing.left != bounds.left || existing.top != bounds.top ||
+                    existing.right != bounds.right || existing.bottom != bounds.bottom ||
+                    existing.radiusPx != radiusPx)
+        ) {
+            lastContentShiftNanos = System.nanoTime()
+            val wasSuppressed = realtimeSamplingSuppressed
+            suppressRealtimeSamplingWhileScrolling()
+            if (!wasSuppressed && realtimeSamplingSuppressed) suppressionFromMorphOnly = true
         }
         footprint.update(bounds, radiusPx, originX, originY)
     }
@@ -1119,6 +1184,8 @@ internal class LiquidActivityRenderer(
         lastContentShiftNanos = System.nanoTime()
         // OnScrollChangedListener 只在真实滚动位移时触发：内容已经在某个表面下方
         // 滑动（哪怕表面自身没动，滞后截屏也会把旧位置像素折射进去），立即抑制。
+        // 真实滚动撤销形变豁免：移动的表面随后按原点重录、自然落到 lite；不在滚动回调里整组重录。
+        suppressionFromMorphOnly = false
         suppressRealtimeSamplingWhileScrolling()
         queueSurfaceRefresh(contentChanged = false)
     }
@@ -1188,6 +1255,7 @@ internal class LiquidActivityRenderer(
             return
         }
         realtimeSamplingSuppressed = false
+        suppressionFromMorphOnly = false
         // 抑制期录制的都是光学直采路径，解除后要重录回折射路径——实时模式下随后的
         // 采集完成会再失效一次；采集已挂起（suspended）时则靠这次失效恢复玻璃观感。
         invalidateRegisteredSurfaces()
@@ -1199,6 +1267,7 @@ internal class LiquidActivityRenderer(
 
     private fun clearScrollSuppression() {
         realtimeSamplingSuppressed = false
+        suppressionFromMorphOnly = false
         if (scrollSettlePending) {
             scrollSettlePending = false
             mainHandler.removeCallbacks(scrollSettleCheck)
@@ -1396,7 +1465,7 @@ internal class LiquidActivityRenderer(
     }
 
     private fun postRealtimeFrameCallback() {
-        if (realtimeFrameCallbackPosted || closed || !activityVisible ||
+        if (realtimeFrameCallbackPosted || closed || !activityVisible || staticBackdropHost || windowObscured ||
             realtimeCaptureSuspended || effectProfile != LiquidEffectProfile.REALTIME_CAPTURE
         ) {
             return
@@ -1466,7 +1535,7 @@ internal class LiquidActivityRenderer(
 
     private fun requestRealtimeCapture(frameTimeNanos: Long) {
         val root = boundRoot ?: return
-        if (closed || !activityVisible || realtimeCaptureSuspended ||
+        if (closed || !activityVisible || realtimeCaptureSuspended || staticBackdropHost || windowObscured ||
             effectProfile != LiquidEffectProfile.REALTIME_CAPTURE ||
             realtimeCaptureInFlight != null || realtimeSamplingSuppressed
         ) {
@@ -1764,6 +1833,9 @@ internal class LiquidActivityRenderer(
         runCatching {
             root?.viewTreeObserver?.takeIf { it.isAlive }?.removeOnDrawListener(realtimeDrawListener)
         }
+        runCatching {
+            root?.viewTreeObserver?.takeIf { it.isAlive }?.removeOnWindowFocusChangeListener(windowFocusListener)
+        }
         resetRealtimeIdle()
         surfaceViews.clear()
         chromeBackdrops.values.forEach(::closeChromeBackdrop)
@@ -1795,8 +1867,11 @@ private const val NANOS_PER_MILLISECOND = 1_000_000L
 /** 模态边框高光的竖向渐隐行程（dp）：顶部提亮只在面板最上方一段可见。 */
 private const val MODAL_EDGE_FADE_DP = 64f
 
-/** 顶沿提亮相对基础描边亮度的倍数；与 BASE_RATIO 相乘约等于 1，底端落回原亮度。 */
-private const val MODAL_EDGE_TOP_BOOST = 2.2f
+/**
+ * 顶沿提亮相对基础描边亮度的倍数；底端落回原亮度。2026-09-24 由 2.2 降到 1.8（与 BASE_RATIO
+ * 相乘约 0.8）：用户要求悬浮栏与面板边缘高光再薄一点。
+ */
+private const val MODAL_EDGE_TOP_BOOST = 1.8f
 private const val MODAL_EDGE_BASE_RATIO = 0.45f
 
 /**

@@ -224,15 +224,19 @@ internal object IconAnchoredMotionSpec {
      * 任何一张都亮：2026-09-17 真机实测同一条左边缘，父面板独自稳定是 87，子面板落位后变成
      * **103**，而且这一跳发生在最后一帧——这就是"末尾边缘抖动"。
      *
-     * 让父面板在最后这段里淡出，终态就只剩一条描边（回到 87），跳变摊进一段行程而不是一帧。
-     * 起点取得很晚是有原因的：到 0.90 时子面板几何上已经几乎盖满父面板，淡出只影响边上
-     * 很窄一圈；再早父面板的正文会当着用户的面褪色。
+     * 让父面板在一段行程里淡出，终态就只剩一条描边（回到 87），跳变摊进一段行程而不是一帧。
+     *
+     * 2026-09-24：重合区"两层玻璃叠亮"改由父面板挖空子面板区域解决（`ModalCardRoot`），
+     * 透明度只负责终点那一圈共边描边，所以要等子面板**完全盖满**才收：0.90 起淡时子面板离
+     * 长满还差 20–50px，外轮廓仍会回缩一截（真机：更新渠道面板底边 2721 → 2774）；更早的
+     * 0.50..0.85 回缩更明显（用户报告"下面面板边缘先往回收再展开"）。
      */
-    const val COVERED_PARENT_FADE_START = 0.90f
+    const val COVERED_PARENT_FADE_START = 0.995f
+    const val COVERED_PARENT_FADE_END = 1f
 
     /** 被盖住的父面板在给定展开进度下的可见度。0＝完全让位给子面板。 */
     internal fun coveredParentAlpha(expansion: Float): Float =
-        1f - smoothStep(COVERED_PARENT_FADE_START, 1f, expansion.coerceIn(0f, 1f))
+        1f - smoothStep(COVERED_PARENT_FADE_START, COVERED_PARENT_FADE_END, expansion.coerceIn(0f, 1f))
 
     internal fun smoothStep(edgeStart: Float, edgeEnd: Float, value: Float): Float {
         if (edgeStart >= edgeEnd) return if (value < edgeStart) 0f else 1f

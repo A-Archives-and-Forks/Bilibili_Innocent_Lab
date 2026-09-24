@@ -5,6 +5,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 /**
  * 可展开标题（实验性功能的「外观」「兼容」、净化/增强进阶的折叠卡标题）必须参与
@@ -32,7 +35,7 @@ class ElasticExpandableRowGateTest {
     }
 
     @Test fun advancedCategoryHeaderParticipatesInTheElasticGesture() {
-        val block = main().substringAfter("val header = NativeLinearLayout(this).apply {")
+        val block = main().after("val header = NativeLinearLayout(this).apply {")
             .take(560)
         assertFalse(block.contains("EXCLUDED_TAG"))
         assertTrue(block.contains("foreground = selfRippleBackground(12f)"))
@@ -41,8 +44,8 @@ class ElasticExpandableRowGateTest {
     /** 排除机制本身要保住：只剩角标不独占手势与 scrub 条自管触摸两处。 */
     @Test fun gestureOwnersStayExcluded() {
         assertEquals(2, main().split("EXCLUDED_TAG").size - 1)
-        val badge = main().substringAfter("githubUpdateBadge = this")
-            .substringBefore("visibility = View.INVISIBLE")
+        val badge = main().after("githubUpdateBadge = this")
+            .before("visibility = View.INVISIBLE")
         assertTrue(badge.contains("ElasticInteractionController.EXCLUDED_TAG"))
     }
 
@@ -52,28 +55,32 @@ class ElasticExpandableRowGateTest {
      * 预算必须由控制器传进去，且取的是弹性行程上限本身。
      */
     @Test fun dragKeepsAFullTravelBudgetInEveryDirection() {
-        val body = interaction().substringAfter("private fun dragTo(")
-            .substringBefore("\n    }")
+        val body = interaction().after("private fun dragTo(")
+            .before("\n    }")
         assertTrue(body.contains("clampToParent("))
         assertTrue(body.contains("drag, limit)"))
     }
 
     /**
      * 「模块已激活」整卡要参与弹性：它原先不可点击，命中测试只能落到右侧诊断按钮上，
-     * 卡面其余区域长按无高光无拖动。轻点整卡＝打开统一功能诊断（与按钮同动作）。
+     * 卡面其余区域长按无高光无拖动。
+     * 2026-09-24 用户要求：轻点整卡不再打开统一功能诊断，入口只有右侧按钮。
      */
     @Test fun activationCardParticipatesInTheElasticGesture() {
-        val block = main().substringAfter("// 首次绘制使用中性确认态").take(820)
+        val block = main().after("// 首次绘制使用中性确认态").take(820)
         assertFalse(block.contains("EXCLUDED_TAG"))
         assertTrue(block.contains("isClickable = true"))
-        assertTrue(block.contains("setOnClickListener { launchDiagnostics() }"))
+        assertFalse("整卡不能再跳转诊断", block.contains("launchDiagnostics()"))
+        assertFalse(block.contains("setOnClickListener"))
+        // 诊断入口只剩右侧按钮这一处。
+        assertEquals(1, Regex(Regex.escape("setOnClickListener { launchDiagnostics() }")).findAll(main()).count())
         assertTrue(block.contains("selfRippleBackground(ActivationCardVisualSpec.CORNER_RADIUS_DP)"))
     }
 
     /** 状态渲染不能把整卡前景的涟漪冲掉：未激活态的 accent 光晕只叠在涟漪之上。 */
     @Test fun activationRendererKeepsTheRippleUnderTheAccent() {
-        val render = main().substringAfter("activationCardView?.apply {")
-            .substringBefore("val activationContentColor")
+        val render = main().after("activationCardView?.apply {")
+            .before("val activationContentColor")
         assertTrue(render.contains("selfRippleBackground(ActivationCardVisualSpec.CORNER_RADIUS_DP)"))
         assertTrue(render.contains("ActivationCardAccentDrawable(accentColor"))
         assertFalse(render.contains("foreground = if (activated) null"))
@@ -85,8 +92,8 @@ class ElasticExpandableRowGateTest {
      * （真机实证：弹窗行的高光是完全矩形，与精心设计的圆角涟漪边缘割裂）。
      */
     @Test fun rippleContentLayerDeclaresTheDesignCorner() {
-        val body = main().substringAfter("internal fun selfRippleBackground(")
-            .substringBefore("\n    }\n")
+        val body = main().after("internal fun selfRippleBackground(")
+            .before("\n    }\n")
         assertTrue(body.contains("val content = GradientDrawable()"))
         assertTrue(body.contains("val mask = GradientDrawable()"))
         assertFalse(body.contains("ColorDrawable(Color.TRANSPARENT)"))
@@ -99,14 +106,14 @@ class ElasticExpandableRowGateTest {
 
     /** 诊断页的自绘涟漪同款：content 与 mask 都要声明圆角。 */
     @Test fun diagnosticsRippleDeclaresTheDesignCorner() {
-        val body = diagnostics().substringAfter("private fun rippleBackground(")
-            .substringBefore("\n    }\n")
+        val body = diagnostics().after("private fun rippleBackground(")
+            .before("\n    }\n")
         assertFalse(body.contains("toDrawable()"))
         assertEquals(2, body.lines().count { it.trimStart().startsWith("cornerRadius = ") })
     }
 
     private fun windowBefore(anchor: String): String =
-        main().substringBefore(anchor).takeLast(360)
+        main().before(anchor).takeLast(360)
 
     private fun main(): String = source(
         "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/MainActivity.kt")
@@ -120,6 +127,16 @@ class ElasticExpandableRowGateTest {
     // 归一化 CRLF：autocrlf 检出会把源码写成 CRLF，substringBefore("\n    }\n")
     // 这类按行锚定的切片会失配、静默退化成整文件尾部（assertTrue 假性通过）。
     private fun source(relative: String): String =
-        sequenceOf(File(relative), File("app/$relative")).first(File::isFile)
-            .readText().replace("\r\n", "\n")
+        SourceContract.read(relative).replace("\r\n", "\n")
+
+    /**
+     * 中性涟漪随主题（2026-09-24 用户报告：浅色下展开/收起条目时开头结尾压一层黑色遮罩；
+     * 真机录屏确认是涟漪，标题行亮度 229.8 → 203.7）。浅色用白色提亮，深色沿用浅灰。
+     */
+    @Test fun neutralRippleBrightensInLightTheme() {
+        val ripple = main().after("internal fun selfRippleBackground(").before("internal fun renderPendingTermsUi(")
+        assertTrue(ripple.contains("val darkTheme = ColorUtils.calculateLuminance(monetColors.surface) < 0.5"))
+        assertTrue(ripple.contains("ColorUtils.setAlphaComponent(Color.WHITE, LIGHT_THEME_RIPPLE_ALPHA)"))
+        assertTrue(ripple.contains("return CoverableRippleDrawable(rippleColor, content, mask)"))
+    }
 }

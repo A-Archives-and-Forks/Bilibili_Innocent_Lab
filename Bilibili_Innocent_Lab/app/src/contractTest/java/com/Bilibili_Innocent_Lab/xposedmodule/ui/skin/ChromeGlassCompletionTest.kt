@@ -8,6 +8,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.material.LensRefractionPol
 import java.io.File
 import org.junit.Assert.*
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
 
 class ChromeGlassCompletionTest {
     @Test fun edgeMappingHasNoClampedPlateauOrReversal() {
@@ -100,10 +101,7 @@ class ChromeGlassCompletionTest {
     }
 
     @Test fun finalChromeProfileKeepsFullOpticsAndConnectsBothParameters() {
-        fun source(name: String): String = sequenceOf(
-            File("src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/$name.kt"),
-            File("app/src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/$name.kt")
-        ).first(File::isFile).readText()
+        fun source(name: String): String = SourceContract.read("src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/$name.kt")
         assertEquals(3f, LiquidChromeGlassPolicy.BLUR_RADIUS_DP, 0f)
         val node = source("liquid/LiquidChromeBackdropApi31")
         assertTrue(node.contains("CHROME_BLUR_RADIUS_DP = LiquidChromeGlassPolicy.BLUR_RADIUS_DP"))

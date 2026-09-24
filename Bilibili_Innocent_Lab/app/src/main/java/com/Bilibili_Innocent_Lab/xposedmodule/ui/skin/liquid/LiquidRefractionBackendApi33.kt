@@ -466,7 +466,9 @@ half4 main(float2 coord) {
         float facingBack = clamp(-dot(grad, lightDirection), 0.0, 1.0);
         float specularLobe = facing * facing * facing
             + 0.3 * facingBack * facingBack * facingBack;
-        float specular = specularLobe * edgeWeight
+        // edgeWeight²：贴边处与原来一样亮，向内收得更快、尾部更柔——高光读作一条细光边，
+        // 而不是铺满整条 rim 带的亮带（2026-09-24 用户要求"边缘高光薄一点，过渡更自然"）。
+        float specular = specularLobe * edgeWeight * edgeWeight
             * specularStrength * edgeBoost * edgeReach;
         color.rgb = mix(color.rgb, half3(1.0), clamp(specular, 0.0, 0.35));
     }

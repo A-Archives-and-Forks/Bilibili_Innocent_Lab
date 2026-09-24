@@ -9,6 +9,9 @@ import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.model.SurfaceRole
 import java.io.File
 import org.junit.Assert.*
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
 
 /** Pure state tests plus source wiring guards; not an Android visual/interaction acceptance test. */
 class LiquidControlStyleTest {
@@ -47,7 +50,7 @@ class LiquidControlStyleTest {
 
     private fun source(relative: String): String {
         val path = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/$relative"
-        return sequenceOf(File(path), File("app/$path")).first(File::isFile).readText()
+        return SourceContract.read(path)
     }
 
     @Test fun `all main activity modal creators use the skin container and shared presenter`() {
@@ -77,7 +80,8 @@ class LiquidControlStyleTest {
         assertTrue(presenter.indexOf("stylePreparedSkinControls(container)") in 0 until presenter.indexOf("dialog.show()"))
         // 面板与底页分离：窗口内必须有随动画进度淡入的压暗层（平台 dim 不可动画，
         // 会硬切在形变/气泡入场之前），且普通退场的淡出由 dismissWithAnimation 同步。
-        assertTrue("弹窗必须铺窗口内压暗层", presenter.contains("MODAL_SCRIM_COLOR"))
+        // 2026-09-24：压暗层颜色随主题（浅色为背景色薄纱），统一经 modalScrimColor() 取。
+        assertTrue("弹窗必须铺窗口内压暗层", presenter.contains("setBackgroundColor(modalScrimColor())"))
         assertTrue("scrim 要注册进 dialogScrims", presenter.contains("dialogScrims[dialog]"))
         assertTrue("scrim alpha 要跟动画进度", presenter.contains("scrim?.alpha"))
         assertTrue("dismissWithAnimation 要同步收 scrim",
@@ -89,7 +93,7 @@ class LiquidControlStyleTest {
 
     @Test fun `control styling is gated and cannot change preferences or listeners`() {
         val skin = source("ui/skin/activity/SkinnedActivity.kt")
-        val controls = skin.substringAfter("protected fun stylePreparedSkinControls").substringBefore("/** 让一个")
+        val controls = skin.after("protected fun stylePreparedSkinControls").before("/** 让一个")
         assertTrue(controls.contains("if (skinSessionOrNull == null || lifecycleEnded) return"))
         listOf("isChecked =", "setOnCheckedChangeListener", "setOnClickListener", "getSharedPreferences",
             "performClick(", "addOnGlobalLayoutListener", "PixelCopy", "RuntimeShader").forEach {
@@ -104,7 +108,7 @@ class LiquidControlStyleTest {
 
     @Test fun `choice drawing caches geometry and has no animator or capture loop`() {
         val drawable = source("ui/skin/liquid/LiquidChoiceDrawable.kt")
-        val draw = drawable.substringAfter("override fun draw(canvas: Canvas)").substringBefore("override fun setAlpha")
+        val draw = drawable.after("override fun draw(canvas: Canvas)").before("override fun setAlpha")
         listOf("Path()", "RectF()", "LinearGradient(", "post", "invalidateSelf()").forEach {
             assertFalse(it, draw.contains(it))
         }
@@ -127,5 +131,19 @@ class LiquidControlStyleTest {
         assertTrue(main.contains("selectedText = monetColors.onPrimary"))
         assertFalse(source("hook/HookEntry.kt").contains("LiquidChoiceDrawable"))
         assertFalse(source("ui/overlay/ReplyTopologyPanelView.kt").contains("LiquidChoiceDrawable"))
+    }
+
+    /** 2026-09-24 用户报告浅色下开关颜色较浅：浅色主题加深轨道，深色配比不变。 */
+    @Test fun `light theme switches keep a contrasting track`() {
+        val drawable = source("ui/skin/liquid/LiquidChoiceDrawable.kt")
+        assertTrue(drawable.contains("private val lightTheme = ColorUtils.calculateLuminance(surface) > 0.5"))
+        fun constant(name: String) = Regex("const val $name = ([0-9.]+)f?").find(drawable)!!.groupValues[1].toFloat()
+        assertTrue(constant("CHECKED_TRACK_WASH_LIGHT") > constant("CHECKED_TRACK_WASH"))
+        assertEquals(0.42f, constant("CHECKED_TRACK_WASH"), 0f)
+        assertTrue(constant("UNCHECKED_TRACK_SHADE_LIGHT") > 0f)
+        // 只给开关轨道铺灰；复选框没有滑块，铺灰只会得到深灰方块（2026-09-24 用户报告）。
+        assertTrue(drawable.contains("lightTheme && !thumb && !checkbox -> ColorUtils.blendARGB(surface, outline, UNCHECKED_TRACK_SHADE_LIGHT)"))
+        assertTrue(drawable.contains("lightTheme && !thumb && !(checkbox && !checked)"))
+        assertTrue(constant("UNCHECKED_EDGE_ALPHA_LIGHT") > 46f)
     }
 }

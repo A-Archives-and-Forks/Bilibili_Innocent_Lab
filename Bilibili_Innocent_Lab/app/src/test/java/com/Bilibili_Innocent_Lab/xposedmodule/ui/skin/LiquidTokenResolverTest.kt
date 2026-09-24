@@ -178,4 +178,14 @@ class LiquidTokenResolverTest {
             }
         }
     }
+
+    /** 2026-09-24：浅色玻璃不画内阴影（rim 中段压暗在近白表面上读作"向里发灰"），深色保留。 */
+    @Test fun lightPaletteDropsTheInnerShadow() {
+        val tuning = LiquidVisualTuningPolicy.resolve(dark = false)
+        val light = LiquidTokenResolver.resolve(tuning, LiquidEffectProfile.REALTIME_CAPTURE, dark = false)
+        val dark = LiquidTokenResolver.resolve(tuning, LiquidEffectProfile.REALTIME_CAPTURE, dark = true)
+        assertEquals(0f, light.innerShadowStrength, 0f)
+        assertTrue(dark.innerShadowStrength > 0f)
+        assertEquals(light.copy(innerShadowStrength = dark.innerShadowStrength), dark)
+    }
 }

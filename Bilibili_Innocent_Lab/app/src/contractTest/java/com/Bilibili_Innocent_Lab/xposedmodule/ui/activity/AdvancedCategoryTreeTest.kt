@@ -3,6 +3,8 @@ package com.Bilibili_Innocent_Lab.xposedmodule.ui.activity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 /**
  * 进阶设置分类在**真实控件树**里的接线约束。
@@ -39,8 +41,8 @@ class AdvancedCategoryTreeTest {
     /** 从源码读枚举的声明顺序与所属分区，避免在测试里抄一份。 */
     private fun declaredCategories(): List<Pair<String, String>> {
         val body = SettingsUiSource.mainActivity()
-            .substringAfter("enum class AdvancedSettingsCategory(")
-            .substringBefore("val collapsible: Boolean")
+            .after("enum class AdvancedSettingsCategory(")
+            .before("val collapsible: Boolean")
         return Regex("""^\s{8}(\w+)\(SettingsSearchSection\.(\w+),""", RegexOption.MULTILINE)
             .findAll(body)
             .map { it.groupValues[1] to it.groupValues[2] }

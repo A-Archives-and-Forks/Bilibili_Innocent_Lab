@@ -3,6 +3,8 @@ package com.Bilibili_Innocent_Lab.xposedmodule.ui.activity
 import java.io.File
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 /**
  * 手风琴分节动画的接线护栏（源码断言，与 AdaptiveGlowRenderGuardTest 同款思路）。
@@ -24,8 +26,8 @@ class SectionExpansionWiringTest {
 
     @Test fun sectionToggleDelegatesToTheProgressDrivenController() {
         val activity = source("ui/activity/MainActivity.kt")
-        val body = activity.substringAfter("private fun animateSecondarySection")
-            .substringBefore("override fun onStart")
+        val body = activity.after("private fun animateSecondarySection")
+            .before("override fun onStart")
         assertTrue("animateSecondarySection 必须委托 SectionExpansionController",
             body.contains("SectionExpansionController"))
         assertTrue("controller 必须吃到 Liquid 位移通知入口",
@@ -34,8 +36,8 @@ class SectionExpansionWiringTest {
 
     @Test fun controllerNotifiesTheRendererOnEveryFrame() {
         val controller = source("ui/activity/SectionExpansionController.kt")
-        val frameBody = controller.substringAfter("override fun onPreDraw(): Boolean")
-            .substringBefore("private fun applyScrollFollow()")
+        val frameBody = controller.after("override fun onPreDraw(): Boolean")
+            .before("private fun applyScrollFollow()")
         assertTrue("先落地本帧位移，再通知皮肤读取位置",
             frameBody.contains("for (notify in positionNotifications) notify()") &&
                 frameBody.indexOf("offsets.commit()") <
@@ -46,18 +48,18 @@ class SectionExpansionWiringTest {
 
     @Test fun collapseDefersOffsetResetUntilLayoutLands() {
         val controller = source("ui/activity/SectionExpansionController.kt")
-        val finishBody = controller.substringAfter("private fun finish(")
-            .substringBefore("/** 无动画直达")
+        val finishBody = controller.after("private fun finish(")
+            .before("/** 无动画直达")
         assertTrue("收尾必须把 content 置回 GONE",
             finishBody.contains("View.GONE"))
         assertTrue("GONE 触发的重布局要等布局生效帧——offsets 复位必须挂在 preDraw 上，" +
             "同帧清零会让兄弟控件先回弹再被布局顶回（2026-09-23 真机实证的下层跳变）",
             controller.contains("observer.addOnPreDrawListener(this)") && finishBody.contains("retiring = true"))
         assertTrue("反转撤回退休，旧收尾不能清掉新一轮共享贡献",
-            controller.substringAfter("fun setExpanded(").substringBefore("private fun beginExpandSetup")
+            controller.after("fun setExpanded(").before("private fun beginExpandSetup")
                 .contains("retiring = false"))
-        val preDraw = controller.substringAfter("override fun onPreDraw(): Boolean")
-            .substringBefore("private fun applyScrollFollow()")
+        val preDraw = controller.after("override fun onPreDraw(): Boolean")
+            .before("private fun applyScrollFollow()")
         assertTrue("必须先移除退休贡献，再读取剩余控制器的布局高度",
             preDraw.indexOf("controller.resetOffsets()") < preDraw.indexOf("val measuredHeight = controller.content.height"))
     }
@@ -86,7 +88,7 @@ class SectionExpansionWiringTest {
      */
     @Test fun everyShrinkingAncestorIsClippedAlongWithTheCard() {
         val controller = source("ui/activity/SectionExpansionController.kt")
-        val capture = controller.substringAfter("private fun captureActors()")
+        val capture = controller.after("private fun captureActors()")
             .substringBefore("private fun clipLayer(", "MISSING")
         assertTrue("captureActors 必须能取到（函数名或结构变了就要同步这条护栏）",
             capture != "MISSING")
@@ -98,7 +100,7 @@ class SectionExpansionWiringTest {
         assertTrue("兄弟收集要从 content 起步，卡内位于 content 之后的控件同样要滑行",
             capture.contains("var node: View? = content"))
 
-        val applyClip = controller.substringAfter("private fun applyClip(")
+        val applyClip = controller.after("private fun applyClip(")
             .substringBefore("private fun applyScrollFollow(", "MISSING")
         assertTrue(applyClip != "MISSING")
         assertTrue("所有层共用同一个收缩量（内容高度的未完成部分），否则各层不同速",
@@ -121,7 +123,7 @@ class SectionExpansionWiringTest {
         val controller = source("ui/activity/SectionExpansionController.kt")
         assertTrue("原值必须落在按 View 共用的登记表里，不能每个控制器各存一份",
             controller.contains("WeakHashMap<View, ClipTakeover>"))
-        val takeover = controller.substringAfter("private class ClipTakeover(")
+        val takeover = controller.after("private class ClipTakeover(")
             .substringBefore("private var clipLayers", "MISSING")
         assertTrue(takeover != "MISSING")
         assertTrue("原值只在接管权创建时取一次",
@@ -133,7 +135,7 @@ class SectionExpansionWiringTest {
                 takeover.contains("view.outlineProvider = original.provider"))
         assertTrue("新占用者加入时必须重取封顶高，否则按'它不存在'时的旧高度封顶",
             takeover.contains("fullHeight = view.height"))
-        val clear = controller.substringAfter("private fun clearClip()")
+        val clear = controller.after("private fun clearClip()")
             .substringBefore("private fun finish(", "MISSING")
         assertTrue(clear != "MISSING")
         assertTrue("交还时才把登记表项摘掉，且只摘无人占用的那一项",
@@ -150,7 +152,7 @@ class SectionExpansionWiringTest {
      */
     @Test fun clippedSurfacesAreReboundedToTheRectBeingDrawn() {
         val controller = source("ui/activity/SectionExpansionController.kt")
-        val takeover = controller.substringAfter("private class ClipTakeover(")
+        val takeover = controller.after("private class ClipTakeover(")
             .substringBefore("private var clipLayers", "MISSING")
         assertTrue(takeover != "MISSING")
         assertTrue("逐帧必须把裁剪矩形交给背景 drawable，否则整段动画缺下缘光",
@@ -165,7 +167,7 @@ class SectionExpansionWiringTest {
      */
     @Test fun theViewportRidesTheCollapseInsteadOfBeingClampedAtTheEnd() {
         val controller = source("ui/activity/SectionExpansionController.kt")
-        val follow = controller.substringAfter("private class ScrollFollow(")
+        val follow = controller.after("private class ScrollFollow(")
             .substringBefore("private companion object", "MISSING")
         assertTrue(follow != "MISSING")
         assertTrue("共享视口终点按合成后的收缩量计算，不能重复扣子级",
@@ -181,7 +183,7 @@ class SectionExpansionWiringTest {
      */
     @Test fun theRevealEdgeIsMeasuredOnTheContentItself() {
         val controller = source("ui/activity/SectionExpansionController.kt")
-        val apply = controller.substringAfter("private fun apply(offsets: MotionOffsets)")
+        val apply = controller.after("private fun apply(offsets: MotionOffsets)")
             .substringBefore("private fun applyClip(", "MISSING")
         assertTrue(apply != "MISSING")
         assertTrue("揭示沿必须扣除后代收缩，且不包含卡片内边距",

@@ -4,19 +4,21 @@ import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
 
 /** 接线回归，不替代设备触摸、动画帧或渲染性能验证。 */
 class BubbleMotionIntegrationTest {
     private fun source(name: String): String {
         val path = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/$name.kt"
-        return sequenceOf(File(path), File("app/$path")).first(File::isFile).readText()
+        return SourceContract.read(path)
     }
 
     @Test
     fun `late entry cannot reopen a closing or dismissed bubble`() {
         val source = source("BubbleMotionController")
         listOf("prepareFirstFrame", "startEntry").forEach { name ->
-            assertTrue(source.substringAfter("fun $name() {").trimStart()
+            assertTrue(source.after("fun $name() {").trimStart()
                 .startsWith("if (state != MotionState.PREPARING_ENTRY) return"))
         }
         assertTrue(source("MainActivity").contains("if (!dialog.isShowing || bubbleController.isClosing) return true"))

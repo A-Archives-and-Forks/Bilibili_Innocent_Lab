@@ -4,6 +4,8 @@ import java.io.File
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 /**
  * 换上新 drawable 之后必须立刻把 View 当前状态推给它（2026-09-22 真机实证）。
@@ -25,22 +27,22 @@ class ControlDrawableStateHandoffTest {
     @Test fun theSkinControlPassRefreshesStateAfterSwappingDrawables() {
         val activity = source("ui/skin/activity/SkinnedActivity.kt")
         val pass = activity.substringAfter("protected fun stylePreparedSkinControls(", "MISSING")
-            .substringBefore("/** Shared modern controls")
+            .before("/** Shared modern controls")
         assertNotEquals("MISSING", pass)
 
-        val switchBranch = pass.substringAfter("is SwitchCompat -> {").substringBefore("is CheckBox ->")
+        val switchBranch = pass.after("is SwitchCompat -> {").before("is CheckBox ->")
         assertTrue("开关换 drawable 后必须刷新状态", switchBranch.contains("refreshDrawableState()"))
         assertTrue(switchBranch.indexOf("thumbDrawable = choice(") <
             switchBranch.indexOf("refreshDrawableState()"))
 
-        val checkBoxBranch = pass.substringAfter("is CheckBox -> {").substringBefore("is EditText ->")
+        val checkBoxBranch = pass.after("is CheckBox -> {").before("is EditText ->")
         assertTrue("复选框换 drawable 后必须刷新状态", checkBoxBranch.contains("refreshDrawableState()"))
     }
 
     @Test fun theSelfAppliedMonetStyleRefreshesStateToo() {
         val view = source("ui/view/MaterialSwitch.kt")
         val apply = view.substringAfter("private fun applyMonetStyle()", "MISSING")
-            .substringBefore("private fun trackColors(")
+            .before("private fun trackColors(")
         assertNotEquals("MISSING", apply)
         assertTrue("弹窗里的开关自取 Monet 配色后同样要刷新状态",
             apply.contains("refreshDrawableState()"))

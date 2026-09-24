@@ -109,13 +109,58 @@ internal object LiquidVisualTuningPolicy {
  * - boost：着色不透明度最多加 [TINT_RANGE]。
  * - edgeDefinition：一圈暗色描边 + 一条内缩暗带，把浅色胶囊从亮背景里分出来。都画在表面
  *   自身范围内——底栏 `clipToOutline`，画到外面的投影会被裁掉。
+ *
+ * 暗带是**渐变**的：贴边最深、按 (1−t)³ 缓出到 [EDGE_BAND_DP] 处归零。2026-09-24 浅色模式
+ * 真机取样：原来 8dp 等宽匀色暗带在内沿处从 225 硬跳到 237，读成"胶囊里套了一圈灰框"，
+ * 边缘与中心过渡生硬。改用 [EDGE_BAND_STEPS] 条外沿对齐、宽度递增的描边叠出坡度：
+ * 每条描边外沿都与表面边缘重合，只有内沿各不相同，所以没有接缝，也不需要离屏层或 shader。
+ *
+ * 边缘颜色随主题：深色用黑（暗边），浅色用白（亮边）。2026-09-24 用户反馈浅色下两条胶囊
+ * 的边缘和深色一样发深、显脏；浅色玻璃的边应读作被照亮的亮边，由白色描边 + 向内渐隐的
+ * 白色亮带表达，剖面与暗带相同，只换颜色和强度（[EDGE_RING_ALPHA_LIGHT]、
+ * [EDGE_BAND_PEAK_ALPHA_LIGHT]）。
  */
 internal object LiquidLegibilityTuning {
     const val TINT_RANGE = 0.3f
     const val MAX_TINT_ALPHA = 0.92f
-    const val EDGE_RING_ALPHA = 0.16f
-    const val EDGE_BAND_ALPHA = 0.06f
-    const val EDGE_BAND_DP = 8f
+    const val EDGE_RING_ALPHA = 0.08f
+    const val EDGE_BAND_PEAK_ALPHA = 0.10f
+    const val EDGE_RING_ALPHA_LIGHT = 0.55f
+
+    /**
+     * 浅色亮带：比暗带更宽、更强、衰减更缓（二次方），亮色一路缓缓过渡进去。2026-09-24 真机：
+     * 0.30 峰值 + 14dp 三次方时，亮边约 10px 内就落回表面本色，内部读作灰；底栏 rim 还因折射
+     * 采到栏外较暗像素，内侧有一道 231 的暗带，需要亮带盖住。
+     */
+    const val EDGE_BAND_PEAK_ALPHA_LIGHT = 0.55f
+    const val EDGE_BAND_DP_LIGHT = 18f
+    const val EDGE_BAND_DP = 14f
+    const val EDGE_BAND_STEPS = 16
+
+    /**
+     * 距外沿第 [index] 级（1 起）处的目标暗度：(1−t)³ 缓出，贴边最深、内沿切线趋平，
+     * 与中心无折角。2026-09-24 用户要求"过渡还要更细腻"：由 (1−t)² / 10 级改为三次方 / 16 级。
+     */
+    fun edgeBandDepthAlpha(index: Int, peak: Float = EDGE_BAND_PEAK_ALPHA, lightProfile: Boolean = false): Float {
+        if (index < 1 || index > EDGE_BAND_STEPS) return 0f
+        val t = (index - 0.5f) / EDGE_BAND_STEPS
+        val f = 1f - t
+        return if (lightProfile) peak * f * f else peak * f * f * f
+    }
+
+    /**
+     * 第 [step] 条描边（宽 = step/N × 暗带宽）的 8 位 alpha。按**累积目标先取整再差分**：
+     * 逐条取整会让 1~2 级的小差值忽大忽小，叠出不均匀的细台阶。
+     */
+    fun edgeBandStepAlpha255(
+        step: Int,
+        strength: Float,
+        peak: Float = EDGE_BAND_PEAK_ALPHA,
+        lightProfile: Boolean = false
+    ): Int {
+        fun cumulative(index: Int) = (255f * edgeBandDepthAlpha(index, peak, lightProfile) * strength).roundToInt()
+        return (cumulative(step) - cumulative(step + 1)).coerceAtLeast(0)
+    }
 
     /** 加厚上限：基线 + [TINT_RANGE]，不超过 [MAX_TINT_ALPHA]，也不低于基线。 */
     fun ceiling(base: Float): Float = (base + TINT_RANGE).coerceAtMost(MAX_TINT_ALPHA).coerceAtLeast(base)

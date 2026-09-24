@@ -58,6 +58,19 @@ internal object BubbleLayerMotionSpec {
         smooth(0f, 0.035f, progress) * (1f - smooth(0.05f, 0.26f, progress))
 
     /**
+     * 浅色主题下飞行副本的额外不透明度系数。
+     *
+     * 图标在浅色主题里是深灰，副本以接近满不透明从按钮飞到面板中央，读作"一个深色图标划过
+     * 面板"（2026-09-24 用户报告浅色下仍有深色的形变动画，逐帧确认）。深色主题下图标是浅色，
+     * 看不出。交接段（`p < 0.035`，副本仍压在按钮原位、与真实图标此消彼长）保持 1，
+     * 不破坏两者的总量守恒；离开原位后才降到 [LIGHT_THEME_TRAVEL_OPACITY]。
+     */
+    fun lightThemeTravelFactor(progress: Float): Float =
+        1f - (1f - LIGHT_THEME_TRAVEL_OPACITY) * smooth(0.035f, 0.1f, progress)
+
+    const val LIGHT_THEME_TRAVEL_OPACITY = 0.35f
+
+    /**
      * 真实来源图标的权重，**恒等于 1 减去图标层的不透明度**——来源位置的图案总量守恒。
      *
      * 原来是一条单调降到 0 的曲线（只交出、不接回），靠 [BubblePanelLayer.settleExpanded] 在
@@ -69,7 +82,17 @@ internal object BubbleLayerMotionSpec {
      * 只是幽灵淡出的同一段里真实图标淡回原位，末端精确回到 1。收起方向由同一进度反向推进，
      * 自动对称，不需要第二条曲线。
      */
-    fun sourceIconWeight(progress: Float): Float = 1f - iconOpacity(progress)
+    fun sourceIconWeight(progress: Float, lightTheme: Boolean = false): Float =
+        1f - proxyIconOpacity(progress, lightTheme)
+
+    /**
+     * 飞行副本的实际不透明度：浅色下乘 [lightThemeTravelFactor]。真实图标按它互补
+     * （[sourceIconWeight]），按钮原位的图案总量在两种主题下都守恒——只按未压淡的曲线互补时，
+     * 浅色下副本变淡而真实图标还没回来，按钮短暂"没有图标"，读作亮闪（2026-09-24 真机：
+     * 图标区 190 → 243 → 209）。
+     */
+    fun proxyIconOpacity(progress: Float, lightTheme: Boolean = false): Float =
+        iconOpacity(progress) * if (lightTheme) lightThemeTravelFactor(progress) else 1f
 
     fun contourMix(progress: Float): Float = 1f - smooth(0.03f, 0.14f, progress)
 

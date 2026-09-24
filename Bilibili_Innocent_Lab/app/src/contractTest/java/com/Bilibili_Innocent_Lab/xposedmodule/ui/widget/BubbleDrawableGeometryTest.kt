@@ -5,6 +5,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
 
 /** 气泡路径几何：箭头底边必须落在圆角之外的直边上，描边必须留在 View 边界内。 */
 class BubbleDrawableGeometryTest {
@@ -63,5 +64,5 @@ class BubbleDrawableGeometryTest {
     }
 
     private fun source(relative: String): String =
-        sequenceOf(File(relative), File("app/$relative")).first(File::isFile).readText()
+        SourceContract.read(relative)
 }

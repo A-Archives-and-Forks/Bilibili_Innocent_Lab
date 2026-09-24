@@ -121,6 +121,90 @@ android {
         baseline = file("lint-baseline.xml")
     }
 
+    sourceSets {
+        getByName("test") {
+            // 源码契约测试（读取生产源码文本的"护栏"）独立成目录，与行为测试编进同一个
+            // 单测任务；分层运行与反向查询见下方 innocentLab.testLayer / contractsFor。
+            kotlin.directories.add("src/contractTest/java")
+        }
+    }
+}
+
+// ---- 测试分层 ----
+// 行为测试（src/test/java）与源码契约测试（src/contractTest/java）共用 testDebugUnitTest。
+// 不带属性时两层全跑（本地门禁与改动前完全一致）；CI 用
+//   -PinnocentLab.testLayer=unit      只跑行为测试
+//   -PinnocentLab.testLayer=contract  只跑源码契约
+// 分成两个带名字的步骤，失败时一眼看出是逻辑坏了还是写法约束没同步。
+val contractTestRoot: File = file("src/contractTest/java")
+
+fun contractTestClassNames(): List<String> = contractTestRoot.walkTopDown()
+    .filter { it.isFile && it.extension == "kt" }
+    .flatMap { source ->
+        val text = source.readText()
+        val pkg = Regex("^package ([\\w.]+)", RegexOption.MULTILINE).find(text)?.groupValues?.get(1)
+        if (pkg == null) emptySequence()
+        else Regex("^(?:internal |public )?class (\\w+)", RegexOption.MULTILINE).findAll(text)
+            .map { "$pkg.${it.groupValues[1]}" }
+    }
+    .toList()
+
+val testLayer = providers.gradleProperty("innocentLab.testLayer").orNull?.trim()?.takeIf { it.isNotEmpty() }
+if (testLayer != null) {
+    if (testLayer != "unit" && testLayer != "contract") {
+        throw GradleException("innocentLab.testLayer must be 'unit' or 'contract', got '$testLayer'")
+    }
+    val contractClasses = contractTestClassNames()
+    if (contractClasses.isEmpty()) throw GradleException("No contract test classes found under $contractTestRoot")
+    tasks.withType<Test>().configureEach {
+        filter {
+            isFailOnNoMatchingTests = true
+            if (testLayer == "contract") contractClasses.forEach { includeTestsMatching(it) }
+            else contractClasses.forEach { excludeTestsMatching(it) }
+        }
+    }
+}
+
+// ---- 契约反向查询 ----
+// 改功能之前先查：哪些契约测试锚定了要改的文件/函数，一起同步。
+//   ./gradlew :app:contractsFor -PinnocentLab.contractTarget=LiquidActivityRenderer.kt
+//   ./gradlew :app:contractsFor -PinnocentLab.contractTarget=presentSizedModalDialog
+//   ./gradlew :app:contractsFor -PinnocentLab.contractTarget=changed   （按 git 工作区改动）
+tasks.register("contractsFor") {
+    group = "verification"
+    description = "Lists source-contract tests that reference the given production file or symbol."
+    val target = providers.gradleProperty("innocentLab.contractTarget")
+    val root = contractTestRoot
+    val repoDir = rootDir.parentFile
+    doLast {
+        val requested = target.orNull?.trim()?.takeIf { it.isNotEmpty() }
+            ?: throw GradleException("Pass -PinnocentLab.contractTarget=<File.kt | symbol | changed>")
+        val symbols = if (requested == "changed") {
+            val process = ProcessBuilder("git", "diff", "--name-only", "HEAD")
+                .directory(repoDir).redirectErrorStream(true).start()
+            val output = process.inputStream.bufferedReader().readText()
+            process.waitFor()
+            output.lines()
+                .filter { it.contains("/src/main/") && it.endsWith(".kt") }
+                .map { it.substringAfterLast('/').removeSuffix(".kt") }
+        } else {
+            requested.split(',').map { it.trim().substringAfterLast('/').removeSuffix(".kt") }.filter { it.isNotEmpty() }
+        }
+        if (symbols.isEmpty()) {
+            println("No changed production Kotlin files.")
+            return@doLast
+        }
+        val contracts = root.walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
+        for (symbol in symbols) {
+            val pattern = Regex("\\b" + Regex.escape(symbol) + "\\b")
+            val hits = contracts.mapNotNull { file ->
+                val count = pattern.findAll(file.readText()).count()
+                if (count > 0) file.relativeTo(root).path.replace('\\', '/') to count else null
+            }.sortedByDescending { it.second }
+            println("== $symbol: ${hits.size} contract file(s)")
+            hits.forEach { (path, count) -> println("   $count  $path") }
+        }
+    }
 }
 
 gradle.taskGraph.whenReady {

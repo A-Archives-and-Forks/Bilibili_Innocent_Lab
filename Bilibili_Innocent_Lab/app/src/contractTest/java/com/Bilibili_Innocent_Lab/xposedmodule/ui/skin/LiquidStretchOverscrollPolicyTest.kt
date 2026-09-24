@@ -8,6 +8,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 class LiquidStretchOverscrollPolicyTest {
 
@@ -198,16 +201,16 @@ class LiquidStretchOverscrollPolicyTest {
     @Test
     fun `catching a rebound takes the whole gesture away from the content`() {
         val base = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui"
-        fun read(path: String) = sequenceOf(File("$base/$path"), File("app/$base/$path")).first(File::isFile).readText()
+        fun read(path: String) = SourceContract.read("$base/$path")
         val viewport = read("skin/liquid/LiquidStretchViewport.kt")
-        val dispatch = viewport.substringAfter("override fun dispatchTouchEvent(").substringBefore("override fun onInterceptTouchEvent(")
+        val dispatch = viewport.after("override fun dispatchTouchEvent(").before("override fun onInterceptTouchEvent(")
         assertTrue("只有真的接住了回弹才接管", dispatch.contains("stopEffectsForTouch()") &&
             viewport.contains("private fun stopEffectsForTouch(): Boolean") && viewport.contains("return stopped"))
         assertTrue("不允许回弹时照旧清零，不接管", dispatch.contains("finishStretch()\n                false"))
         assertTrue("手势结束必须复位接管标记", dispatch.indexOf("super.dispatchTouchEvent(event)") in
             0 until dispatch.indexOf("catchingStretch = false"))
         assertTrue(viewport.contains("catchingStretch || super.onInterceptTouchEvent(event)"))
-        val touch = viewport.substringAfter("override fun onTouchEvent(").substringBefore("override fun draw(")
+        val touch = viewport.after("override fun onTouchEvent(").before("override fun draw(")
         assertTrue(touch.contains("if (!catchingStretch) return super.onTouchEvent(event)"))
         assertTrue("交给滚动容器的 onTouchEvent，不经它的子 View", touch.contains("scrollTarget.onTouchEvent(forwarded)") &&
             !touch.contains("scrollTarget.dispatchTouchEvent"))
@@ -222,7 +225,7 @@ class LiquidStretchOverscrollPolicyTest {
         // 设置页的滚动容器在 dispatchTouchEvent 里观察手势，接管路径必须同样通知它。
         val scroll = read("activity/SettingsHomeScrollView.kt")
         assertTrue(scroll.contains("LiquidStretchGestureObserver"))
-        val scrollDispatch = scroll.substringAfter("override fun dispatchTouchEvent(").substringBefore("override fun observeTouch(")
+        val scrollDispatch = scroll.after("override fun dispatchTouchEvent(").before("override fun observeTouch(")
         assertTrue(scrollDispatch.indexOf("observeTouch(event)") in 0 until scrollDispatch.indexOf("super.dispatchTouchEvent(event)"))
     }
 }

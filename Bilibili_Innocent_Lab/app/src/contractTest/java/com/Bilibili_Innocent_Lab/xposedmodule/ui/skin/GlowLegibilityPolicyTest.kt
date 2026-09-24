@@ -12,6 +12,9 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
 
 /** 2026-09-23 悬浮栏可读性改造 A 期：补偿策略、溶解几何与探针统计的纯函数约束。 */
 class GlowLegibilityPolicyTest {
@@ -162,5 +165,44 @@ class GlowLegibilityPolicyTest {
             assertEquals(ceiling, LiquidLegibilityTuning.tintAlpha(base, 1f), 1e-6f)
             assertEquals((base + ceiling) / 2f, LiquidLegibilityTuning.tintAlpha(base, 0.5f), 1e-6f)
         }
+    }
+
+    /** 2026-09-24 浅色模式：暗带由等宽匀色改为贴边最深、向内单调缓出归零，内沿不能有台阶。 */
+    @Test fun edgeBandFadesInwardWithoutAStep() {
+        val steps = LiquidLegibilityTuning.EDGE_BAND_STEPS
+        assertTrue(steps >= 12)
+        val depth = (1..steps).map(LiquidLegibilityTuning::edgeBandDepthAlpha)
+        for (j in 1 until steps) assertTrue(depth[j] < depth[j - 1])
+        assertTrue(depth.first() <= LiquidLegibilityTuning.EDGE_BAND_PEAK_ALPHA)
+        // 最内一级接近 0：内沿与中心之间没有可见台阶。
+        assertTrue(depth.last() < LiquidLegibilityTuning.EDGE_BAND_PEAK_ALPHA * 0.001f)
+        for (strength in listOf(1f, 0.5f, 0.25f)) {
+            val alphas = (1..steps).map { LiquidLegibilityTuning.edgeBandStepAlpha255(it, strength) }
+            assertTrue(alphas.all { it >= 0 })
+            // 各条之和就是贴边处的总暗度（先取整再差分，累积不丢量化余数）。
+            assertEquals(Math.round(255f * depth.first() * strength), alphas.sum())
+            // 每级 8 位差不超过 4（每级约 3px，折合每像素约 1 级灰度）：没有肉眼可见的细台阶。
+            assertTrue(alphas.all { it <= 4 })
+        }
+        assertEquals(0, LiquidLegibilityTuning.edgeBandStepAlpha255(steps + 1, 1f))
+    }
+
+    /** 2026-09-24：边缘颜色随主题，浅色画亮边而不是和深色一样的暗边（用户反馈浅色下边缘发脏）。 */
+    @Test fun edgeDefinitionFollowsTheTheme() {
+        val path = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/liquid/LiquidActivityRenderer.kt"
+        val renderer = SourceContract.read(path)
+        assertTrue(renderer.contains("private val legibilityEdgeColor = if (darkPalette) Color.BLACK else Color.WHITE"))
+        val paints = renderer.after("private val legibilityRingPaint").before("/** 悬浮栏宿主")
+        assertTrue(!paints.contains("Color.BLACK"))
+        val edge = renderer.after("private fun drawLegibilityEdge(").before("private inline fun drawWithFallback")
+        assertTrue(edge.contains("legibilityRingAlpha"))
+        assertTrue(edge.contains("edgeBandStepAlpha255(step, strength, legibilityBandPeak,"))
+        assertTrue(edge.contains("lightProfile = !darkPalette"))
+        assertTrue(LiquidLegibilityTuning.EDGE_BAND_DP_LIGHT >= LiquidLegibilityTuning.EDGE_BAND_DP)
+        // 亮边要比暗边强：白色叠在近白表面上，同样的 alpha 几乎看不见。
+        assertTrue(LiquidLegibilityTuning.EDGE_RING_ALPHA_LIGHT > LiquidLegibilityTuning.EDGE_RING_ALPHA)
+        assertTrue(LiquidLegibilityTuning.EDGE_BAND_PEAK_ALPHA_LIGHT > LiquidLegibilityTuning.EDGE_BAND_PEAK_ALPHA)
+        assertEquals(LiquidLegibilityTuning.edgeBandDepthAlpha(1) * 3f,
+            LiquidLegibilityTuning.edgeBandDepthAlpha(1, LiquidLegibilityTuning.EDGE_BAND_PEAK_ALPHA * 3f), 1e-6f)
     }
 }

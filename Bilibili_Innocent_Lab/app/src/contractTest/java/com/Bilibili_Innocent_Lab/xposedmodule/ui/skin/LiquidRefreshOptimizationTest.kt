@@ -6,6 +6,9 @@ import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid.LiquidSurfaceRefres
 import java.io.File
 import org.junit.Assert.*
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
 
 class LiquidRefreshOptimizationTest {
     @Test fun `horizontal thumb travel does not rebuild the vertical gradient`() {
@@ -85,21 +88,21 @@ class LiquidRefreshOptimizationTest {
 
     private fun source(file: String): String {
         val path = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/liquid/$file.kt"
-        return sequenceOf(File(path), File("app/$path")).first(File::isFile).readText()
+        return SourceContract.read(path)
     }
 
     @Test fun `drawable bounds path gates shader creation and does not allocate switch ticks`() {
         val drawable = source("LiquidChoiceDrawable")
         assertTrue(drawable.contains("private val tick = if (checkbox) Path() else null"))
         assertTrue(drawable.contains("private val mark = if (checkbox) Paint"))
-        val update = drawable.substringAfter("private fun updatePaints()").substringBefore("override fun draw")
+        val update = drawable.after("private fun updatePaints()").before("override fun draw")
         assertTrue(update.indexOf("if (gradientCache.update(") in 0 until update.indexOf("LinearGradient("))
         assertTrue(update.contains("gradientCache.update(rect.top, bottom, startColor, endColor)"))
     }
 
     @Test fun `culling retains scroll hooks transforms stretch and capture-time mask ordering`() {
         val renderer = source("LiquidActivityRenderer")
-        val visibility = renderer.substringAfter("private fun isSurfacePotentiallyVisible").substringBefore("private fun configureRealtimeRefreshRate")
+        val visibility = renderer.after("private fun isSurfacePotentiallyVisible").before("private fun configureRealtimeRefreshRate")
         assertTrue(visibility.contains("stretchOpticalIntensity > 1f"))
         assertTrue(visibility.contains("!ancestor.matrix.isIdentity"))
         assertTrue(visibility.contains("LiquidRefreshVisibilityPolicy.isTranslationOnly(visibilityMatrix)"))
@@ -108,9 +111,9 @@ class LiquidRefreshOptimizationTest {
         assertTrue(visibility.contains("val windowRoot = view.rootView"))
         assertTrue(visibility.contains("parameters.effectPaddingDp * density"))
         assertTrue(renderer.contains("addOnScrollChangedListener(scrollListener)"))
-        val capture = renderer.substringAfter("private fun requestRealtimeCapture(").substringBefore("private fun handleRealtimeCaptureResult")
+        val capture = renderer.after("private fun requestRealtimeCapture(").before("private fun handleRealtimeCaptureResult")
         assertTrue(capture.indexOf("feedback.buildSuppressionMask(") in 0 until capture.indexOf("PixelCopy.request("))
-        val refresh = renderer.substringAfter("private fun invalidateMovedSurfaces").substringBefore("private fun isSurfacePotentiallyVisible")
+        val refresh = renderer.after("private fun invalidateMovedSurfaces").before("private fun isSurfacePotentiallyVisible")
         assertEquals(1, Regex("refreshWindowRoot = null").findAll(refresh).count())
         assertEquals(1, Regex("refreshState.shouldRefresh").findAll(refresh).count())
         assertTrue(refresh.contains("OnPreDrawListener"))
@@ -123,9 +126,9 @@ class LiquidRefreshOptimizationTest {
      */
     @Test fun `realtime capture idles on identical frames without breaking triple buffering`() {
         val renderer = source("LiquidActivityRenderer")
-        val result = renderer.substringAfter("private fun handleRealtimeCaptureResult(")
-            .substringBefore("private fun applyCaptureThroughputSample(")
-        val unchanged = result.substringAfter("if (unchanged) {").substringBefore("identicalCaptureStreak = 0")
+        val result = renderer.after("private fun handleRealtimeCaptureResult(")
+            .before("private fun applyCaptureThroughputSample(")
+        val unchanged = result.after("if (unchanged) {").before("identicalCaptureStreak = 0")
         assertTrue("相同截图不得绑定、不得失效表面", !unchanged.contains("bindPreparedBackendsToBackdrop") &&
             !unchanged.contains("invalidateRegisteredSurfaces"))
         assertTrue("轮转必须退回这块未绑定的缓冲，下一次探测不能写到被显示列表引用的那块",
@@ -133,11 +136,11 @@ class LiquidRefreshOptimizationTest {
         assertTrue("相同截图必须重置吞吐统计，否则空转节奏会被误判为跟不上而降到 60Hz",
             unchanged.contains("refreshRate.resetThroughput()"))
         // 2026-09-23 逐像素比较移到截图线程，基准在发起时冻结；提交时基准必须仍是绑定源。
-        val postProcess = renderer.substringAfter("private fun postProcessRealtimeCapture(").substringBefore("\n}")
+        val postProcess = renderer.after("private fun postProcessRealtimeCapture(").before("\n}")
         assertTrue("逐像素比较在 PixelCopy 回调里，异常只能当作有变化",
             postProcess.contains("runCatching { request.source.bitmap.sameAs(baseline.bitmap) }.getOrDefault(false)"))
         assertTrue("基准换了就不能采信后台比较结论", result.contains("bound === request.baseline"))
-        val frame = renderer.substringAfter("private fun onRealtimeFrame(").substringBefore("private fun requestRealtimeCapture(")
+        val frame = renderer.after("private fun onRealtimeFrame(").before("private fun requestRealtimeCapture(")
         assertTrue("静止期不得继续逐帧回调", frame.contains("|| realtimeIdle"))
         assertTrue("窗口任何绘制都必须唤醒采集", renderer.contains("addOnDrawListener(realtimeDrawListener)"))
         assertTrue("静止判定只和真正绑定给后端的底图比", renderer.contains("lastBoundBackdrop === bound"))
@@ -149,25 +152,25 @@ class LiquidRefreshOptimizationTest {
      */
     @Test fun `realtime capture post-processing runs off the ui thread under one flight`() {
         val renderer = source("LiquidActivityRenderer")
-        val request = renderer.substringAfter("private fun requestRealtimeCapture(")
-            .substringBefore("private fun handleRealtimeCaptureResult(")
+        val request = renderer.after("private fun requestRealtimeCapture(")
+            .before("private fun handleRealtimeCaptureResult(")
         assertTrue("PixelCopy 回调不得再投到主线程", request.contains("callbackHandler\n") &&
             request.contains("val callbackHandler = captureWorker() ?: mainHandler"))
         assertTrue("后处理在回调线程执行、之后才回主线程提交",
             request.indexOf("postProcessRealtimeCapture(suppressor, request, result)") in
                 0 until request.indexOf("mainHandler.post { recipient.get()?.handleRealtimeCaptureResult(request, result) }"))
-        assertTrue("回调不得强引用渲染器", !request.substringAfter("OnPixelCopyFinishedListener").substringBefore("val requested")
+        assertTrue("回调不得强引用渲染器", !request.after("OnPixelCopyFinishedListener").before("val requested")
             .contains("feedback."))
         assertTrue("基准在发起时冻结", request.indexOf("val baseline = realtimeBackdropSource") in
             0 until request.indexOf("LiquidCaptureRequest(ticket"))
 
-        val postProcess = renderer.substringAfter("@AnyThread\nprivate fun postProcessRealtimeCapture(").substringBefore("\n}")
+        val postProcess = renderer.after("@AnyThread\nprivate fun postProcessRealtimeCapture(").before("\n}")
         assertTrue(postProcess.contains("sanitizeRealtimeCapture"))
         assertTrue("失败结果不得做逐像素比较", postProcess.indexOf("outcome == LiquidCaptureOutcome.FAILED") in
             0 until postProcess.indexOf("sameAs("))
 
-        val result = renderer.substringAfter("private fun handleRealtimeCaptureResult(")
-            .substringBefore("private fun applyCaptureThroughputSample(")
+        val result = renderer.after("private fun handleRealtimeCaptureResult(")
+            .before("private fun applyCaptureThroughputSample(")
         assertFalse("主线程提交不得再做抑制或逐像素比较",
             result.contains("sanitizeRealtimeCapture") || result.contains("sameAs("))
         assertTrue("单飞只在主线程提交时结束", result.indexOf("realtimeCaptureInFlight = null") in
@@ -177,12 +180,12 @@ class LiquidRefreshOptimizationTest {
         // 抑制器的截图侧状态只在截图线程上改：主线程的释放必须投递过去，关闭时排在在飞后处理之后。
         assertFalse(renderer.contains("feedback.releaseSuppressionUnderlay()"))
         assertTrue(renderer.contains("onCaptureWorker(feedback::releaseSuppressionUnderlay)"))
-        val close = renderer.substringAfter("override fun close()")
+        val close = renderer.after("override fun close()")
         assertTrue(close.indexOf("onCaptureWorker(feedback::close)") in 0 until close.indexOf("captureThread?.quitSafely()"))
         val suppressor = source("LiquidFeedbackSuppressor")
         assertFalse("抑制器不能再整体标成主线程类",
             Regex("@MainThread\\s+internal class").containsMatchIn(suppressor))
-        assertTrue(suppressor.substringBefore("fun sanitizeRealtimeCapture(").trimEnd().endsWith("@AnyThread"))
-        assertTrue(suppressor.substringBefore("fun buildSuppressionMask(").trimEnd().endsWith("@MainThread"))
+        assertTrue(suppressor.before("fun sanitizeRealtimeCapture(").trimEnd().endsWith("@AnyThread"))
+        assertTrue(suppressor.before("fun buildSuppressionMask(").trimEnd().endsWith("@MainThread"))
     }
 }

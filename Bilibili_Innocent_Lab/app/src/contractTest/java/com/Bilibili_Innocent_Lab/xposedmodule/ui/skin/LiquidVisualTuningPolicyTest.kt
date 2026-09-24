@@ -4,6 +4,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.liquid.LiquidVisualTuningP
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
 
 class LiquidVisualTuningPolicyTest {
 
@@ -62,8 +63,5 @@ class LiquidVisualTuningPolicyTest {
         }
     }
 
-    private fun source(name: String): String = sequenceOf(
-        File("src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/$name.kt"),
-        File("app/src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/$name.kt")
-    ).first(File::isFile).readText()
+    private fun source(name: String): String = SourceContract.read("src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/$name.kt")
 }

@@ -6,6 +6,8 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
 
 class ModalTitleHandoffTest {
     @Test fun destinationIsCapturedBeforeTheContentsTemporaryEntryTranslation() {
@@ -105,7 +107,7 @@ class ModalTitleHandoffTest {
         assertTrue(code.contains("private val targetTextColor = target.textColors.defaultColor"))
         assertFalse("must not latch the momentary pressed color",
             code.contains("source.currentTextColor"))
-        val draw = code.substringAfter("override fun onDraw(").substringBefore("private fun stableTransform")
+        val draw = code.after("override fun onDraw(").before("private fun stableTransform")
         assertTrue(draw.contains("blendARGB(overlayTextColor, targetTextColor, progress)"))
         // 混色用的必须是位移那条 progress：交接区它已被钳在 0 / 1，两端才对得上色。
         assertEquals(0f, ModalTitleMotionSpec.motionProgress(.12f), 0f)
@@ -283,20 +285,20 @@ class ModalTitleHandoffTest {
         // 不能钉 `private fun`：弹窗外移后这个底座已放宽成 internal，
         // 而 substringAfter 失配会返回整份文件，断言照样通过、护栏静默失效。
         val present = SettingsUiSource.function("presentSizedModalDialog")
-        val setContent = present.indexOf("dialog.setContentView(root)")
+        val setContent = present.indexOf("dialog.setContentView(windowFrame)")
         val disable = present.indexOf("dialog.window?.setWindowAnimations(0)")
         assertTrue("setContentView not found", setContent > 0)
         assertTrue("window animation must be disabled", disable > 0)
         assertTrue("must be disabled after setContentView", disable > setContent)
         // 别再写回 apply{} 块里（那个块在 setContentView 之前）。
-        val windowBlock = present.substringAfter("dialog.window?.apply {").substringBefore("}")
+        val windowBlock = present.after("dialog.window?.apply {").before("}")
         assertFalse(windowBlock.contains("setWindowAnimations"))
     }
 
     /** 只搬首行：摘要不能跟着飞，也不能被整段绘制带出来。 */
     @Test fun onlyTheFirstLineIsDrawnByTheTravelingOverlay() {
         val code = source("ModalTitleMotion")
-        val draw = code.substringAfter("override fun onDraw(").substringBefore("private fun stableTransform")
+        val draw = code.after("override fun onDraw(").before("private fun stableTransform")
         assertTrue(draw.contains("clipRect("))
         assertTrue(draw.contains("layout.getLineTop(0)"))
         assertTrue(draw.contains("layout.getLineBottom(0)"))
@@ -345,7 +347,7 @@ class ModalTitleHandoffTest {
      */
     @Test fun theTravelingTitleForcesItsOwnColorInsteadOfInheritingTheFadedSource() {
         val code = source("ModalTitleMotion")
-        val draw = code.substringAfter("override fun onDraw(").substringBefore("private fun stableTransform")
+        val draw = code.after("override fun onDraw(").before("private fun stableTransform")
         assertTrue(draw.contains("val paint = layout.paint"))
         assertTrue(draw.contains("paint.color = androidx.core.graphics.ColorUtils"))
         // 借用必须还原，否则来源控件的真实颜色会被我们永久改掉。

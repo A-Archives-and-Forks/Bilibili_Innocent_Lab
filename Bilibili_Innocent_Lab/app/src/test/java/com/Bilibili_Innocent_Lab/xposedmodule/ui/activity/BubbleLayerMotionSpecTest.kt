@@ -211,7 +211,9 @@ class BubbleLayerMotionSpecTest {
     @Test fun everyPhaseBoundaryIsContinuous() {
         val functions = listOf<(Float) -> Float>(
             BubbleLayerMotionSpec::surfaceOpacity,
-            BubbleLayerMotionSpec::sourceIconWeight,
+            { BubbleLayerMotionSpec.sourceIconWeight(it) },
+            { BubbleLayerMotionSpec.sourceIconWeight(it, lightTheme = true) },
+            { BubbleLayerMotionSpec.proxyIconOpacity(it, lightTheme = true) },
             BubbleLayerMotionSpec::iconOpacity,
             BubbleLayerMotionSpec::contourMix,
             BubbleLayerMotionSpec::iconTravelFraction,
@@ -246,7 +248,9 @@ class BubbleLayerMotionSpecTest {
     @Test fun invalidProgressIsClampedAndNanFallsBackToCollapsed() {
         val functions = listOf<(Float) -> Float>(
             BubbleLayerMotionSpec::surfaceOpacity,
-            BubbleLayerMotionSpec::sourceIconWeight,
+            { BubbleLayerMotionSpec.sourceIconWeight(it) },
+            { BubbleLayerMotionSpec.sourceIconWeight(it, lightTheme = true) },
+            { BubbleLayerMotionSpec.proxyIconOpacity(it, lightTheme = true) },
             BubbleLayerMotionSpec::iconOpacity,
             BubbleLayerMotionSpec::contourMix,
             BubbleLayerMotionSpec::iconTravelFraction,

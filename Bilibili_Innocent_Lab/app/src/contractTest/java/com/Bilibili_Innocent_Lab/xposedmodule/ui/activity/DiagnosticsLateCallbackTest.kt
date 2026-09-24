@@ -7,6 +7,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 /**
  * 诊断页迟到回调不得杀进程（2026-09-23 真机 logcat）。
@@ -42,18 +45,18 @@ class DiagnosticsLateCallbackTest {
 
     @Test fun viewModelRoutesEverySubmitThroughTheShutdownSafeExecutor() {
         val relative = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/DiagnosticsViewModel.kt"
-        val source = sequenceOf(File(relative), File("app/$relative")).first(File::isFile).readText()
-        val viewModel = source.substringAfter("internal class DiagnosticsViewModel")
+        val source = SourceContract.read(relative)
+        val viewModel = source.after("internal class DiagnosticsViewModel")
         assertTrue("执行器必须是关闭后丢弃的那一种",
             viewModel.contains("private val worker = ShutdownSafeExecutor("))
         assertFalse("ViewModel 不得再直接持有裸 ExecutorService",
             viewModel.contains("Executors.newSingleThreadExecutor"))
-        val refresh = viewModel.substringAfter("fun refresh(").substringBefore("private fun collectAsync(")
+        val refresh = viewModel.after("fun refresh(").before("private fun collectAsync(")
         assertTrue("迟到的查询回调必须先检查是否已关闭",
             refresh.indexOf("if (worker.isShutdown) return@query") in 0 until refresh.indexOf("collectAsync("))
         assertEquals("两个提交点（采集、导出）都走安全执行器", 2,
             Regex("""worker\.submit \{""").findAll(viewModel).count())
-        val cleared = viewModel.substringAfter("override fun onCleared()")
+        val cleared = viewModel.after("override fun onCleared()")
         assertTrue(cleared.contains("worker.shutdownNow()"))
     }
 }

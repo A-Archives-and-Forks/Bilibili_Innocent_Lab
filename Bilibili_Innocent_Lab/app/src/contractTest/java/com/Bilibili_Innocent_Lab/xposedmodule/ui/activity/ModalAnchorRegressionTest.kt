@@ -5,11 +5,14 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 class ModalAnchorRegressionTest {
     private fun source(name: String): String {
         val path = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/$name.kt"
-        return sequenceOf(File(path), File("app/$path")).first(File::isFile).readText()
+        return SourceContract.read(path)
     }
 
     @Test fun scannedAndUnscannedPanelsUseTheClickableSummaryNotTheEntireSettingsGroup() {
@@ -66,10 +69,10 @@ class ModalAnchorRegressionTest {
 
     @Test fun titleCloseDoesNotReviveTheDialogTitleAndUsesOnlyOneNativeLayout() {
         val title = source("ModalTitleMotion")
-        val closed = title.substringAfter("fun closed() {").substringBefore("fun dispose()")
+        val closed = title.after("fun closed() {").before("fun dispose()")
         assertTrue(closed.contains("target.alpha = 0f"))
         assertFalse(closed.contains("target.alpha = targetAlpha"))
-        val draw = title.substringAfter("override fun onDraw(").substringBefore("private fun stableTransform")
+        val draw = title.after("override fun onDraw(").before("private fun stableTransform")
         assertEquals(1, Regex("layout.draw\\(this\\)").findAll(draw).count())
         assertFalse(draw.contains("drawText"))
         assertFalse(draw.contains("TextPaint"))

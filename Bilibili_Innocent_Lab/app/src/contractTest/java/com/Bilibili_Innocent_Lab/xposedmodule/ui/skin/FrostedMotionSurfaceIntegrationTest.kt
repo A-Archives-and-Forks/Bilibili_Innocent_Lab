@@ -5,11 +5,14 @@ import com.Bilibili_Innocent_Lab.xposedmodule.ui.activity.DiagnosticsEntryVisual
 import java.io.File
 import org.junit.Assert.*
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 class FrostedMotionSurfaceIntegrationTest {
     private fun source(relative: String): String {
         val path = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/$relative.kt"
-        return sequenceOf(File(path), File("app/$path")).first(File::isFile).readText()
+        return SourceContract.read(path)
     }
 
     @Test fun ordinaryDiagnosticEntryKeepsItsCallerArgbInSampledAndFallbackDrawing() {
@@ -30,8 +33,8 @@ class FrostedMotionSurfaceIntegrationTest {
             }
         }
         val draw = source("skin/material/FrostedMaterialRenderer")
-            .substringAfter("private class ModernSurfaceDrawable(")
-            .substringAfter("override fun draw(canvas: Canvas)").substringBefore("override fun setAlpha")
+            .after("private class ModernSurfaceDrawable(")
+            .after("override fun draw(canvas: Canvas)").before("override fun setAlpha")
         assertTrue(draw.contains("FrostedMotionSurfaceAlpha.frameAlpha(drawColor, drawingAlpha)"))
         assertFalse(draw.contains("if (motionProvider != null) drawingAlpha"))
     }
@@ -61,9 +64,9 @@ class FrostedMotionSurfaceIntegrationTest {
 
     @Test fun frostedDrawableUsesLiveMotionGeometryAndNeverSubstitutesFullBoundsForAnEmptyFrame() {
         val renderer = source("skin/material/FrostedMaterialRenderer")
-        val drawable = renderer.substringAfter("private class ModernSurfaceDrawable(")
-            .substringBefore("internal object FrostedMotionSurfaceAlpha")
-        val draw = drawable.substringAfter("override fun draw(canvas: Canvas)").substringBefore("override fun setAlpha")
+        val drawable = renderer.after("private class ModernSurfaceDrawable(")
+            .before("internal object FrostedMotionSurfaceAlpha")
+        val draw = drawable.after("override fun draw(canvas: Canvas)").before("override fun setAlpha")
         assertTrue(draw.contains("view as? LiquidMotionSurfaceFrameProvider"))
         assertTrue(draw.contains("motionProvider.copyLiquidMotionBounds(rect)"))
         assertTrue(draw.contains("drawRadius = motionProvider.liquidMotionCornerRadiusPx()"))
@@ -87,7 +90,7 @@ class FrostedMotionSurfaceIntegrationTest {
             assertFalse(name, activity.contains("liquidMotionSurfaceBackgroundOrNull("))
         }
         val host = source("activity/SettingsBackupMotionHost")
-        val insets = host.substringAfter("fun installContentInsets()").substringBefore("fun setMotionSurfaceBackground")
+        val insets = host.after("fun installContentInsets()").before("fun setMotionSurfaceBackground")
         assertTrue(insets.contains("WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()"))
         assertTrue(insets.contains("setPadding(0, 0, 0, 0)"))
         assertTrue(insets.contains("pageClip.setPadding(safe.left, safe.top, safe.right, safe.bottom)"))
@@ -100,7 +103,7 @@ class FrostedMotionSurfaceIntegrationTest {
 
     @Test fun diagnosticPreviewRetainsModalFactoryAndDisposesElasticWithinItsExistingDismissHandler() {
         val diagnostics = source("activity/DiagnosticsActivity")
-        val preview = diagnostics.substringAfter("private fun showExportPreview()").substringBefore("private fun dismissExportPreviewDialog")
+        val preview = diagnostics.after("private fun showExportPreview()").before("private fun dismissExportPreviewDialog")
         assertTrue(preview.contains("background = skinModalBackground(monetColors.surface)"))
         val install = preview.indexOf("val disposeElasticInteraction = installDialogElasticInteraction(dialog)")
         assertTrue(install > preview.indexOf("dialog.setContentView(root)"))

@@ -4,6 +4,9 @@ import java.io.File
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 /**
  * 长按拖动弹性手势的两条约定：
@@ -24,8 +27,8 @@ class ElasticCaptureGateTest {
     @Test fun hitViewIsAssignedAfterTheVisualTeardown() {
         val controller = source(
             "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/interaction/ElasticInteractionController.kt")
-        val begin = controller.substringAfter("private fun begin(event: MotionEvent)")
-            .substringBefore("private fun activatePreparedPress()")
+        val begin = controller.after("private fun begin(event: MotionEvent)")
+            .before("private fun activatePreparedPress()")
         // removeVisual 会把 highlightHost 清空；命中控件必须在它之后赋值。
         // 提前赋值时每次新按压 highlightHost 都是 null，捕获门槛退回到形变组
         // （GitHub 图标是外层 FrameLayout，永不 pressed），长按拖动被静默清掉。
@@ -37,11 +40,11 @@ class ElasticCaptureGateTest {
     @Test fun newUpdateBadgeDoesNotStealTheIconGesture() {
         val main = source(
             "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/MainActivity.kt")
-        val badge = main.substringAfter("githubUpdateBadge = this")
-            .substringBefore("visibility = View.INVISIBLE")
+        val badge = main.after("githubUpdateBadge = this")
+            .before("visibility = View.INVISIBLE")
         assertTrue(badge.contains("ElasticInteractionController.EXCLUDED_TAG"))
     }
 
     private fun source(relative: String): String =
-        sequenceOf(File(relative), File("app/$relative")).first(File::isFile).readText()
+        SourceContract.read(relative)
 }

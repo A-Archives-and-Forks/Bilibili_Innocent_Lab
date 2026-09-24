@@ -5,6 +5,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
 
 class ModalBackdropBlurSpecTest {
 
@@ -92,7 +95,7 @@ class ModalBackdropBlurSpecTest {
         assertTrue(storeCode.contains("getOrDefault(DEFAULT)"))
         val code = source("ModalBackdropBlur")
         // 开关是第一道门：不开就连系统能力都不去问。
-        val body = code.substringAfter("fun createOrNull(").substringBefore("val maxRadiusPx")
+        val body = code.after("fun createOrNull(").before("val maxRadiusPx")
         assertTrue(
             body.indexOf("!userEnabled) return null") < body.indexOf("!materialYouSkin) return null")
         )
@@ -164,6 +167,6 @@ class ModalBackdropBlurSpecTest {
 
     private fun source(name: String): String {
         val path = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/$name.kt"
-        return sequenceOf(File(path), File("app/$path")).first(File::isFile).readText()
+        return SourceContract.read(path)
     }
 }

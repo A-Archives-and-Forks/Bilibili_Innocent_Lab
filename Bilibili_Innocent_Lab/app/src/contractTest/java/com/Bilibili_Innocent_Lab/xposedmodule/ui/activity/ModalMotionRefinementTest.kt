@@ -5,6 +5,9 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 class ModalMotionRefinementTest {
     @Test fun bubbleAxesHaveIndependentProfilesAndExactEndpoints() {
@@ -85,16 +88,16 @@ class ModalMotionRefinementTest {
         assertTrue(layer.contains("override fun copyLiquidMotionBounds"))
         assertTrue(layer.contains("override fun liquidMotionCornerRadiusPx"))
         assertTrue(layer.contains("override fun liquidMotionFallbackColor"))
-        val applyFrame = layer.substringAfter("fun applyFrame(")
-            .substringBefore("fun clearShape(")
+        val applyFrame = layer.after("fun applyFrame(")
+            .before("fun clearShape(")
         assertTrue(applyFrame.contains("background?.setBounds("))
         // 收起形变后必须复位：残留卡片矩形会让"下次常驻表面"按旧边界画。
-        val clearShape = layer.substringAfter("fun clearShape(")
-            .substringBefore("private fun updateRestingSurface(")
+        val clearShape = layer.after("fun clearShape(")
+            .before("private fun updateRestingSurface(")
         assertTrue(clearShape.contains("background?.setBounds(0, 0, width, height)"))
         // 未成形时 provider 必须回报空矩形，否则常驻态会拿着空 bounds 走运动分支。
-        val provider = layer.substringAfter("override fun copyLiquidMotionBounds")
-            .substringBefore("override fun liquidMotionCornerRadiusPx")
+        val provider = layer.after("override fun copyLiquidMotionBounds")
+            .before("override fun liquidMotionCornerRadiusPx")
         assertTrue(provider.contains("shaped"))
         assertTrue(provider.contains("setEmpty()"))
     }
@@ -105,14 +108,14 @@ class ModalMotionRefinementTest {
         // 在场期间 contentBackground 必须归 0，只在承载层缺席的兜底路径上才按
         // strokeAlpha 渐出。
         val controller = source("IconAnchoredMotionController")
-        val apply = controller.substringAfter("private fun apply(")
-            .substringBefore("private fun finish(")
+        val apply = controller.after("private fun apply(")
+            .before("private fun finish(")
         assertTrue(apply.contains("layer.background == null"))
-        val prep = controller.substringAfter("fun prepareFirstFrame(")
-            .substringBefore("fun startEntry(")
+        val prep = controller.after("fun prepareFirstFrame(")
+            .before("fun startEntry(")
         assertTrue(prep.contains("contentBackground?.alpha = 0"))
-        val exit = controller.substringAfter("private fun prepareExitFrame(")
-            .substringBefore("private fun animateTo(")
+        val exit = controller.after("private fun prepareExitFrame(")
+            .before("private fun animateTo(")
         assertTrue(exit.contains("contentBackground?.alpha = 0"))
         // 稳定端与硬关都要把卡片背景恢复回 255，不能留着 0 给复用 container 的路径。
         assertTrue(controller.contains("contentBackground?.alpha = 255"))
@@ -124,7 +127,7 @@ class ModalMotionRefinementTest {
         // 描边与光学采样区平移一档（"落定瞬间边缘光跳变"）。apply() 必须用卡片
         // 当前 left/top/right/bottom 重建展开端目标。
         val controller = source("IconAnchoredMotionController")
-        val apply = controller.substringAfter("private fun apply(")
+        val apply = controller.after("private fun apply(")
             .substringBefore("private fun finish(", "MISSING")
         assertTrue(apply != "MISSING")
         assertTrue(apply.contains("content.left.toFloat()"))
@@ -150,7 +153,7 @@ class ModalMotionRefinementTest {
 
     private fun source(name: String): String {
         val path = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/$name.kt"
-        return sequenceOf(File(path), File("app/$path")).first(File::isFile).readText()
+        return SourceContract.read(path)
     }
 
     @Test fun missingSnapshotUsesSameAnchoredRuleEditorWithoutChangingSelectionRules() {
@@ -179,7 +182,7 @@ class ModalMotionRefinementTest {
         assertTrue(title.contains("sourceTextColors.withAlpha("))
         assertTrue(title.contains("sourceColors.release(source, sourceOwner)?.let(source::setTextColor)"))
         assertTrue(title.contains("target.alpha = targetAlpha"))
-        val draw = title.substringAfter("override fun onDraw(").substringBefore("companion object")
+        val draw = title.after("override fun onDraw(").before("companion object")
         for (forbidden in listOf("requestLayout", "Bitmap", "find(", "TextPaint(", "textSize =")) {
             assertFalse(forbidden, draw.contains(forbidden))
         }
@@ -203,14 +206,14 @@ class ModalMotionRefinementTest {
         assertTrue(layer.contains("surfaceElevation: Float = 0f"))
         assertTrue(layer.contains("elevation = surfaceElevation"))
         // outline 三分支：形变矩形（alpha 1）→ 落定卡片矩形（alpha 1）→ 无（alpha 0）。
-        val provider = layer.substringAfter("outlineProvider =")
-            .substringBefore("fun applyFrame(")
+        val provider = layer.after("outlineProvider =")
+            .before("fun applyFrame(")
         assertEquals(2, Regex("outline\\.alpha = 1f").findAll(provider).count())
         assertTrue(provider.contains("surfaceRadiusPx"))
         // 持久分支逐帧刷新投影轮廓；落定矩形回写时也刷新。
-        val applyFrame = layer.substringAfter("fun applyFrame(").substringBefore("fun clearShape(")
+        val applyFrame = layer.after("fun applyFrame(").before("fun clearShape(")
         assertTrue(applyFrame.contains("invalidateOutline()"))
-        assertTrue(layer.substringAfter("private fun updateRestingSurface(").contains("invalidateOutline()"))
+        assertTrue(layer.after("private fun updateRestingSurface(").contains("invalidateOutline()"))
         // 飞行标题浮层必须高于承载层（否则形变期被面板盖住），且自身空 outline 不投影。
         val present = SettingsUiSource.function("presentSizedModalDialog")
         assertTrue(present.contains("title.elevation = morphLayer.elevation + 1f"))
@@ -228,8 +231,9 @@ class ModalMotionRefinementTest {
         // 真机实测同一条左边缘，父面板独自稳定 87，子面板落位后 103，且这一跳在最后一帧。
         assertEquals(0f, IconAnchoredMotionSpec.coveredParentAlpha(1f), 0f)
         assertEquals(1f, IconAnchoredMotionSpec.coveredParentAlpha(0f), 0f)
-        // 起点必须够晚：早了父面板的正文会当着用户的面褪色。
-        assertTrue(IconAnchoredMotionSpec.COVERED_PARENT_FADE_START >= 0.85f)
+        // 起点必须够晚：早了父面板先淡没、子面板没长满，外轮廓先回缩再展开（2026-09-24
+        // 用户实证）。重合区叠亮由 ModalCardRoot 挖空解决，透明度只管终点共边描边。
+        assertTrue(IconAnchoredMotionSpec.COVERED_PARENT_FADE_START >= 0.99f)
         assertEquals(1f, IconAnchoredMotionSpec.coveredParentAlpha(
             IconAnchoredMotionSpec.COVERED_PARENT_FADE_START), 0f)
         // 单调不回头，否则父面板会在末段闪一下。
@@ -258,11 +262,147 @@ class ModalMotionRefinementTest {
 
     @Test fun reversalKeepsEntryShapeUntilStableEndpoint() {
         val controller = source("BubbleMotionController")
-        val close = controller.substringAfter("fun requestClose(").substringBefore("fun handleWindowSizeChange")
+        val close = controller.after("fun requestClose(").before("fun handleWindowSizeChange")
         assertFalse(close.contains("entryShape ="))
         assertTrue(controller.contains("layer.applyFrame(clamped, entryShape)"))
         val layer = source("BubblePanelLayer")
         assertTrue(layer.contains("BubbleMotionSpec.scaleX(progress, entryShape)"))
         assertTrue(layer.contains("BubbleMotionSpec.scaleY(progress, entryShape)"))
+    }
+
+    /**
+     * 背景压暗必须盖住状态栏与导航栏（2026-09-24 用户报告深浅色下都没盖住状态栏）。
+     * 真机实证三层原因缺一不可：窗口按系统栏缩框；平台弹窗布局的 fitsSystemWindows 容器
+     * 把内容区下推；窗口不带 DRAWS_SYSTEM_BAR_BACKGROUNDS 时系统在状态栏上画不透明黑底。
+     */
+    @Test fun modalScrimCoversTheSystemBars() {
+        val main = source("MainActivity")
+        val present = main.after("internal fun presentSizedModalDialog(")
+        // 压暗层挂在最外层窗口层上，卡片层 root 按系统栏内缩，几何仍以 root 为原点。
+        val frame = present.after("val windowFrame = NativeFrameLayout(this).apply {")
+            .before("ViewCompat.setOnApplyWindowInsetsListener(windowFrame)")
+        assertTrue(frame.indexOf("scrim?.let {") in 0 until frame.indexOf("addView(root,"))
+        val rootInit = present.after("val root = ModalCardRoot(this).apply {")
+            .before("val windowFrame = NativeFrameLayout(this).apply {")
+        assertFalse("压暗层不能再挂在内缩后的 root 里", rootInit.contains("scrim?.let"))
+        val insets = present.after("ViewCompat.setOnApplyWindowInsetsListener(windowFrame)")
+            .before("// 子面板贴到父面板矩形上。")
+        assertTrue(insets.contains("WindowInsetsCompat.Type.systemBars() or"))
+        assertTrue(insets.contains("params.setMargins(safe.left, safe.top, safe.right, safe.bottom)"))
+        assertTrue(present.contains("dialog.setContentView(windowFrame)"))
+        assertTrue(present.contains("WindowCompat.setDecorFitsSystemWindows(this, false)"))
+        assertTrue(present.contains("fitInsetsTypes = 0"))
+        assertTrue(present.contains("addFlags(android.view.WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)"))
+        assertTrue(present.contains("statusBarColor = Color.TRANSPARENT"))
+        assertTrue(present.contains("fitAncestor.fitsSystemWindows = false"))
+        // 覆盖式子面板淡的是父面板压暗层之外的那一层（现在就是 root），不能淡整窗。
+        assertTrue(present.contains("firstOrNull { it !== parentScrim }"))
+    }
+
+    /**
+     * 覆盖式子面板：父面板只在子面板当前覆盖的区域里挖空（2026-09-24 两轮真机：整体淡出放在
+     * 尾段会叠亮后跳暗，前移又让外轮廓先回缩再展开）。透明度只在完全盖满时收共边描边。
+     */
+    @Test fun coveredParentIsClippedByTheGrowingChildInsteadOfFadingEarly() {
+        val present = SettingsUiSource.function("presentSizedModalDialog")
+        assertTrue(present.contains("val root = ModalCardRoot(this).apply {"))
+        assertTrue(present.contains("(coveredContent as? ModalCardRoot)?.excludeMotionSurface(morphLayer, morphLayer.alpha)"))
+        assertTrue(present.contains("(coveredContent as? ModalCardRoot)?.clearExclusion()"))
+        val root = source("ModalCardRoot")
+        assertTrue(root.contains("canvas.clipOutPath(exclusion)"))
+        // 区域内与子面板交叉淡变，不是一刀切（子面板开头几乎透明，一刀切会露出压暗层）。
+        assertTrue(root.contains("canvas.saveLayerAlpha(exclusionRect, insideAlpha)"))
+        assertTrue(root.contains("source.copyLiquidMotionBounds(exclusionRect)"))
+        // 子面板没盖满之前父面板保持完整，外轮廓不回缩。
+        assertEquals(1f, IconAnchoredMotionSpec.coveredParentAlpha(0.99f), 0f)
+    }
+
+    /**
+     * 收起动画末帧先上屏、下一帧再移窗（2026-09-24 atrace：原来 dismiss 挤在动画结束回调里，
+     * 关闭末帧 notifyAnimEnd 7–11ms）。气泡与图标锚点两条路径都要走。
+     */
+    @Test fun closingDefersWindowRemovalPastTheFinalFrame() {
+        val present = SettingsUiSource.function("presentSizedModalDialog")
+        assertEquals(2, Regex(Regex.escape("dismissAfterFinalFrame(dialog) {")).findAll(present).count())
+        val helper = SettingsUiSource.function("dismissAfterFinalFrame")
+        assertTrue(helper.contains("decor.postOnAnimation { finish() }"))
+        assertTrue(helper.contains("if (dialog.isShowing) runCatching { dialog.dismiss() }"))
+    }
+
+    /** 更新渠道子面板的关闭按钮与 GitHub 面板那颗重合：弹性占位把空档收到关闭行上方。 */
+    @Test fun updateChannelCloseButtonSitsOnTheCardBottom() {
+        val channel = SettingsUiSource.function("showUpdateChannelDialog")
+        assertTrue(channel.contains("NativeLinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)"))
+        assertTrue(channel.contains("createPanelCloseButton { dismissWithAnimation(dialog, container) {} }"))
+        assertTrue(channel.contains("presentModalDialog(dialog, container, morphAnchorBounds = origin, coverBounds = cover)"))
+    }
+
+    /**
+     * 浅色主题下的形变不许出现深色（2026-09-24 用户多轮报告，逐帧检测定位三处来源）：
+     * ① 背板 40% 黑：面板长满前其最终区域透出已压暗的底页 → 浅色改为背景色薄纱；
+     * ② 半透明玻璃卡片带系统 elevation：阴影半影透到卡片内侧成一圈灰带 → 玻璃皮肤不带投影
+     *    （试过用投影体 + clipOutPath 裁阴影：系统阴影在 Z 重排阶段绘制，不受 drawChild 裁剪，失败）；
+     * ③ 气泡面板飞行图标副本是深灰 → 浅色下离开原位后降到 35%。
+     */
+    @Test fun lightThemeMorphsNeverFlashDark() {
+        val main = source("MainActivity")
+        val scrim = main.after("private fun modalScrimColor(): Int =").before("/** 正文起始位移上限")
+        assertTrue(scrim.contains("ColorUtils.calculateLuminance(monetColors.surface) < 0.5) MODAL_SCRIM_COLOR"))
+        assertTrue(scrim.contains("ColorUtils.blendARGB(monetColors.background, Color.BLACK, LIGHT_MODAL_SCRIM_DARKEN)"))
+        assertTrue(SettingsUiSource.function("presentSizedModalDialog").contains("setBackgroundColor(modalScrimColor())"))
+        val container = SettingsUiSource.function("createModalContainer")
+        assertTrue(container.contains("elevation = if (isLiquidSkinEffective || isMaterialYouSkinEffective) 0f else 12 * density"))
+        assertTrue(source("DiagnosticsActivity").contains("elevation = if (isLiquidSkinEffective || isMaterialYouSkinEffective) 0f else 12 * density"))
+        // 飞行图标：交接段保持 1（与真实图标总量守恒），离开原位后才压低。
+        assertEquals(1f, BubbleLayerMotionSpec.lightThemeTravelFactor(0.03f), 0f)
+        assertEquals(BubbleLayerMotionSpec.LIGHT_THEME_TRAVEL_OPACITY,
+            BubbleLayerMotionSpec.lightThemeTravelFactor(0.2f), 1e-6f)
+        val proxy = source("BubbleIconProxy")
+        assertTrue(proxy.contains("BubbleLayerMotionSpec.sourceIconWeight(p, lightTheme)"))
+        assertTrue(proxy.contains("BubbleLayerMotionSpec.proxyIconOpacity(p, lightTheme)"))
+        // 按钮原位图案总量守恒：浅色下副本压淡多少，真实图标就补回多少（否则按钮亮闪）。
+        for (step in 0..1000) {
+            val p = step / 1000f
+            for (light in listOf(false, true)) {
+                assertEquals(1f, BubbleLayerMotionSpec.sourceIconWeight(p, light) +
+                    BubbleLayerMotionSpec.proxyIconOpacity(p, light), 1e-6f)
+            }
+        }
+    }
+
+    /**
+     * 面板从按钮处长出时玻璃表面会盖住按钮原位，飞行副本已飞走 → 浅色下按钮深浅跳动
+     * （2026-09-24 真机：图标区 190 → 243 → 209）。在面板里按钮原位、面板形状内补画静止图标。
+     */
+    @Test fun bubbleKeepsTheSourceIconVisibleWhileItsSurfaceCoversTheButton() {
+        val proxy = source("BubbleIconProxy")
+        assertTrue(proxy.contains("BubbleLayerMotionSpec.sourceIconWeight(p, true) * BubbleLayerMotionSpec.surfaceOpacity(p)"))
+        val slot = proxy.after("fun drawSlotIcon(").before("fun drawMask(")
+        assertTrue(slot.contains("clipPath(surfaceShape)") && slot.contains("drawSnapshot(this, slotPaint, sourceBounds)"))
+        assertTrue(proxy.after("fun settleExpanded()").before("fun dispose()").contains("slotPaint.alpha = 0"))
+        val layer = source("BubblePanelLayer")
+        assertTrue(layer.contains("icon?.drawSlotIcon(canvas, surfaceShape)"))
+        assertTrue(layer.indexOf("icon?.drawSlotIcon(canvas, surfaceShape)") < layer.indexOf("icon?.drawIcon(canvas)"))
+        assertTrue(layer.contains("if (!tailPath.isEmpty) surfaceShape.addPath(tailPath)"))
+    }
+
+    /**
+     * 顶栏按钮的 foreground 涟漪（浅色 0x8C 白）在气泡盖住按钮后还要退场几百毫秒，
+     * 隔着玻璃把图标区提亮到超过打开态（真机 176→219→199）。气泡按覆盖度收掉它：
+     * API 31+ 已开始的涟漪不读新颜色，必须 setVisible(false) 清热点；settle 保持压住，
+     * dispose 才放开。
+     */
+    @Test fun bubbleRetiresTheButtonRippleOnceItCoversTheButton() {
+        val ripple = source("CoverableRippleDrawable")
+        assertTrue(ripple.contains(") : RippleDrawable(ColorStateList.valueOf(baseColor), content, mask)"))
+        assertTrue(ripple.contains("val shouldShow = clamped < COVERED_THRESHOLD"))
+        assertTrue(ripple.contains("if (shouldShow != isVisible) setVisible(shouldShow, false)"))
+        val proxy = source("BubbleIconProxy")
+        assertTrue(proxy.after("fun updateFrame(").before("fun drawIcon(")
+            .contains("coverRipple(BubbleLayerMotionSpec.surfaceOpacity(p))"))
+        assertTrue(proxy.contains("(source.foreground as? CoverableRippleDrawable)?.coverOpacity = opacity"))
+        assertTrue(proxy.after("fun settleExpanded()").before("fun dispose()").contains("if (tookOver) coverRipple(1f)"))
+        assertTrue(proxy.after("fun dispose()").before("private fun restoreSource()").contains("releaseRipple()"))
+        assertTrue(proxy.after("private fun releaseRipple()").contains("if (tookOver) coverRipple(0f)"))
     }
 }

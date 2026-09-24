@@ -61,6 +61,12 @@ internal class LiquidChoiceDrawable(
     private var drawableAlpha = 255
     private var radius = 0f
     private var rimRadius = 0f
+    /**
+     * 浅色主题（表面接近白）。深色下"表面混 accent"天然落在中间调，白滑块对比足够；
+     * 浅色下同一配比混出的是很淡的灰绿，白滑块几乎贴在轨道上，未选中轨道也只剩一条淡描边
+     * （2026-09-24 用户报告"浅色模式下开关颜色较浅"）。浅色只加深，不改深色观感。
+     */
+    private val lightTheme = ColorUtils.calculateLuminance(surface) > 0.5
 
     override fun getIntrinsicWidth() = width
     override fun getIntrinsicHeight() = height
@@ -101,11 +107,18 @@ internal class LiquidChoiceDrawable(
         // checkbox 面积小，保留实色 accent 填充让对勾语义一眼可辨。
         val base = when {
             thumb && checked -> onAccent
-            checked && !checkbox -> ColorUtils.blendARGB(surface, accent, CHECKED_TRACK_WASH)
+            checked && !checkbox -> ColorUtils.blendARGB(surface, accent,
+                if (lightTheme) CHECKED_TRACK_WASH_LIGHT else CHECKED_TRACK_WASH)
             checked -> accent
+            // 浅色未选中**开关轨道**压一层 outline，白滑块才从轨道里分得出来。复选框没有滑块，
+            // 铺灰只会得到一块深灰方块（2026-09-24 用户报告「管理常用」勾选框在浅色下偏深），
+            // 复选框保持表面色，靠加深的描边辨识。
+            lightTheme && !thumb && !checkbox -> ColorUtils.blendARGB(surface, outline, UNCHECKED_TRACK_SHADE_LIGHT)
             else -> surface
         }
-        val alpha = LiquidControlStyle.fillAlpha(visualState)
+        val alpha = if (lightTheme && !thumb && !(checkbox && !checked)) maxOf(LiquidControlStyle.fillAlpha(visualState),
+            if (checked) CHECKED_FILL_ALPHA_LIGHT else UNCHECKED_FILL_ALPHA_LIGHT)
+            else LiquidControlStyle.fillAlpha(visualState)
         val thumbAlpha = if (checked) 255 else 220
         val bottom = rect.bottom.coerceAtLeast(rect.top + 1f)
         // 混色：顶端只留一点白提亮（高光层才负责亮），底端混深色压深，整体是有方向的柔光。
@@ -161,7 +174,8 @@ internal class LiquidChoiceDrawable(
         val alpha = drawableAlpha * LiquidControlStyle.opacity(visualState) / 255
         fill.alpha = alpha
         rim.alpha = alpha
-        edge.alpha = alpha * (if (visualState.emphasized) 150 else if (visualState.selected) 130 else 46) / 255
+        edge.alpha = alpha * (if (visualState.emphasized) 150 else if (visualState.selected) 130
+            else if (lightTheme) UNCHECKED_EDGE_ALPHA_LIGHT else 46) / 255
         mark?.alpha = alpha
         canvas.drawRoundRect(rect, radius, radius, fill)
         // checkbox 面积小（24dp 量级），内沿晕光在这种尺度上只剩一条生硬亮带；
@@ -188,6 +202,15 @@ internal class LiquidChoiceDrawable(
 
         /** 选中态轨道填充里 accent 的占比：染色而非实色块。 */
         const val CHECKED_TRACK_WASH = 0.42f
+
+        /** 浅色主题的选中轨道：accent 为主，白滑块与轨道拉开明度差。 */
+        const val CHECKED_TRACK_WASH_LIGHT = 0.80f
+        const val CHECKED_FILL_ALPHA_LIGHT = 235
+
+        /** 浅色主题的未选中轨道：表面混 outline，填充加厚，描边加深。 */
+        const val UNCHECKED_TRACK_SHADE_LIGHT = 0.28f
+        const val UNCHECKED_FILL_ALPHA_LIGHT = 190
+        const val UNCHECKED_EDGE_ALPHA_LIGHT = 96
 
         /** 选中态内晕的 accent 向白混色比例：晕光与描边同色相、亮核仍偏白。 */
         const val RIM_ACCENT_BLEND = 0.45f

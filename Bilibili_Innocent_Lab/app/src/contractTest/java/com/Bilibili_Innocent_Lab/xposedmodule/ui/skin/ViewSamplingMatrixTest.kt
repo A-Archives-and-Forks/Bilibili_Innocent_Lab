@@ -6,6 +6,9 @@ import kotlin.math.cos
 import kotlin.math.sin
 import org.junit.Assert.*
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 class ViewSamplingMatrixTest {
     private fun identity() = FloatArray(9).also(SamplingMatrixMath::identity)
@@ -107,10 +110,10 @@ class ViewSamplingMatrixTest {
     @Test fun rendererUsesTheSharedTransformForDrawingAndFullFootprintsWithoutNewCapture() {
         fun source(relative: String): String {
             val path = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/$relative.kt"
-            return sequenceOf(File(path), File("app/$path")).first(File::isFile).readText()
+            return SourceContract.read(path)
         }
         val renderer = source("material/FrostedMaterialRenderer")
-        val draw = renderer.substringAfter("internal fun drawSample(").substringBefore("internal fun register(")
+        val draw = renderer.after("internal fun drawSample(").before("internal fun register(")
         assertTrue(draw.contains("samplingMatrices.bitmapToTarget(sourceRoot, view,"))
         assertFalse(draw.contains("getLocationOnScreen"))
         assertFalse(draw.contains("postTranslate"))

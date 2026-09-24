@@ -52,6 +52,8 @@ internal class BubblePanelLayer(
     private val bodyBounds = RectF()
     private val tailBounds = RectF()
     private val tailPath = Path()
+    /** 面板此刻的可见形状（主体 + 小角），按钮原位的静止图标只画在它里面。 */
+    private val surfaceShape = Path()
     private var placement: BubblePlacement? = null
     private var progress = 0f
     private var entryShape = true
@@ -111,7 +113,10 @@ internal class BubblePanelLayer(
     }
 
     private val iconView = object : View(context) {
-        override fun onDraw(canvas: Canvas) { icon?.drawIcon(canvas) }
+        override fun onDraw(canvas: Canvas) {
+            icon?.drawSlotIcon(canvas, surfaceShape)
+            icon?.drawIcon(canvas)
+        }
         override fun hasOverlappingRendering(): Boolean = false
     }
 
@@ -193,6 +198,9 @@ internal class BubblePanelLayer(
 
         viewport.clip.rewind()
         viewport.clip.addRoundRect(bodyBounds, radius, radius, Path.Direction.CW)
+        surfaceShape.rewind()
+        surfaceShape.addPath(viewport.clip)
+        if (!tailPath.isEmpty) surfaceShape.addPath(tailPath)
         for (index in rows.indices) {
             val row = rows[index]
             val fraction = BubbleLayerMotionSpec.contentFraction(progress, index, rows.size)

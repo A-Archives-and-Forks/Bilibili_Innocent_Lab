@@ -68,6 +68,16 @@ private object SourceIconAlpha {
  */
 internal class BubbleIconProxy(private val source: ImageView) {
     private val originalAlpha = SourceIconAlpha.acquire(source)
+    /**
+     * 按钮原位的静止图标：面板从按钮处长出时，最初约 150ms 它的玻璃表面正好盖在按钮上，
+     * 飞行副本又已飞走，按钮原位只剩一片浅色玻璃——深色图标先"消失"再"出现"，浅色下读作
+     * 按钮深浅跳动（2026-09-24 真机：图标区与圆形底同时升到 242/243）。在面板窗口里、
+     * 按钮原位、裁到面板当前形状内补画一张，不透明度 = 真实图标权重 × 表面不透明度，
+     * 正好补回被玻璃盖掉的那部分。深色下面板与按钮同为深色，不画，保持原观感。
+     */
+    private val slotPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val lightTheme = (source.resources.configuration.uiMode and
+        android.content.res.Configuration.UI_MODE_NIGHT_MASK) != android.content.res.Configuration.UI_MODE_NIGHT_YES
     private val sourceLocation = IntArray(2)
     private val rootLocation = IntArray(2)
     private val visibleBounds = Rect()
@@ -207,14 +217,33 @@ internal class BubbleIconProxy(private val source: ImageView) {
             tookOver = true
             SourceIconAlpha.markTakenOver(source)
         }
-        source.alpha = originalAlpha * BubbleLayerMotionSpec.sourceIconWeight(p)
-        iconPaint.alpha = (255f * originalAlpha * BubbleLayerMotionSpec.iconOpacity(p))
+        // 真实图标与副本的实际不透明度互补，见 BubbleLayerMotionSpec.proxyIconOpacity。
+        source.alpha = originalAlpha * BubbleLayerMotionSpec.sourceIconWeight(p, lightTheme)
+        iconPaint.alpha = (255f * originalAlpha * BubbleLayerMotionSpec.proxyIconOpacity(p, lightTheme))
             .roundToInt().coerceIn(0, 255)
+        slotPaint.alpha = if (!lightTheme) 0 else (255f * originalAlpha *
+            BubbleLayerMotionSpec.sourceIconWeight(p, true) * BubbleLayerMotionSpec.surfaceOpacity(p))
+            .roundToInt().coerceIn(0, 255)
+        // 气泡盖住按钮的同时让按钮自己的涟漪同步退场，见 CoverableRippleDrawable。
+        coverRipple(BubbleLayerMotionSpec.surfaceOpacity(p))
+    }
+
+    private fun coverRipple(opacity: Float) {
+        (source.foreground as? CoverableRippleDrawable)?.coverOpacity = opacity
     }
 
     fun drawIcon(canvas: Canvas) {
         if (iconPaint.alpha == 0) return
         drawSnapshot(canvas, iconPaint)
+    }
+
+    /** 在按钮原位、面板形状内补画静止图标，见 [slotPaint]。 */
+    fun drawSlotIcon(canvas: Canvas, surfaceShape: android.graphics.Path) {
+        if (slotPaint.alpha == 0 || surfaceShape.isEmpty) return
+        canvas.withSave {
+            clipPath(surfaceShape)
+            drawSnapshot(this, slotPaint, sourceBounds)
+        }
     }
 
     /** 保留原图片透明轮廓；白色 SRC_IN 只替换 RGB，不把透明像素变成实心矩形。 */
@@ -227,6 +256,9 @@ internal class BubbleIconProxy(private val source: ImageView) {
     fun settleExpanded() {
         restoreSource()
         iconPaint.alpha = 0
+        slotPaint.alpha = 0
+        // 打开态按钮被面板完全盖住；涟漪退场可能还没跑完，保持压住，收起时逐帧放开。
+        if (tookOver) coverRipple(1f)
     }
 
     fun dispose() {
@@ -238,7 +270,9 @@ internal class BubbleIconProxy(private val source: ImageView) {
         }
         disposed = true
         restoreSource()
+        releaseRipple()
         iconPaint.alpha = 0
+        slotPaint.alpha = 0
         bitmap = null
         root = null
         sourceBounds.setEmpty()
@@ -253,12 +287,17 @@ internal class BubbleIconProxy(private val source: ImageView) {
         source.alpha = originalAlpha
     }
 
-    private fun drawSnapshot(canvas: Canvas, paint: Paint) {
+    /** 废弃时把涟漪还给按钮；收起路径到这里时覆盖度已经归零，不会有可见变化。 */
+    private fun releaseRipple() {
+        if (tookOver) coverRipple(0f)
+    }
+
+    private fun drawSnapshot(canvas: Canvas, paint: Paint, bounds: RectF = drawBounds) {
         val image = bitmap ?: return
-        if (disposed || !validBounds(drawBounds)) return
+        if (disposed || !validBounds(bounds)) return
         canvas.withSave {
-            translate(drawBounds.left, drawBounds.top)
-            scale(drawBounds.width() / sourceWidth, drawBounds.height() / sourceHeight)
+            translate(bounds.left, bounds.top)
+            scale(bounds.width() / sourceWidth, bounds.height() / sourceHeight)
             clipRect(0f, 0f, sourceWidth.toFloat(), sourceHeight.toFloat())
             // 捕获分辨率可降采样，但重放仍使用统一比例，不受 Bitmap 边长取整误差影响。
             scale(1f / captureScale, 1f / captureScale)

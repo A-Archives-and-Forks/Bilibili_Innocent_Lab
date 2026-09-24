@@ -3,6 +3,9 @@ package com.Bilibili_Innocent_Lab.xposedmodule.ui.activity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 /**
  * 守住"会溢出自身边界的交互控件，其宿主容器必须放行绘制"这条约定。
@@ -74,23 +77,18 @@ class InteractiveOverdrawClipConventionTest {
      * 由控制器临时解除、收尾统一恢复——否则溢出的拉伸/位移仍被裁成矩形断边。
      */
     @Test fun elasticDragRelievesAncestorClippingAtRuntime() {
-        val controller = sequenceOf(
-            java.io.File(
-                "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/interaction/ElasticInteractionController.kt"),
-            java.io.File(
-                "app/src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/interaction/ElasticInteractionController.kt")
-        ).first(java.io.File::isFile).readText()
+        val controller = SourceContract.read("src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/interaction/ElasticInteractionController.kt")
         // 解除发生在进入 DRAG 的那一刻（PRESS 只有按压缩小、不会溢出）。
-        val dragEntry = controller.substringAfter("motion = Motion.DRAG")
+        val dragEntry = controller.after("motion = Motion.DRAG")
         assertTrue(dragEntry.contains("relieveAncestorClipping()"))
         assertTrue(controller.contains("clipChildren = false"))
         assertTrue(controller.contains("clipToPadding = false"))
         // 恢复统一挂在 removeVisual：clear/UP/CANCEL/relinquish 全部汇聚于此。
-        val removeVisual = controller.substringAfter("private fun removeVisual(")
-            .substringBefore("private fun relinquish(")
+        val removeVisual = controller.after("private fun removeVisual(")
+            .before("private fun relinquish(")
         assertTrue(removeVisual.contains("restoreAncestorClipping()"))
         // 恢复体必须写回租约里保存的原值，而不是拍死成某个常量。
-        val restore = controller.substringAfter("private fun restoreAncestorClipping()")
+        val restore = controller.after("private fun restoreAncestorClipping()")
         assertTrue(restore.contains("relief.view.clipChildren = relief.clipChildren"))
         assertTrue(restore.contains("relief.view.clipToPadding = relief.clipToPadding"))
     }

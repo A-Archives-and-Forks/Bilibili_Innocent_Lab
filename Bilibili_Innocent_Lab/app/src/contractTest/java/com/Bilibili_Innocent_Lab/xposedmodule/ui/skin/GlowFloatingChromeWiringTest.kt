@@ -5,13 +5,16 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
 
 /**
  * 2026-09-23 悬浮栏可读性改造 A 期的装配约束：层级边界、生命周期与底图同源。
  */
 class GlowFloatingChromeWiringTest {
     private fun source(relative: String): String =
-        sequenceOf(File(relative), File("app/$relative")).first(File::isFile).readText().replace("\r\n", "\n")
+        SourceContract.read(relative).replace("\r\n", "\n")
 
     private val base = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui"
 
@@ -32,9 +35,9 @@ class GlowFloatingChromeWiringTest {
 
     @Test fun chromeFollowsPagerMotionAndIsDisposedWithThePresenter() {
         val home = source("$base/activity/SettingsHomePresenter.kt")
-        val position = home.substringAfter("pager.onPositionChanged = {").substringBefore("}")
+        val position = home.after("pager.onPositionChanged = {").before("}")
         assertTrue(position.contains("floatingChrome?.onContentMoved()"))
-        val dispose = home.substringAfter("fun dispose() {")
+        val dispose = home.after("fun dispose() {")
         assertTrue(dispose.contains("floatingChrome?.dispose()"))
         // 引擎每次现取：Liquid 失败回落后必须换成柔光，不能缓存旧引擎。
         assertTrue(home.contains("GlowFloatingChrome(backdropTarget, { activity.glowEngine }, ::edgeCoverage)"))
@@ -48,7 +51,7 @@ class GlowFloatingChromeWiringTest {
             assertEquals(kind, 1, Regex("addOn$kind\\(").findAll(chrome).count())
             assertEquals(kind, 1, Regex("removeOn$kind\\(").findAll(chrome).count())
         }
-        val dispose = chrome.substringAfter("fun dispose() {").substringBefore("\n    }\n")
+        val dispose = chrome.after("fun dispose() {").before("\n    }\n")
         assertTrue(dispose.contains("probe.close()"))
         assertTrue(dispose.contains("setSurfaceLegibility(surface.host, null)"))
         assertTrue(dispose.contains("removeCallbacks(probeRunnable)"))
@@ -56,7 +59,7 @@ class GlowFloatingChromeWiringTest {
 
     @Test fun dissolveDrawsTheVisibleRootBitmapNotTheOpticalCopy() {
         val source = source("$base/skin/liquid/LiquidBackdropSource.kt")
-        val presentation = source.substringAfter("fun drawPresentationRegion(").substringBefore("\n    }\n")
+        val presentation = source.after("fun drawPresentationRegion(").before("\n    }\n")
         // 溶解区必须与根背景逐像素一致：根背景画的是 bitmap（含颗粒），不是光学副本。
         assertTrue(source.contains("BitmapShader(bitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)"))
         assertFalse(presentation.contains("opticalBitmap"))
@@ -71,7 +74,7 @@ class GlowFloatingChromeWiringTest {
         assertEquals(2, assignments)
         // 两次换源 + 同尺寸位图的窗口映射更新（updateFullSize）。
         assertEquals(3, Regex("backdropGeneration\\+\\+").findAll(renderer).count())
-        assertTrue(renderer.substringAfter("existing.updateFullSize(width, height)").trimStart()
+        assertTrue(renderer.after("existing.updateFullSize(width, height)").trimStart()
             .startsWith("backdropGeneration++"))
     }
 

@@ -4,6 +4,9 @@ import java.io.File
 import kotlin.math.abs
 import org.junit.Assert.*
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 class NavigationMotionPolicyTest {
     @Test fun aBackPressKeepsTouchOwnershipAcrossAnimationCompletionUntilUpOrCancel() {
@@ -100,14 +103,14 @@ class NavigationMotionPolicyTest {
 
     private fun source(name: String): String {
         val path = "src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/activity/$name.kt"
-        return sequenceOf(File(path), File("app/$path")).first(File::isFile).readText()
+        return SourceContract.read(path)
     }
     @Test fun bothPagesFreezeTheVisualProfileAndInvalidatePostedEntryWork() {
         for (page in listOf("SettingsBackupActivity", "DiagnosticsActivity")) {
             val code = source(page)
-            val prepare = code.substringAfter("private fun prepareExitMotion(").substringBefore("private fun requestClose(")
+            val prepare = code.after("private fun prepareExitMotion(").before("private fun requestClose(")
             assertTrue(prepare.indexOf("NavigationMotionPolicy.preserveFrame(motionState)") < prepare.indexOf("resolveMotionGeometry("))
-            assertTrue(prepare.substringBefore("resolveMotionGeometry(").contains("return"))
+            assertTrue(prepare.before("resolveMotionGeometry(").contains("return"))
             assertTrue(code.contains("!motionSession.owns(entryToken)"))
             assertTrue(code.contains("!motionSession.owns(finishToken)"))
             assertTrue(code.contains("motionState == MotionState.CLOSING"))
@@ -117,7 +120,7 @@ class NavigationMotionPolicyTest {
     }
     @Test fun transitionsDoNotAllocateFrameSnapshotsOrRebuildListsPerFrame() {
         for (page in listOf("SettingsBackupActivity", "DiagnosticsActivity")) {
-            val apply = source(page).substringAfter("private fun applyMotionExpansion(").substringBefore("private fun completeExpandedMotion(")
+            val apply = source(page).after("private fun applyMotionExpansion(").before("private fun completeExpandedMotion(")
             for (forbidden in listOf("snapshot()", "Bitmap", "resolveMotionGeometry", "renderHome", "removeAllViews")) {
                 assertFalse(forbidden, apply.contains(forbidden))
             }

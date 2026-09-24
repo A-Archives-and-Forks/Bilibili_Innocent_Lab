@@ -7,6 +7,8 @@ import com.Bilibili_Innocent_Lab.xposedmodule.ui.theme.ModernPalette
 import com.Bilibili_Innocent_Lab.xposedmodule.ui.theme.MonetColors
 import org.junit.Assert.*
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 class ModernMaterialPolicyTest {
     @Test fun backgroundBudgetIsBoundedForPhonesTabletsAndExtremeAspectRatios() {
@@ -82,7 +84,7 @@ class ModernMaterialPolicyTest {
         assertFalse("不得再有动画期静默窗口", sampler.contains("motionUntilNanos"))
         assertFalse("不得再有单独的动画期冻结入口", sampler.contains("fun invalidateForMotion"))
         val renderer = source("ui/skin/material/FrostedMaterialRenderer.kt")
-        val onPosition = renderer.substringAfter("private fun onPositionChanged(")
+        val onPosition = renderer.after("private fun onPositionChanged(")
             .substringBefore("fun releaseMemory()", "MISSING")
         assertTrue(onPosition != "MISSING")
         assertTrue("显式动画与滚动都只是把透镜设脏", onPosition.contains("live.invalidate()"))
@@ -99,7 +101,7 @@ class ModernMaterialPolicyTest {
      */
     @Test fun perPixelLensWorkNeverRunsOnTheUiThread() {
         val sampler = source("ui/skin/material/LiveBackdropSampler.kt")
-        val capture = sampler.substringAfter("private fun capture(")
+        val capture = sampler.after("private fun capture(")
             .substringBefore("private fun onBatchDone(", "MISSING")
         assertTrue(capture != "MISSING")
         assertTrue("主线程只录制内容层的绘制指令", capture.contains("picture.beginRecording("))
@@ -107,22 +109,22 @@ class ModernMaterialPolicyTest {
             "LensRefractionPolicy.remap", "premultiply", "illuminate")) {
             assertFalse("主线程采集阶段不得调用 $heavy", capture.contains(heavy))
         }
-        val process = sampler.substringAfter("fun process(job: LensJob)")
+        val process = sampler.after("fun process(job: LensJob)")
             .substringBefore("fun close()", "MISSING")
         assertTrue(process != "MISSING")
         assertTrue("后台作业必须标注 @WorkerThread",
-            sampler.substringBefore("fun process(job: LensJob)").trimEnd().endsWith("@WorkerThread"))
+            sampler.before("fun process(job: LensJob)").trimEnd().endsWith("@WorkerThread"))
         for (heavy in listOf("drawPicture", "getPixels", "blurInto", "LensRefractionPolicy.remap",
             "premultiply", "illuminate", "unpremultiply")) {
             assertTrue("后台作业必须包含 $heavy", process.contains(heavy))
         }
-        val release = sampler.substringAfter("fun release()").substringBefore("sampleWidth = 0", "MISSING")
+        val release = sampler.after("fun release()").substringBefore("sampleWidth = 0", "MISSING")
         assertTrue(release != "MISSING")
         assertFalse("后台可能正往 sample 里回放：释放时 recycle 会立刻释放原生像素，就是释放后使用",
             release.contains("sample?.recycle()"))
         assertTrue("同一时刻至多一批在飞，在飞期间主线程不碰作业缓冲",
             sampler.contains("if (inFlight) return"))
-        val done = sampler.substringAfter("private fun onBatchDone(")
+        val done = sampler.after("private fun onBatchDone(")
             .substringBefore("private fun fail()", "MISSING")
         assertTrue(done != "MISSING")
         assertTrue("过期批次（释放/关闭后回来的）必须整批丢弃",

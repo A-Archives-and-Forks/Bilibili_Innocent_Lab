@@ -4,6 +4,9 @@ import com.Bilibili_Innocent_Lab.xposedmodule.ui.skin.material.FrostedMaterialLi
 import java.io.File
 import org.junit.Assert.*
 import org.junit.Test
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.SourceContract
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.after
+import com.Bilibili_Innocent_Lab.xposedmodule.contract.before
 
 class FrostedMaterialLifecycleTest {
     @Test fun initialBindingCanPrepareBeforeOnStartWithoutDuplicatingTheRequest() {
@@ -51,16 +54,13 @@ class FrostedMaterialLifecycleTest {
     }
 
     @Test fun productionWiresRequestDeliveryAndRegistrationToTheSameLifecycle() {
-        fun source(path: String) = sequenceOf(
-            File("src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/$path"),
-            File("app/src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/$path")
-        ).first(File::isFile).readText()
+        fun source(path: String) = SourceContract.read("src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/skin/$path")
         val renderer = source("material/FrostedMaterialRenderer.kt")
-        val request = renderer.substringAfter("private fun requestBackdrop").substringBefore("private fun acceptBackdrop")
+        val request = renderer.after("private fun requestBackdrop").before("private fun acceptBackdrop")
         assertTrue(request.indexOf("!lifecycle.canWork") < request.indexOf("worker.submit"))
-        val delivery = renderer.substringAfter("private fun acceptBackdrop").substringBefore("internal fun drawSample")
+        val delivery = renderer.after("private fun acceptBackdrop").before("internal fun drawSample")
         assertTrue(delivery.indexOf("!lifecycle.accepts(token)") < delivery.indexOf("frame = result"))
-        val registration = renderer.substringAfter("internal fun register").substringBefore("fun notifyPositionChanged")
+        val registration = renderer.after("internal fun register").before("fun notifyPositionChanged")
         assertTrue(registration.indexOf("!lifecycle.canWork") < registration.indexOf("surfaces[view]"))
         assertFalse(renderer.contains(".recycle()"))
         assertTrue(renderer.contains("val recipient = WeakReference(this)"))
