@@ -1,0 +1,58 @@
+{
+  "product_name": "Bilibili Innocent Lab",
+  "product_context": "LSPosed/Xposed 模块，Hook 哔哩哔哩 Android 客户端（下文称“哔哩哔哩”或“B 站”），提供界面净化、推荐过滤、播放器增强、评论与动态页调整等功能，模块自身有设置界面。",
+  "user_text_paths": [
+    "Bilibili_Innocent_Lab/app/src/main/res/values-zh-rCN/strings.xml"
+  ],
+  "highlight_paths": [
+    "Bilibili_Innocent_Lab/app/src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/ui/release/ReleaseHighlightsCatalog.kt"
+  ],
+  "source_prefixes": [
+    "Bilibili_Innocent_Lab/app/src/main/"
+  ],
+  "path_strip_prefixes": [
+    "Bilibili_Innocent_Lab/app/src/main/java/com/Bilibili_Innocent_Lab/xposedmodule/",
+    "Bilibili_Innocent_Lab/app/src/"
+  ],
+  "ignored_path_patterns": [
+    "*/build/*",
+    "*.png",
+    "*.webp",
+    "*.jar",
+    "*.so",
+    "*/values-*/strings.xml",
+    "**/lint-baseline.xml",
+    "docs/*",
+    "analysis_frames/*",
+    "Temp/*"
+  ],
+  "forbidden_terms": [
+    "Gradle",
+    "R8",
+    "KSP",
+    "Lint",
+    "lint",
+    "CI",
+    "APK 构建",
+    "workflow",
+    "工作流",
+    "单元测试",
+    "门禁",
+    "Activity",
+    "Fragment",
+    "Provider",
+    "DexKit",
+    "KavaRef",
+    "Hikage",
+    "strings.xml",
+    ".kt",
+    ".xml"
+  ],
+  "style_notes": [
+    "宿主统一称“哔哩哔哩”或“B 站”；提到宿主版本号时写成“B 站 9.13.0”这样的形式。",
+    "设置项名称尽量沿用“用户可见文案净变化”里的原文，便于用户在设置页中找到。",
+    "视觉引擎的专有名称（如“柔光”“凝光”“高级材质”）保持原样，不要自行改名。"
+  ],
+  "max_items": 18,
+  "max_context_chars": 60000
+}
