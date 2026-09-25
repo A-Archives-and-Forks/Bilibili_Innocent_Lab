@@ -938,6 +938,12 @@
     <string name="hide_player_popup_promotion_tip">隱藏播放器內的小程式等通用懸浮推廣卡片，保留其他互動元件和一般彈幕。</string>
     <string name="recommendation_blocklist_manage">管理推薦封鎖</string>
     <string name="recommendation_blocklist_manage_tip">確認回饋面板中的封鎖項目，或取消誤封鎖。</string>
+    <string name="block_ai_declared_videos">封鎖含 AI 生成聲明的影片</string>
+    <string name="block_ai_declared_videos_tip">開啟帶有「含AI生成內容」聲明的影片時，自動跳到一部相關影片；沒有可用的相關影片時顯示提示頁。首頁推薦會依 AI 創作標籤提前過濾，已確認的影片也會從相關推薦中移除。</string>
+    <string name="block_ai_declared_videos_strong_mode">強力模式：同時封鎖發布者</string>
+    <string name="block_ai_declared_videos_strong_mode_tip">攔截到聲明影片時，本次執行內立即封鎖其 UP 主，並在下次開啟 Innocent_Lab 時自動併入「依 UP 主過濾推薦」，不需開啟自動確認。誤封鎖可在「管理推薦封鎖」中移除。</string>
+    <string name="highlights_ai_declared_videos">略過帶「含AI生成內容」聲明的影片：詳細頁自動換成相關影片，首頁與相關推薦會提前過濾。</string>
+    <string name="highlights_ai_declared_videos_strong_mode">可選擇同時封鎖被攔截影片的 UP 主，自動併入你的 UP 封鎖名單。</string>
     <string name="recommendation_blocklist_description">勾選保留，取消勾選移除；儲存後重新啟動嗶哩嗶哩生效。回饋面板中的新選擇尚未長期儲存。</string>
     <string name="recommendation_blocklist_tags">標籤</string>
     <string name="recommendation_blocklist_authors">UP 主</string>

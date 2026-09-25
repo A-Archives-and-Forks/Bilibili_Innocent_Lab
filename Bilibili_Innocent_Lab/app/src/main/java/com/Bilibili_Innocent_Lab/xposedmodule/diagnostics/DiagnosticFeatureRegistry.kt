@@ -138,6 +138,12 @@ internal object DiagnosticFeatureRegistry {
             DiagnosticFeatureCategory.PLAYER_AND_DETAIL,
             runtimeEvidenceExpected = true
         ),
+        // 同一对 ViewMoss 方法上的另一个安装器：只改 ecode/ecode_config 与相关推荐卡。
+        DiagnosticFeatureDescriptor(
+            "ai_declared_video_block",
+            DiagnosticFeatureCategory.PLAYER_AND_DETAIL,
+            runtimeEvidenceExpected = true
+        ),
         DiagnosticFeatureDescriptor(
             "player_default_quality",
             DiagnosticFeatureCategory.PLAYER_AND_DETAIL,

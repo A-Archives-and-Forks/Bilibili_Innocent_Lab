@@ -43,7 +43,17 @@ internal class HomeRecommendPurifyFeatureInstaller(
      */
     private val sectionPickEnabled: Boolean = false,
     minPlayCount: Int = 0,
-    maxPlayCount: Int = 0
+    maxPlayCount: Int = 0,
+    /**
+     * 「屏蔽 AI 生成声明视频」的首页一档：`uri` 里 `creation_tags` 含 `aigc`，
+     * 或 aid 已被详情页确认过（[AiDeclaredVideoRegistry]）。判据见 [AiDeclaredVideoPolicy]。
+     */
+    private val removeAiDeclared: Boolean = false,
+    /**
+     * 强力模式开着时，详情页记下的发布者只写进 [AuthorPickSession]；
+     * 这里必须据此打开 UP 维度的读取链，否则"本进程立即生效"那半句不成立。
+     */
+    aiDeclaredStrongMode: Boolean = false
 ) : FeatureInstaller {
 
     private val titleKeywords = if (titleFilterEnabled) {
@@ -68,7 +78,8 @@ internal class HomeRecommendPurifyFeatureInstaller(
     private val blockedAuthors = ExactRuleSetCodec.parse(rawBlockedAuthors)
 
     /** UP 维度是否需要解析读取链；面板劫持开着时即使名单为空也要。 */
-    private val authorDimensionEnabled = blockedAuthors.isNotEmpty() || sectionPickEnabled
+    private val authorDimensionEnabled = blockedAuthors.isNotEmpty() || sectionPickEnabled ||
+        (removeAiDeclared && aiDeclaredStrongMode)
 
     /** 只有这些开关才需要把卡片公开字段交给语义分类器；Banner 单独走精确 token 判定。 */
     private val semanticClassificationEnabled =
@@ -78,7 +89,8 @@ internal class HomeRecommendPurifyFeatureInstaller(
     /** `shouldRemove` 的其余判定也全部关闭时，直接跳过整段分类/规则工作。 */
     private val itemRemovalEnabled = semanticClassificationEnabled ||
         titleKeywords.isNotEmpty() || durationRange.isEnabled ||
-        playCountRange.isEnabled || tagDimensionEnabled || authorDimensionEnabled
+        playCountRange.isEnabled || tagDimensionEnabled || authorDimensionEnabled ||
+        removeAiDeclared
 
     override val id: String = ID
     override val capabilityIds: List<String> get() = buildList {
@@ -98,13 +110,14 @@ internal class HomeRecommendPurifyFeatureInstaller(
         if (playCountRange.isEnabled) add("home_recommend_play_count_filter")
         if (tagDimensionEnabled) add("home_recommend_tid_block")
         if (authorDimensionEnabled) add("home_recommend_author_block")
+        if (removeAiDeclared) add(AiDeclaredVideoPolicy.CAPABILITY_HOME)
     }
 
     override fun install(environment: HookEnvironment): FeatureInstallResult {
         val hasContentFilter = removeAds || removeCmV2 || removeBanner || removePictures || removeGamePromotions ||
             titleKeywords.isNotEmpty() || removeLive || removeCourses || removeVertical ||
             removeLarge || removePgc || removeSpecialCards || tagDimensionEnabled ||
-            authorDimensionEnabled
+            authorDimensionEnabled || removeAiDeclared
         if (durationRange.isConfigured && !durationRange.isValid) {
             environment.logError(
                 "home_recommend_duration_invalid",
@@ -198,6 +211,15 @@ internal class HomeRecommendPurifyFeatureInstaller(
                     "UP 维度不生效，其他推荐过滤继续"
             )
         }
+        // AI 声明这一档两条输入各自独立：uri 读不到只丢标签那半边，param 读不到只丢已知 aid 那半边；
+        // 两条都没有才是整档失效，必须报 partial，不能静默变成"从不命中"。
+        if (removeAiDeclared && accessors.uri == null && accessors.param == null) {
+            partialReason = "missing-ai-declared-readers"
+            environment.logError(
+                "home_recommend_ai_declared_missing",
+                "[BIL] 首页推荐 uri/param 读取适配不完整，AI 声明这一档不生效，其他推荐过滤继续"
+            )
+        }
         // 只填了标签名却读不到 tname：同理，名字那半边会静默失效。
         if (blockedTagNames.isNotEmpty() && accessors.tid?.tnameGetter == null) {
             partialReason = "missing-tname-accessor"
@@ -285,6 +307,7 @@ internal class HomeRecommendPurifyFeatureInstaller(
                 "home_recommend_pgc_removed" -> extraTypesReadable || accessors.uri != null
                 "home_recommend_special_cards_removed" -> extraTypesReadable
                 "home_recommend_tid_block" -> accessors.tid != null
+                AiDeclaredVideoPolicy.CAPABILITY_HOME -> accessors.uri != null || accessors.param != null
                 else -> routeReadable
             }
             environment.reportCapabilityCoverage(capability, readable, installed, adapted.responseItemGetters.size)
@@ -366,7 +389,8 @@ internal class HomeRecommendPurifyFeatureInstaller(
             // UP 是独立维度：名字与 mid 任一整串相等即删，读不到一律放行。
             // 持久名单与本场会话选择是两个来源，见 AuthorPickSession。
             ExactRuleSetCodec.matches(blockedAuthors, signals.upName, signals.upId) ||
-            AuthorPickSession.matches(signals.upName, signals.upId)
+            AuthorPickSession.matches(signals.upName, signals.upId) ||
+            signals.aiDeclared
     }
 
     private fun signals(item: Any, accessors: Accessors): Signals {
@@ -413,6 +437,7 @@ internal class HomeRecommendPurifyFeatureInstaller(
             },
             uri = if (needsRoute) invokeString(accessors.uri, item) else null,
             param = if (removeGamePromotions) invokeString(accessors.param, item) else null,
+            aiDeclared = removeAiDeclared && aiDeclared(item, accessors),
             title = if (titleKeywords.isNotEmpty() || removeGamePromotions) {
                 invokeString(accessors.title, item)
             } else {
@@ -471,6 +496,18 @@ internal class HomeRecommendPurifyFeatureInstaller(
                 }
             }
         )
+    }
+
+    /**
+     * 先比已知 aid（一次 `toLongOrNull` + 集合查找），再看 uri 标签（原串预判不分配）。
+     * 标签命中的 aid 也记进 [AiDeclaredVideoRegistry]，让相关推荐与补位候选同样避开它。
+     */
+    private fun aiDeclared(item: Any, accessors: Accessors): Boolean {
+        val aid = AiDeclaredVideoPolicy.aidFromParam(invokeString(accessors.param, item))
+        if (AiDeclaredVideoRegistry.contains(aid)) return true
+        if (!AiDeclaredVideoPolicy.feedUriDeclaresAigc(invokeString(accessors.uri, item))) return false
+        AiDeclaredVideoRegistry.add(aid)
+        return true
     }
 
     /** 名单为空时**不解析**，免得在热路径上白做两次反射查找。 */
@@ -638,7 +675,9 @@ internal class HomeRecommendPurifyFeatureInstaller(
          * 这条路不通。** 留着这条探针是为了宿主哪天把它填上时能第一时间发现，
          * 不是留着给判定用的。
          */
-        val rid: Long? = null
+        val rid: Long? = null,
+        /** AI 生成声明一档的结论；开关关着时恒为 false，不产生任何读取。 */
+        val aiDeclared: Boolean = false
     )
 
     private data class Accessors(

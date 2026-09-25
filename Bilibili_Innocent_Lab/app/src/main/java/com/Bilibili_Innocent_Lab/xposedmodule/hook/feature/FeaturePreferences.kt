@@ -52,6 +52,24 @@ internal object FeaturePreferences {
     const val HOME_RECOMMEND_FEEDBACK_AUTO_CONFIRM = "recommendation_feedback_auto_confirm"
 
     /**
+     * 屏蔽带「含AI生成内容」创作声明的视频。**默认关**。
+     *
+     * 一个开关管三处：详情页命中声明即改写 `ViewReply.ecode` 让宿主自己跳到补位视频；
+     * 首页推荐按 `qn_feature.creation_tags` 的 `aigc` 标签提前删卡；
+     * 相关推荐按本进程已确认的 aid 删卡。判据见 `AiDeclaredVideoPolicy`。
+     */
+    const val BLOCK_AI_DECLARED_VIDEOS = "block_ai_declared_videos"
+
+    /**
+     * 强力模式：详情页确认声明后，把发布者记进「屏蔽 UP」的点选观测面。
+     *
+     * 宿主侧只写本进程的 [AuthorPickSession] 与观测快照，**不写配置**；
+     * 长期名单仍由模块 App 在前台时并入 [HOME_RECOMMEND_BLOCKED_AUTHORS]，
+     * 且这一类来源不需要打开「自动确认」也会被并入。只在 [BLOCK_AI_DECLARED_VIDEOS] 开着时生效。
+     */
+    const val BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE = "block_ai_declared_videos_strong_mode"
+
+    /**
      * 要拦截下载的组件库资源池。
      *
      * 与其余四个勾选面同构：`_SELECTORS` 是面板勾出来的，`_RULES` 是手填的，

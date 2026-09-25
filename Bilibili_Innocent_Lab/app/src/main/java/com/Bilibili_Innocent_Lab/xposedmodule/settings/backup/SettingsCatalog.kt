@@ -21,7 +21,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.settings.appearance.ModalBackdropB
 internal object SettingsCatalog {
     const val PRODUCT_ID = "bilibili-innocent-lab.settings"
     const val SCOPE_ID = "core-user-settings"
-    const val CATALOG_VERSION = 27
+    const val CATALOG_VERSION = 28
     const val ID_PLAYER_DEFAULT_SPEED = "player.default_speed.percent"
     const val ID_PLAYER_LONG_PRESS_SPEED = "player.long_press_speed.percent"
     const val ID_FREE_COPY_COMMENT = "free_copy.comment.enabled"
@@ -36,6 +36,8 @@ internal object SettingsCatalog {
         "recommend.video_play_count.maximum"
     const val ID_DANMAKU_WEIGHT_MINIMUM = "player.danmaku.weight_filter.minimum"
     const val ID_MATERIAL_COLOR_SPEC = "module_ui.material_color_spec"
+    const val ID_AI_DECLARED_VIDEOS_BLOCKED = "video.ai_declared.blocked"
+    const val ID_AI_DECLARED_VIDEOS_STRONG_MODE = "video.ai_declared.strong_mode"
 
     private fun bool(
         id: String,
@@ -149,6 +151,13 @@ internal object SettingsCatalog {
             R.string.recommendation_blocklist_auto_confirm,
             introducedCatalogVersion = 25,
             effects = setOf(ImportEffect.RECREATE_MODULE_UI)),
+        // 一个开关管详情页拦截补位 + 首页推荐 + 相关推荐三处，见 AiDeclaredVideoPolicy。
+        bool(ID_AI_DECLARED_VIDEOS_BLOCKED, FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS,
+            R.string.block_ai_declared_videos, introducedCatalogVersion = 28),
+        // 宿主据此记下发布者；模块 App 据此把这类来源并入 UP 名单（不需要打开自动确认）。
+        // 两边都读，所以重启宿主与重建模块界面都要。
+        bool(ID_AI_DECLARED_VIDEOS_STRONG_MODE, FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE,
+            R.string.block_ai_declared_videos_strong_mode, introducedCatalogVersion = 28),
         bool("home.recommend.live.removed", FeaturePreferences.REMOVE_HOME_RECOMMEND_LIVE, R.string.remove_home_recommend_live),
         bool("home.recommend.pgc.removed", FeaturePreferences.REMOVE_HOME_RECOMMEND_PGC,
             R.string.remove_home_recommend_pgc, introducedCatalogVersion = 14),
@@ -682,7 +691,7 @@ internal object SettingsCatalog {
     val byStorageKey: Map<String, SettingSpec> = specs.associateBy(SettingSpec::storageKey)
 
     init {
-        check(specs.size == 147) { "Expected 147 catalog settings, found ${specs.size}" }
+        check(specs.size == 149) { "Expected 149 catalog settings, found ${specs.size}" }
         check(byId.size == specs.size) { "Duplicate logical setting id" }
         check(specs.map(SettingSpec::storageKey).distinct().size == specs.size) {
             "Duplicate settings storage key"

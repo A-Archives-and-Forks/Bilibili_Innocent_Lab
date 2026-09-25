@@ -130,6 +130,16 @@ internal object ReleaseHighlightsCatalog {
         ReleaseHighlight("recommend-play-count-max", HighlightKind.NEW,
             R.string.highlights_recommend_play_count,
             HighlightDestination(SettingsCatalog.ID_RECOMMEND_VIDEO_MAX_PLAY_COUNT))
+    )),
+    // 批次 3（下一版）：屏蔽 AI 生成声明视频与它的强力模式。1.1.9 用户已看过批次 2，
+    // 追加进去永远不会再弹，所以另开批次；REVIEWED_VERSION_CODE 随下一次改版本号复核。
+    ReleaseHighlightsBatch(3, listOf(
+        ReleaseHighlight("ai-declared-videos", HighlightKind.NEW,
+            R.string.highlights_ai_declared_videos,
+            HighlightDestination(SettingsCatalog.ID_AI_DECLARED_VIDEOS_BLOCKED)),
+        ReleaseHighlight("ai-declared-videos-strong-mode", HighlightKind.NEW,
+            R.string.highlights_ai_declared_videos_strong_mode,
+            HighlightDestination(SettingsCatalog.ID_AI_DECLARED_VIDEOS_STRONG_MODE))
     )))
     val currentRevision: Int get() = batches.maxOf { it.revision }
     val destinations get() = batches.sortedByDescending { it.revision }.flatMap { it.entries }

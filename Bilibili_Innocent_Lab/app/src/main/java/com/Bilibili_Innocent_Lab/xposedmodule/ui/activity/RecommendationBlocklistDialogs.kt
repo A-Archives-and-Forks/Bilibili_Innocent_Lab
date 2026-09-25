@@ -92,7 +92,8 @@ internal fun MainActivity.showRecommendationBlocklistDialog(anchor: View? = null
  */
 internal fun MainActivity.autoConfirmRecommendationPicksIfEnabled(onMerged: () -> Unit) {
     val preferences = prefs()
-    if (!RecommendationBlocklistDraft.isAutoConfirmEnabled(preferences)) return
+    // 强力模式记下的 UP 也走这条后台并入，所以两个来源任一开着就要同步一次。
+    if (!RecommendationBlocklistDraft.needsBackgroundMerge(preferences)) return
     val collected = linkedMapOf<String, MineComponentSnapshot>()
     val answered = mutableSetOf<String>()
     fun settle(surface: String) {

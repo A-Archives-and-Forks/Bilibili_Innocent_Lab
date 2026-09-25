@@ -435,6 +435,73 @@ class HomeRecommendPurifyFeatureInstallerTest {
         assertEquals(1, source[1].argsCalls)
     }
 
+    @Test
+    fun `ai declared dimension drops tagged and already confirmed cards and records the tagged aid`() {
+        AiDeclaredVideoRegistry.resetForTest()
+        try {
+            AiDeclaredVideoRegistry.add(22L)
+            val tagged = AiFeedCard("11", aiFeedUri("人工智能-aigc,音乐-aigc"))
+            val confirmed = AiFeedCard("22", "bilibili://video/22?cid=1")
+            val topicOnly = AiFeedCard("44", aiFeedUri(null))
+            val plain = AiFeedCard("33", "bilibili://video/33?cid=1")
+            val source = listOf(tagged, confirmed, topicOnly, plain)
+            val recorded = PlayerPortTestRegistrar()
+            val capabilities = mutableListOf<Pair<String, FeatureInstallResult>>()
+            val env = homeFeedEnvironment(recorded).copy(capabilityEvidence = { id, result -> capabilities += id to result })
+            val result = HomeRecommendPurifyFeatureInstaller(
+                removeAds = false, removeCmV2 = false, removeBanner = false, removePictures = false,
+                removeGamePromotions = false, titleFilterEnabled = false, rawTitleKeywords = "",
+                removeLive = false, removeCourses = false, removeVertical = false, removeLarge = false,
+                minDurationSeconds = 0, maxDurationSeconds = 0,
+                points = aiFeedPoints(),
+                removeAiDeclared = true
+            ).install(env)
+
+            assertTrue(result is FeatureInstallResult.Installed)
+            val filtered = recorded.invoke("home.recommend.purify.0", AiFeedResponse(source)) { source }
+            assertEquals(listOf(topicOnly, plain), filtered)
+            assertTrue(AiDeclaredVideoRegistry.contains(11L))
+            assertTrue(capabilities.any {
+                it.first == AiDeclaredVideoPolicy.CAPABILITY_HOME && it.second is FeatureInstallResult.Installed
+            })
+        } finally {
+            AiDeclaredVideoRegistry.resetForTest()
+        }
+    }
+
+    private fun aiFeedPoints() = VersionAdapter.HomeRecommendFeedPoints(
+        responseItemGetters = listOf(
+            VersionAdapter.HookPoint(AiFeedResponse::class.java.name, "getItems", emptyList())
+        ),
+        holderTypeGetter = VersionAdapter.HookPoint(AiFeedCard::class.java.name, "getHolderType", emptyList()),
+        bizTypeGetter = null,
+        adInfoGetter = null,
+        cardGotoGetter = null,
+        goToGetter = null,
+        uriGetter = VersionAdapter.HookPoint(AiFeedCard::class.java.name, "getUri", emptyList()),
+        paramGetter = VersionAdapter.HookPoint(AiFeedCard::class.java.name, "getParam", emptyList()),
+        titleGetter = null,
+        subtitleGetter = null,
+        descGetter = null,
+        playerArgsGetter = null,
+        playerArgsDurationField = null,
+        argsGetter = null,
+        argsTidGetter = null,
+        argsTnameGetter = null,
+        argsRidGetter = null,
+        argsUpNameGetter = null,
+        argsUpIdGetter = null
+    )
+
+    /** 与抓包同形：`player_preload` 是 URL 编码 JSON，`qn_feature` 是其中的 JSON 字符串。 */
+    private fun aiFeedUri(creationTags: String?): String {
+        val feature = org.json.JSONObject().put("ai_tags", "人工智能-aigc-其他ai生成内容")
+        creationTags?.let { feature.put("creation_tags", it) }
+        val preload = org.json.JSONObject().put("qn_feature", feature.toString())
+        return "bilibili://video/1?cid=2&player_preload=" +
+            java.net.URLEncoder.encode(preload.toString(), "UTF-8")
+    }
+
     private fun homeFeedEnvironment(recorded: PlayerPortTestRegistrar) =
         environment(mutableListOf()).copy(registrar = object : HookRegistrar by recorded {
             override fun adapted(
@@ -556,6 +623,16 @@ class HomeRecommendPurifyFeatureInstallerTest {
         fun getUpName(): String = upName
         fun getUpId(): Long = upId
     }
+}
+
+private class AiFeedResponse(private val items: List<AiFeedCard>) {
+    fun getItems(): List<AiFeedCard> = items
+}
+
+private class AiFeedCard(private val param: String, private val uri: String) {
+    fun getHolderType(): String = "small_cover_v2"
+    fun getParam(): String = param
+    fun getUri(): String = uri
 }
 
 private class HomeFeedResponse(private val items: List<HomeFeedCard>) {

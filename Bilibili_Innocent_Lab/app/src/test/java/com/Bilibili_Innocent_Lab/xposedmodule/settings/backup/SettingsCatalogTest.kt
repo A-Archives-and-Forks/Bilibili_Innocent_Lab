@@ -130,11 +130,11 @@ class SettingsCatalogTest {
     }
 
     @Test
-    fun `catalog is a unique allowlist with 147 settings`() {
-        assertEquals(147, SettingsCatalog.specs.size)
-        assertEquals(147, SettingsCatalog.specs.map { it.id }.distinct().size)
-        assertEquals(147, SettingsCatalog.specs.map { it.storageKey }.distinct().size)
-        assertEquals(145, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.AUTOMATIC })
+    fun `catalog is a unique allowlist with 149 settings`() {
+        assertEquals(149, SettingsCatalog.specs.size)
+        assertEquals(149, SettingsCatalog.specs.map { it.id }.distinct().size)
+        assertEquals(149, SettingsCatalog.specs.map { it.storageKey }.distinct().size)
+        assertEquals(147, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.AUTOMATIC })
         assertEquals(2, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.MANUAL })
         assertTrue(SettingsCatalog.specs.all { it.accepts(it.defaultValue) })
         assertTrue(SettingsCatalog.specs.all { it.id.matches(Regex("[a-z0-9][a-z0-9._-]{0,127}")) })
@@ -365,7 +365,7 @@ class SettingsCatalogTest {
         val expected = requireNotNull(javaClass.classLoader?.getResourceAsStream("settings-backup/catalog-v13.txt"))
             .bufferedReader().useLines { it.filter(String::isNotBlank).toList() }
         assertEquals(expected, SettingsCatalog.specs.filter { it.introducedCatalogVersion <= 13 }.map { it.id }.sorted())
-        assertEquals(27, SettingsCatalog.CATALOG_VERSION)
+        assertEquals(28, SettingsCatalog.CATALOG_VERSION)
         val added = SettingsCatalog.specs.filter { it.introducedCatalogVersion == 13 }
         assertEquals(6, added.size)
         assertTrue(added.all { it.restorePolicy == RestorePolicy.AUTOMATIC && ImportEffect.RESTART_BILIBILI in it.effects })
@@ -480,8 +480,36 @@ class SettingsCatalogTest {
     }
 
     @Test
+    fun `catalog v28 adds the ai declared video switch and its strong mode`() {
+        val expected = requireNotNull(
+            javaClass.classLoader?.getResourceAsStream("settings-backup/catalog-v28.txt")
+        ).bufferedReader().useLines { it.filter(String::isNotBlank).toList() }
+        assertEquals(expected, SettingsCatalog.specs.filter { it.introducedCatalogVersion <= 28 }.map { it.id }.sorted())
+        val added = SettingsCatalog.specs.filter { it.introducedCatalogVersion == 28 }
+        assertEquals(
+            listOf(
+                SettingsCatalog.ID_AI_DECLARED_VIDEOS_BLOCKED,
+                SettingsCatalog.ID_AI_DECLARED_VIDEOS_STRONG_MODE
+            ),
+            added.map { it.id }.sorted()
+        )
+        assertEquals(
+            listOf("block_ai_declared_videos", "block_ai_declared_videos_strong_mode"),
+            added.map { it.storageKey }.sorted()
+        )
+        added.forEach {
+            assertEquals(SettingValueType.BOOLEAN, it.type)
+            // 两个都默认关：会改写详情页跳转、会往 UP 名单里加人，必须由用户显式打开。
+            assertEquals(SettingValue.Bool(false), it.defaultValue)
+            assertEquals(RestorePolicy.AUTOMATIC, it.restorePolicy)
+            assertTrue(ImportEffect.RESTART_BILIBILI in it.effects)
+            assertTrue(ImportEffect.RECREATE_MODULE_UI in it.effects)
+        }
+    }
+
+    @Test
     fun `catalog types and manual roaming boundary are explicit`() {
-        assertEquals(111, SettingsCatalog.specs.count { it.type == SettingValueType.BOOLEAN })
+        assertEquals(113, SettingsCatalog.specs.count { it.type == SettingValueType.BOOLEAN })
         assertEquals(11, SettingsCatalog.specs.count { it.type == SettingValueType.INTEGER })
         assertEquals(25, SettingsCatalog.specs.count { it.type == SettingValueType.STRING })
 

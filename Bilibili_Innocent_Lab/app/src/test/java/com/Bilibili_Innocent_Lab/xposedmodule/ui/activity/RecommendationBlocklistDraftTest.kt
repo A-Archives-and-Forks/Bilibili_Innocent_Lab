@@ -1,6 +1,7 @@
 package com.Bilibili_Innocent_Lab.xposedmodule.ui.activity
 
 import android.content.SharedPreferences
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.AiDeclaredVideoPolicy
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.FeaturePreferences
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.MineComponentScanEntry
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.MineComponentSnapshot
@@ -174,6 +175,79 @@ class RecommendationBlocklistDraftTest {
         val prefs = MemoryPreferences("", "", fail = true)
         prefs.values[RecommendationBlocklistDraft.AUTO_CONFIRM_KEY] = true
         assertFalse(RecommendationBlocklistDraft.autoConfirm(prefs.instance, listOf(picks())))
+    }
+
+    // ===== AI 生成声明：强力模式记下的 UP =====
+
+    private fun authorPick(name: String, token: String, aiOrigin: Boolean) = checkNotNull(
+        MineComponentScanEntry.create("author", name, name,
+            if (aiOrigin) AiDeclaredVideoPolicy.AUTHOR_PICK_ORIGIN_URI else null, true)
+    ).copy(selectionToken = token)
+
+    private fun authorPicks(vararg entries: MineComponentScanEntry) = picks().copy(
+        surface = MineComponentSnapshotCodec.SURFACE_AUTHOR_PICKS, entries = entries.toList()
+    )
+
+    private fun MemoryPreferences.enableAiStrongMode(main: Boolean = true) {
+        values[FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS] = main
+        values[FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE] = true
+    }
+
+    /** 没开「自动确认」也要并入，但**只**并入强力模式来源；别的点选仍待用户确认。 */
+    @Test fun strongModeMergesOnlyAiOriginAuthorsAndLeavesOtherPicksPending() {
+        val prefs = MemoryPreferences("163", "UP A")
+        prefs.enableAiStrongMode()
+        val snapshots = listOf(picks(), authorPicks(
+            authorPick("AI UP", "ai-1", aiOrigin = true),
+            authorPick("Manual UP", "manual-1", aiOrigin = false)
+        ))
+        assertFalse(RecommendationBlocklistDraft.isAutoConfirmEnabled(prefs.instance))
+        assertTrue(RecommendationBlocklistDraft.needsBackgroundMerge(prefs.instance))
+        assertTrue(RecommendationBlocklistDraft.autoConfirm(prefs.instance, snapshots))
+        assertEquals("up a,ai up", prefs.authors())
+        assertEquals("163", prefs.tags())
+        val reopened = RecommendationBlocklistDraft.of(prefs.instance, snapshots)
+        assertEquals(setOf("8318", "manual up"), reopened.rows.filter { it.pending }.map { it.rule.value }.toSet())
+        // 再跑一次不写盘：强力模式来源已经处理过了。
+        val reviewed = prefs.reviewed()
+        assertFalse(RecommendationBlocklistDraft.autoConfirm(prefs.instance, snapshots))
+        assertEquals(reviewed, prefs.reviewed())
+    }
+
+    /** 强力模式只在总开关也开着时算数，与宿主侧安装条件一致。 */
+    @Test fun strongModeWithoutTheMainSwitchDoesNothing() {
+        val prefs = MemoryPreferences("", "")
+        prefs.enableAiStrongMode(main = false)
+        assertFalse(RecommendationBlocklistDraft.needsBackgroundMerge(prefs.instance))
+        assertFalse(RecommendationBlocklistDraft.autoConfirm(prefs.instance,
+            listOf(authorPicks(authorPick("AI UP", "ai-1", aiOrigin = true)))))
+        assertEquals("", prefs.authors())
+    }
+
+    /** 用户在面板里移除了强力模式加进来的 UP：同一次记录不会被拉回。 */
+    @Test fun aRemovedAiOriginAuthorIsNotMergedAgainFromTheSameRecord() {
+        val prefs = MemoryPreferences("", "")
+        prefs.enableAiStrongMode()
+        val snapshots = listOf(authorPicks(authorPick("AI UP", "ai-1", aiOrigin = true)))
+        assertTrue(RecommendationBlocklistDraft.autoConfirm(prefs.instance, snapshots))
+        val draft = RecommendationBlocklistDraft.of(prefs.instance, snapshots)
+        draft.setSelected(RecommendationBlockRule(RecommendationBlockKind.AUTHOR, "ai up"), false)
+        assertTrue(draft.save(prefs.instance))
+        assertEquals("", prefs.authors())
+        assertFalse(RecommendationBlocklistDraft.autoConfirm(prefs.instance, snapshots))
+        assertEquals("", prefs.authors())
+    }
+
+    /** 通用自动确认开着时照旧全部并入，强力模式不改变那条路径。 */
+    @Test fun generalAutoConfirmStillMergesEverything() {
+        val prefs = MemoryPreferences("", "")
+        prefs.enableAiStrongMode()
+        RecommendationBlocklistDraft.setAutoConfirmEnabled(prefs.instance, true)
+        assertTrue(RecommendationBlocklistDraft.autoConfirm(prefs.instance, listOf(authorPicks(
+            authorPick("AI UP", "ai-1", aiOrigin = true),
+            authorPick("Manual UP", "manual-1", aiOrigin = false)
+        ))))
+        assertEquals("ai up,manual up", prefs.authors())
     }
 
     private class MemoryPreferences(tags: String, authors: String, private val fail: Boolean = false) {

@@ -20,7 +20,7 @@ internal object DiagnosticCapabilityCatalog {
      * 客户端是按 "比我已知的版本更新" 做增量的，
      * VERSION 涨了却没有任何条目标在新版本上，增量就是空集（有测试钉住）。
      */
-    const val VERSION = 13
+    const val VERSION = 14
     val definitions = listOf(
         DiagnosticCapabilityDefinition("search_home_recommend_hidden", "search_home_recommend_hidden", R.string.hide_search_home_recommend, setOf("search.home_recommend.hidden"), introducedCatalogVersion = 4),
         DiagnosticCapabilityDefinition("player_interactive_legacy_follow", "player_interactive_overlay", R.string.diag_cap_player_interactive_legacy_follow, setOf("player.interactive_overlays.hidden"), "legacy/guide/clearAttention"),
@@ -176,7 +176,12 @@ internal object DiagnosticCapabilityCatalog {
         DiagnosticCapabilityDefinition("video_related_author_block", "video_relate_filter", R.string.video_relate_blocked_authors, setOf("video.related.blocked_authors"), introducedCatalogVersion = 8),
         DiagnosticCapabilityDefinition("video_related_tag_block", "video_relate_filter", R.string.video_relate_blocked_tags, setOf("video.related.blocked_tags"), introducedCatalogVersion = 8),
         DiagnosticCapabilityDefinition("player_end_page_recommend", "player_end_page_recommend", R.string.hide_player_end_page_recommend, setOf("player.end_page_recommend.hidden"), introducedCatalogVersion = 11),
-        DiagnosticCapabilityDefinition("player_popup_promotion", "player_popup_promotion", R.string.hide_player_popup_promotion, setOf("player.popup_promotion.hidden"), introducedCatalogVersion = 10)
+        DiagnosticCapabilityDefinition("player_popup_promotion", "player_popup_promotion", R.string.hide_player_popup_promotion, setOf("player.popup_promotion.hidden"), introducedCatalogVersion = 10),
+        // AI 生成声明：详情页拦截补位与强力模式挂在独立安装器下；首页那一档挂在首页推荐过滤下，
+        // 所以同一个总开关出现在两个父项里——它们确实是两个安装器各自的覆盖单位。
+        DiagnosticCapabilityDefinition("ai_declared_detail_redirect", "ai_declared_video_block", R.string.block_ai_declared_videos, setOf("video.ai_declared.blocked"), introducedCatalogVersion = 14),
+        DiagnosticCapabilityDefinition("ai_declared_author_block", "ai_declared_video_block", R.string.block_ai_declared_videos_strong_mode, setOf("video.ai_declared.strong_mode"), introducedCatalogVersion = 14),
+        DiagnosticCapabilityDefinition("home_recommend_ai_declared_removed", "home_recommend_purify", R.string.block_ai_declared_videos, setOf("video.ai_declared.blocked"), introducedCatalogVersion = 14)
     )
     val localOnlySettings = mapOf(
         "communication.compatibility.enabled" to "LOCAL_DIAGNOSTICS",

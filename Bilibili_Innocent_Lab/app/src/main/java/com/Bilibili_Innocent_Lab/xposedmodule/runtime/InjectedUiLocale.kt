@@ -33,7 +33,14 @@ internal data class InjectedUiMessages(
      * 宿主对我们这一行只会关掉面板，既不弹 toast 也不撤掉当前卡片（过滤只作用于之后
      * 加载的推荐），所以没有这条回执时用户看到的就是"点了什么都没发生"。
      */
-    val panelBlockRecordedToast: String
+    val panelBlockRecordedToast: String,
+    /** 详情页命中 AI 生成声明、已由宿主跳到补位视频时的回执。 */
+    val aiDeclaredRedirectToast: String,
+    /**
+     * 没有可用补位时的提示：同时写进宿主原生"不可见"错误页（`ecode_config.msg`）与 toast。
+     * 不带占位符——它会原样出现在宿主页面上。
+     */
+    val aiDeclaredBlockedHint: String
 )
 
 /**
@@ -280,7 +287,10 @@ internal object InjectedUiLocale {
         panelBlockAuthorLabel = "Stop recommending uploader: %1\$s",
         panelBlockRecordedToast =
             "Recorded %1\$s. It applies to newly loaded recommendations; " +
-                "confirm it in Innocent_Lab to keep it."
+                "confirm it in Innocent_Lab to keep it.",
+        aiDeclaredRedirectToast =
+            "Skipped a video declared as AI-generated and opened a related one instead.",
+        aiDeclaredBlockedHint = "This video is declared as AI-generated and was blocked by Innocent_Lab."
     )
 
     private val SIMPLIFIED_CHINESE_MESSAGES = InjectedUiMessages(
@@ -294,7 +304,9 @@ internal object InjectedUiLocale {
         panelBlockTagLabel = "不再推荐标签：%1\$s",
         panelBlockAuthorLabel = "不再推荐 UP：%1\$s",
         // 模块名一律保持英文 Innocent_Lab，不随界面语言翻译。
-        panelBlockRecordedToast = "已记下 %1\$s，对之后加载的推荐生效；在 Innocent_Lab 中确认后长期保留。"
+        panelBlockRecordedToast = "已记下 %1\$s，对之后加载的推荐生效；在 Innocent_Lab 中确认后长期保留。",
+        aiDeclaredRedirectToast = "已跳过含 AI 生成声明的视频，为你换成了相关视频",
+        aiDeclaredBlockedHint = "该视频含 AI 生成声明，已由 Innocent_Lab 屏蔽"
     )
 
     private val TRADITIONAL_CHINESE_MESSAGES = InjectedUiMessages(
@@ -308,7 +320,9 @@ internal object InjectedUiLocale {
         panelBlockTagLabel = "不再推薦標籤：%1\$s",
         panelBlockAuthorLabel = "不再推薦 UP：%1\$s",
         // 模块名一律保持英文 Innocent_Lab，不随界面语言翻译。
-        panelBlockRecordedToast = "已記下 %1\$s，對之後載入的推薦生效；在 Innocent_Lab 中確認後長期保留。"
+        panelBlockRecordedToast = "已記下 %1\$s，對之後載入的推薦生效；在 Innocent_Lab 中確認後長期保留。",
+        aiDeclaredRedirectToast = "已略過含 AI 生成聲明的影片，為你換成了相關影片",
+        aiDeclaredBlockedHint = "此影片含 AI 生成聲明，已由 Innocent_Lab 封鎖"
     )
 
     private val TRADITIONAL_CHINESE_REGIONS = setOf("TW", "HK", "MO")

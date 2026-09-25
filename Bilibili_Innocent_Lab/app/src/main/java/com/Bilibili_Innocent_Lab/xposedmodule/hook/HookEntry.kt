@@ -81,6 +81,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.DetailViewPurifyPolic
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.DetailModulePurifyPolicy
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.DetailUnitedModulePurifyFeatureInstaller
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.DetailUnitedModulePurifyPolicy
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.AiDeclaredVideoFeatureInstaller
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.DetailUnitedPresentationPurifyFeatureInstaller
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerInteractiveOverlayFeatureInstaller
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerEndPageRecommendFeatureInstaller
@@ -3106,6 +3107,14 @@ class HookEntry : XposedModule() {
                         sectionPickEnabled = prefs.getBoolean(
                             FeaturePreferences.HOME_RECOMMEND_SECTION_PICK_ENABLED,
                             false
+                        ),
+                        removeAiDeclared = prefs.getBoolean(
+                            FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS,
+                            false
+                        ),
+                        aiDeclaredStrongMode = prefs.getBoolean(
+                            FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE,
+                            false
                         )
                     )
                 )
@@ -3280,6 +3289,15 @@ class HookEntry : XposedModule() {
                         ),
                         hideSpecialTopicTags = prefs.getBoolean(
                             FeaturePreferences.REMOVE_DETAIL_TOPIC_TAGS,
+                            false
+                        )
+                    ),
+                    // 与上面的 United 模块净化挂同一对 ViewMoss 方法，但只改 ecode/ecode_config
+                    // 与相关推荐卡，两者互不依赖、各自降级；强力模式只在总开关开着时有意义。
+                    AiDeclaredVideoFeatureInstaller(
+                        enabled = prefs.getBoolean(FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS, false),
+                        strongMode = prefs.getBoolean(
+                            FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE,
                             false
                         )
                     )

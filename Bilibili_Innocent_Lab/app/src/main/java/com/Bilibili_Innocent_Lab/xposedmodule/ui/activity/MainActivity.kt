@@ -273,6 +273,8 @@ class MainActivity : SkinnedActivity() {
     private var homeRecommendBlockedTids = ""
     private var homeRecommendBlockedAuthors = ""
     private var homeRecommendSectionPickEnabled = false
+    private var blockAiDeclaredVideos = false
+    private var blockAiDeclaredVideosStrongMode = false
     private var videoRelateBlockedAuthors = ""
     private var videoRelateBlockedTags = ""
     internal var removeHomeRecommendLive = false
@@ -4201,6 +4203,9 @@ class MainActivity : SkinnedActivity() {
         homeRecommendBlockedAuthors = uiSettings.string(FeaturePreferences.HOME_RECOMMEND_BLOCKED_AUTHORS)
         homeRecommendSectionPickEnabled =
             uiSettings.bool(FeaturePreferences.HOME_RECOMMEND_SECTION_PICK_ENABLED)
+        blockAiDeclaredVideos = uiSettings.bool(FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS)
+        blockAiDeclaredVideosStrongMode =
+            uiSettings.bool(FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE)
         videoRelateBlockedAuthors = uiSettings.string(FeaturePreferences.VIDEO_RELATE_BLOCKED_AUTHORS)
         videoRelateBlockedTags = uiSettings.string(FeaturePreferences.VIDEO_RELATE_BLOCKED_TAGS)
         removeHomeRecommendLive = uiSettings.bool(FeaturePreferences.REMOVE_HOME_RECOMMEND_LIVE)
@@ -10217,6 +10222,73 @@ class MainActivity : SkinnedActivity() {
             alpha = 0.6f
             setLineSpacing(6f, 1f)
             text = stringResource(R.string.recommendation_blocklist_manage_tip)
+            textColor = colorResource(R.color.colorTextDark)
+            textSize = 12f
+        }
+        // 强力模式的开关本体在总开关下面，总开关关着时置灰：宿主侧它只在总开关开着时生效。
+        var aiStrongModeSwitch: com.Bilibili_Innocent_Lab.xposedmodule.ui.view.MaterialSwitch? = null
+        MaterialSwitch(
+            lparams = LayoutParams(widthMatchParent = true) {
+                topMargin = 12.dp
+                bottomMargin = 5.dp
+            }
+        ) {
+            bindFavoriteSwitch(this, FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS, directToggle = true)
+            text = stringResource(R.string.block_ai_declared_videos)
+            settingsDestinations.bind(SettingsCatalog.ID_AI_DECLARED_VIDEOS_BLOCKED, this)
+            isAllCaps = false
+            textColor = colorResource(R.color.colorTextGray)
+            textSize = 15f
+            isChecked = blockAiDeclaredVideos
+            setOnCheckedChangeListener { _, isChecked ->
+                blockAiDeclaredVideos = isChecked
+                aiStrongModeSwitch?.isEnabled = isChecked
+                runCatching {
+                    prefs().edit {
+                        putBoolean(FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS, isChecked)
+                    }
+                }.onFailure { t ->
+                    Log.e("BilibiliInnocentLab", "write ai declared videos prefs failed", t)
+                }
+            }
+        }
+        TextView(lparams = LayoutParams(widthMatchParent = true)) {
+            alpha = 0.6f
+            setLineSpacing(6f, 1f)
+            text = stringResource(R.string.block_ai_declared_videos_tip)
+            textColor = colorResource(R.color.colorTextDark)
+            textSize = 12f
+        }
+        MaterialSwitch(
+            lparams = LayoutParams(widthMatchParent = true) {
+                topMargin = 8.dp
+                bottomMargin = 5.dp
+            }
+        ) {
+            aiStrongModeSwitch = this
+            bindFavoriteSwitch(this, FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE, directToggle = true)
+            text = stringResource(R.string.block_ai_declared_videos_strong_mode)
+            settingsDestinations.bind(SettingsCatalog.ID_AI_DECLARED_VIDEOS_STRONG_MODE, this)
+            isAllCaps = false
+            textColor = colorResource(R.color.colorTextGray)
+            textSize = 15f
+            isChecked = blockAiDeclaredVideosStrongMode
+            isEnabled = blockAiDeclaredVideos
+            setOnCheckedChangeListener { _, isChecked ->
+                blockAiDeclaredVideosStrongMode = isChecked
+                runCatching {
+                    prefs().edit {
+                        putBoolean(FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE, isChecked)
+                    }
+                }.onFailure { t ->
+                    Log.e("BilibiliInnocentLab", "write ai declared strong mode prefs failed", t)
+                }
+            }
+        }
+        TextView(lparams = LayoutParams(widthMatchParent = true)) {
+            alpha = 0.6f
+            setLineSpacing(6f, 1f)
+            text = stringResource(R.string.block_ai_declared_videos_strong_mode_tip)
             textColor = colorResource(R.color.colorTextDark)
             textSize = 12f
         }
