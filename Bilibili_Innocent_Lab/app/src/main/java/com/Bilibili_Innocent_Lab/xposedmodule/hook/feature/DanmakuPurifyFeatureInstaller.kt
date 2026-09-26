@@ -218,13 +218,16 @@ internal class DanmakuPurifyFeatureInstaller(
         if (defaultReply != null && reply === defaultReply) return reply
         environment.reportRuntimeEvidence(ID, FeatureRuntimeStage.OBSERVED)
         return runCatching {
-            val elems = purifyElems(environment, reply, members)
+            val weighted = purifyElems(environment, reply, members)
             val colorful = purifyColorfulSrc(reply, members)
+            // 删了渐变样式定义，就必须同时把引用它的弹幕改回普通色：弹幕分段整包交给原生引擎
+            // （libchronos）解析，不能留"条目引用一个已不存在的样式"这种半截数据。
+            val elems = neutralizeVipColorful(reply, members, weighted) ?: weighted
             if (elems == null && colorful == null) return@runCatching reply
             val updated = members.builder.edit(reply) { builder ->
                 if (elems != null) {
-                    members.weight!!.clearElems.invoke(builder)
-                    members.weight.addAllElems.invoke(builder, elems)
+                    members.elemList!!.clearElems.invoke(builder)
+                    members.elemList.addAllElems.invoke(builder, elems)
                 }
                 if (colorful != null) {
                     members.colorful!!.clear.invoke(builder)
@@ -247,7 +250,7 @@ internal class DanmakuPurifyFeatureInstaller(
     ): List<Any>? {
         val threshold = minimumWeight ?: return null
         val weight = members.weight ?: return null
-        val elems = invokeList(weight.elemsGetter, reply) ?: return null
+        val elems = invokeList(members.elemList!!.elemsGetter, reply) ?: return null
         if (elems.isEmpty()) return null
         val weightOf: (Any) -> Int? = { elem ->
             (runCatching { weight.weightGetter.invoke(elem) }.getOrNull() as? Number)?.toInt()
@@ -265,6 +268,25 @@ internal class DanmakuPurifyFeatureInstaller(
             // 单条读不出权重时按保留处理，只删明确低于阈值的。
             (weightOf(elem) ?: threshold) >= threshold
         }
+    }
+
+    /**
+     * 把 `colorful == 会员渐变` 的弹幕改成普通色（0）。
+     * @param base 权重过滤后的列表；为 null 表示权重没改，按原始列表处理。
+     * @return 需要写回的新列表；没有任何条目需要改时返回 null。
+     */
+    private fun neutralizeVipColorful(reply: Any, members: ReplyMembers, base: List<Any>?): List<Any>? {
+        if (!removeVipColorful) return null
+        val colorful = members.colorful ?: return null
+        val elems = base ?: invokeList(members.elemList!!.elemsGetter, reply)?.filterNotNull() ?: return null
+        var changed = false
+        val rewritten = elems.map { elem ->
+            val value = runCatching { colorful.elemColorfulGetter.invoke(elem) }.getOrNull() as? Number
+            if (value?.toInt() != colorful.vipGradualColorValue) return@map elem
+            changed = true
+            colorful.elemPlan.edit(elem) { builder -> colorful.elemColorfulSetter.invoke(builder, 0) }
+        }
+        return if (changed) rewritten else null
     }
 
     private fun purifyColorfulSrc(reply: Any, members: ReplyMembers): List<Any>? {
@@ -298,16 +320,17 @@ internal class DanmakuPurifyFeatureInstaller(
                     method.returnType == classOf<Int>()
             }
         }
-        val weight = weightGetter?.let { getter ->
+        val elemList = run {
             val elemsGetter = listGetter(replyClass, "getElemsList")
             val clearElems = builder.method("clearElems")
             val addAllElems = builder.method("addAllElems", classOf<Iterable<*>>())
             if (elemsGetter == null || clearElems == null || addAllElems == null) {
                 null
             } else {
-                WeightMembers(elemsGetter, getter, clearElems, addAllElems)
+                ElemListMembers(elemsGetter, clearElems, addAllElems)
             }
         }
+        val weight = weightGetter?.takeIf { elemList != null }?.let(::WeightMembers)
 
         val colorfulClass = KavaMemberLookup.classOrNull(loader, DM_COLORFUL_CLASS)
         val typeGetter = colorfulClass?.let {
@@ -316,18 +339,33 @@ internal class DanmakuPurifyFeatureInstaller(
                     method.returnType == classOf<Int>()
             }
         }
+        // 样式定义删除与弹幕条目改色必须同时可用，缺一环整项不装——绝不只删一半。
+        val elemPlan = elemClass?.let(ProtobufBuilderPlan::resolve)
+        val elemColorfulGetter = elemClass?.let {
+            KavaMemberLookup.methodOrNull(it, "getColorfulValue")?.takeIf { method ->
+                !method.isStatic && method.parameterCount == 0 && method.returnType == classOf<Int>()
+            }
+        }
+        val elemColorfulSetter = elemPlan?.method("setColorfulValue", classOf<Int>())
         val colorful = typeGetter?.let { getter ->
             val srcGetter = listGetter(replyClass, "getColorfulSrcList")
             val clear = builder.method("clearColorfulSrc")
             val addAll = builder.method("addAllColorfulSrc", classOf<Iterable<*>>())
-            if (srcGetter == null || clear == null || addAll == null) {
+            if (srcGetter == null || clear == null || addAll == null || elemList == null ||
+                elemPlan == null || elemColorfulGetter == null || elemColorfulSetter == null
+            ) {
                 null
             } else {
-                ColorfulMembers(srcGetter, getter, clear, addAll, resolveVipGradualColorValue(loader))
+                ColorfulMembers(
+                    srcGetter, getter, clear, addAll, resolveVipGradualColorValue(loader),
+                    elemPlan, elemColorfulGetter, elemColorfulSetter
+                )
             }
         }
 
-        return ReplyMembers(replyClass = replyClass, builder = builder, weight = weight, colorful = colorful)
+        return ReplyMembers(
+            replyClass = replyClass, builder = builder, elemList = elemList, weight = weight, colorful = colorful
+        )
     }
 
     /** 优先读宿主自己的枚举常量，读不到再退回文档值，避免把数字写死当唯一来源。 */
@@ -363,15 +401,20 @@ internal class DanmakuPurifyFeatureInstaller(
     private class ReplyMembers(
         val replyClass: Class<*>,
         val builder: ProtobufBuilderPlan,
+        val elemList: ElemListMembers?,
         val weight: WeightMembers?,
         val colorful: ColorfulMembers?
     )
 
-    private class WeightMembers(
+    /** 弹幕条目列表的读写；权重过滤与彩字改色共用。 */
+    private class ElemListMembers(
         val elemsGetter: Method,
-        val weightGetter: Method,
         val clearElems: Method,
         val addAllElems: Method
+    )
+
+    private class WeightMembers(
+        val weightGetter: Method
     )
 
     private class ColorfulMembers(
@@ -379,7 +422,10 @@ internal class DanmakuPurifyFeatureInstaller(
         val typeGetter: Method,
         val clear: Method,
         val addAll: Method,
-        val vipGradualColorValue: Int
+        val vipGradualColorValue: Int,
+        val elemPlan: ProtobufBuilderPlan,
+        val elemColorfulGetter: Method,
+        val elemColorfulSetter: Method
     )
 
     companion object {

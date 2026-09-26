@@ -1,6 +1,18 @@
 package com.bapis.bilibili.community.service.dm.v1
 
-class DanmakuElem(private val weight: Int) { fun getWeight() = weight }
+class DanmakuElem(private val weight: Int, private val colorful: Int = 0) {
+    fun getWeight() = weight
+    fun getColorfulValue() = colorful
+    class Builder(original: DanmakuElem) {
+        private val weight = original.weight
+        private var colorful = original.colorful
+        fun setColorfulValue(value: Int) = apply { colorful = value }
+        fun build() = DanmakuElem(weight, colorful)
+    }
+    companion object {
+        @JvmStatic fun newBuilder(original: DanmakuElem) = Builder(original)
+    }
+}
 class DmColorful(private val type: Int) { fun getTypeValue() = type }
 class DmSegMobileReply(
     val elems: List<DanmakuElem> = emptyList(),

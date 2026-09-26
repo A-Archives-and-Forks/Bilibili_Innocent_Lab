@@ -35,6 +35,25 @@ internal object PlayerCodecForcePolicy {
         PlayerCodecPreference.H264, PlayerCodecPreference.H265 -> original and AV1_FNVAL.inv()
     }
 
+    /**
+     * 请求侧实际生效的编码偏好。
+     *
+     * 方案硬约束（`docs/player_codec_force_plan.md` 风险 R4）：AV1 × 强制软解不可用组合一律降级 H.264。
+     * B 站 ijk fork 的软解对 AV1 覆盖不确定，实测风险是黑屏/无法起播。
+     */
+    fun effectivePreference(preference: PlayerCodecPreference, mode: PlayerDecodeMode): PlayerCodecPreference =
+        if (mode == PlayerDecodeMode.FORCE_SOFTWARE && preference == PlayerCodecPreference.AV1) {
+            PlayerCodecPreference.H264
+        } else {
+            preference
+        }
+
+    /** 跟随宿主编码 + 强制软解：不改偏好，只清掉 AV1 能力位，让服务端不下发 AV1 流。 */
+    fun stripsAv1Only(preference: PlayerCodecPreference, mode: PlayerDecodeMode): Boolean =
+        mode == PlayerDecodeMode.FORCE_SOFTWARE && preference == PlayerCodecPreference.FOLLOW_HOST
+
+    fun withoutAv1(fnval: Long): Long = fnval and AV1_FNVAL.inv()
+
     fun optionValue(key: String, mode: PlayerDecodeMode): Long? = when (mode) {
         PlayerDecodeMode.FOLLOW_HOST -> null
         PlayerDecodeMode.FORCE_HARDWARE -> when (key) {

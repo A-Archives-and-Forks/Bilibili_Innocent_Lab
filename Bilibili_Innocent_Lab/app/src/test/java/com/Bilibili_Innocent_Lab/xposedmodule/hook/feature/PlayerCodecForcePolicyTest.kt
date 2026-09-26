@@ -35,4 +35,29 @@ class PlayerCodecForcePolicyTest {
         assertNull(PlayerCodecForcePolicy.recognizedOptionValue("decoder_type", 2L))
     }
 
+    /** 方案硬约束 R4：AV1 × 强制软解不可用，一律降级 H.264；其他组合原样。 */
+    @Test
+    fun `av1 with forced software decoding is downgraded to h264`() {
+        assertEquals(PlayerCodecPreference.H264,
+            PlayerCodecForcePolicy.effectivePreference(PlayerCodecPreference.AV1, PlayerDecodeMode.FORCE_SOFTWARE))
+        assertEquals(PlayerCodecPreference.AV1,
+            PlayerCodecForcePolicy.effectivePreference(PlayerCodecPreference.AV1, PlayerDecodeMode.FORCE_HARDWARE))
+        assertEquals(PlayerCodecPreference.AV1,
+            PlayerCodecForcePolicy.effectivePreference(PlayerCodecPreference.AV1, PlayerDecodeMode.FOLLOW_HOST))
+        assertEquals(PlayerCodecPreference.H265,
+            PlayerCodecForcePolicy.effectivePreference(PlayerCodecPreference.H265, PlayerDecodeMode.FORCE_SOFTWARE))
+        // 降级后的请求改写确实把 AV1 位清掉。
+        assertEquals(16L, PlayerCodecForcePolicy.expectedFnval(16L or PlayerCodecForcePolicy.AV1_FNVAL,
+            PlayerCodecForcePolicy.effectivePreference(PlayerCodecPreference.AV1, PlayerDecodeMode.FORCE_SOFTWARE)))
+    }
+
+    /** 跟随宿主编码 + 强制软解：不改偏好，只让服务端不下发 AV1 流。 */
+    @Test
+    fun `follow host with forced software decoding only strips the av1 capability`() {
+        assertEquals(true, PlayerCodecForcePolicy.stripsAv1Only(PlayerCodecPreference.FOLLOW_HOST, PlayerDecodeMode.FORCE_SOFTWARE))
+        assertEquals(false, PlayerCodecForcePolicy.stripsAv1Only(PlayerCodecPreference.FOLLOW_HOST, PlayerDecodeMode.FORCE_HARDWARE))
+        assertEquals(false, PlayerCodecForcePolicy.stripsAv1Only(PlayerCodecPreference.H264, PlayerDecodeMode.FORCE_SOFTWARE))
+        assertEquals(4048L - 2048L, PlayerCodecForcePolicy.withoutAv1(4048L))
+        assertEquals(16L, PlayerCodecForcePolicy.withoutAv1(16L))
+    }
 }

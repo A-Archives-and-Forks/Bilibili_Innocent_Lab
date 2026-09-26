@@ -42,6 +42,34 @@ class DanmakuCopyOnWriteTest {
         assertTrue(FeatureRuntimeStage.APPLIED in stages)
     }
 
+    /**
+     * 删了会员渐变样式定义，引用它的弹幕必须同时改回普通色。
+     * 弹幕分段整包交给原生引擎（libchronos）解析，不能留"条目引用一个已不存在的样式"。
+     */
+    @Test fun `removing the vip gradient style also neutralizes the danmaku that reference it`() {
+        val gradient = DanmakuElem(10, colorful = 60001)
+        val plain = DanmakuElem(10, colorful = 0)
+        val original = DmSegMobileReply(listOf(gradient, plain), listOf(DmColorful(60001), DmColorful(0)))
+        val updated = purify(original)
+        assertEquals(listOf(0, 0), updated.elems.map { it.getColorfulValue() })
+        assertSame(plain, updated.elems[1])
+        assertEquals(listOf(0), updated.colorful.map { it.getTypeValue() })
+        // 源消息不被改动。
+        assertEquals(60001, original.elems[0].getColorfulValue())
+    }
+
+    /** 权重过滤与改色在同一份列表上叠加：先删低权重，再给保留下来的渐变弹幕改色。 */
+    @Test fun `weight filtering and colour neutralization compose on the same list`() {
+        val original = DmSegMobileReply(
+            listOf(DanmakuElem(1, colorful = 60001), DanmakuElem(10, colorful = 60001)),
+            listOf(DmColorful(60001))
+        )
+        val updated = purify(original)
+        assertEquals(1, updated.elems.size)
+        assertEquals(0, updated.elems.single().getColorfulValue())
+        assertTrue(updated.colorful.isEmpty())
+    }
+
     @Test fun `no matching rule and absent weight preserve identity and do not report an error`() {
         val original = DmSegMobileReply(listOf(DanmakuElem(0)), listOf(DmColorful(0)))
         assertSame(original, purify(original)); assertTrue(errors.isEmpty())

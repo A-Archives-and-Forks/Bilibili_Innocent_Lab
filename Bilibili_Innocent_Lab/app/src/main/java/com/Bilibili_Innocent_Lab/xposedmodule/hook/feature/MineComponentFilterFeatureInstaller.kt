@@ -167,13 +167,15 @@ internal class MineComponentFilterFeatureInstaller(
                         val title = readString(item, itemTitleField)
                         val itemId = readValue(item, itemIdField)
                         val uri = readString(item, itemUriField)
-                        val hidden = matchesHidden("item", title, itemId, uri)
+                        val protected = MineSettingsEntryGuard.isSettingsEntry(uri)
+                        val hidden = !protected && matchesHidden("item", title, itemId, uri)
                         MineComponentScanEntry.create(
                             kind = "item",
                             title = title,
                             id = itemId,
                             uri = uri,
-                            showing = !hidden
+                            showing = !hidden,
+                            selectable = !protected
                         )?.let(entries::add)
                         if (hidden) {
                             itemHidden += 1
@@ -221,8 +223,22 @@ internal class MineComponentFilterFeatureInstaller(
                 if (!groupClass.isInstance(group)) return@list false
                 val title = readString(group, groupTitleField)
                 val hidden = matchesHidden("group", title, null, null)
-                if (hidden) groupHidden += 1
-                hidden
+                if (!hidden) return@list false
+                // 整组隐藏但组里有「设置」：保留这一组、只留「设置」。整组删掉会让宿主
+                // 找不到设置入口，而它补回设置时取的是"最后一个分组"——一个分组都不剩就崩。
+                val items = runCatching { groupItemsField.get(group) as? List<*> }.getOrNull()
+                val kept = items?.let {
+                    MineSettingsEntryGuard.settingsOnly(it) { item ->
+                        item?.takeIf(itemClass::isInstance)?.let { entry -> readString(entry, itemUriField) }
+                    }
+                }
+                if (kept != null && runCatching { groupItemsField.set(group, kept) }.isSuccess) {
+                    changed = true
+                    groupHidden += 1
+                    return@list false
+                }
+                groupHidden += 1
+                true
             }
             if (filteredSections !== sourceSections && runCatching {
                     sectionsField.set(accountMine, filteredSections)
@@ -291,13 +307,15 @@ internal class MineComponentFilterFeatureInstaller(
                             val title = invokeString(item, titleMethods)
                             val id = invokeValue(item, idMethods) ?: readNamedValue(item, "id")
                             val uri = invokeString(item, uriMethods) ?: readNamedString(item, "uri")
-                            val hidden = matchesHidden("item", title, id, uri)
+                            val protected = MineSettingsEntryGuard.isSettingsEntry(uri)
+                            val hidden = !protected && matchesHidden("item", title, id, uri)
                             MineComponentScanEntry.create(
                                 "item",
                                 title,
                                 id,
                                 uri,
-                                showing = !hidden
+                                showing = !hidden,
+                                selectable = !protected
                             )?.let(scanned::add)
                             hidden
                         }
@@ -387,13 +405,15 @@ internal class MineComponentFilterFeatureInstaller(
                                 val title = readString(item, titleField)
                                 val id = readNamedValue(item, "id")
                                 val uri = readNamedString(item, "uri")
-                                val hidden = matchesHidden("item", title, id, uri)
+                                val protected = MineSettingsEntryGuard.isSettingsEntry(uri)
+                                val hidden = !protected && matchesHidden("item", title, id, uri)
                                 MineComponentScanEntry.create(
                                     "item",
                                     title,
                                     id,
                                     uri,
-                                    showing = !hidden
+                                    showing = !hidden,
+                                    selectable = !protected
                                 )?.let(scanned::add)
                                 hidden
                             }
@@ -582,4 +602,24 @@ internal object MineComponentHiddenFlagWriter {
             true
         }.getOrDefault(false)
     }
+}
+
+/**
+ * 「我的」页的「设置」入口不许被隐藏。
+ *
+ * 宿主构建菜单时（9.12.0 `MineUserCenterViewModelV2$1$1`）若在各分组的 `getItemList` 里找不到
+ * `activity://main/preference`，会自己补一个「设置」项并挂到**最后一个分组**上；菜单项全部不显示的
+ * 分组会被它先删掉。于是"隐藏了设置 + 其余分组也都被隐藏/清空"时，它对空列表取第 -1 项，进程崩溃
+ * （2026-09-21 用户诊断包实证）。隐藏「设置」本来也无效——宿主总会补回来——所以直接保护它。
+ * 漫游入口（`RoamingCompatHook`）也挂在含「设置」的那个分组上，一并受益。
+ */
+internal object MineSettingsEntryGuard {
+    const val SETTINGS_URI = "activity://main/preference"
+
+    fun isSettingsEntry(uri: String?): Boolean =
+        uri?.trim()?.substringBefore('?')?.substringBefore('#') == SETTINGS_URI
+
+    /** 组内的「设置」项；没有时返回 null（调用方按原逻辑整组隐藏）。 */
+    fun settingsOnly(items: List<*>, uriOf: (Any?) -> String?): List<Any?>? =
+        items.filter { isSettingsEntry(uriOf(it)) }.takeIf { it.isNotEmpty() }
 }

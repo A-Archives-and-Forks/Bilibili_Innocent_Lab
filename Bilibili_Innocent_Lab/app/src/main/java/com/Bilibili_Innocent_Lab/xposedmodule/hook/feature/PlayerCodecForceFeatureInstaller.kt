@@ -16,6 +16,12 @@ internal class PlayerCodecForceFeatureInstaller(
     override val id: String = ID
     private val preference = PlayerCodecPreference.fromValue(codecPreferenceValue)
     private val decodeMode = PlayerDecodeMode.fromValue(decodeModeValue)
+
+    /** 请求侧实际使用的偏好：AV1 × 强制软解已按硬约束降级为 H.264。 */
+    private val requestPreference = PlayerCodecForcePolicy.effectivePreference(preference, decodeMode)
+
+    /** 跟随宿主 + 强制软解：请求侧只清 AV1 能力位，这段改写属于"解码方式"一项。 */
+    private val stripAv1Only = PlayerCodecForcePolicy.stripsAv1Only(preference, decodeMode)
     override val capabilityIds: List<String> = buildList {
         if (preference != PlayerCodecPreference.FOLLOW_HOST) add(CODEC_CAPABILITY)
         if (decodeMode != PlayerDecodeMode.FOLLOW_HOST) add(DECODE_CAPABILITY)
@@ -44,34 +50,48 @@ internal class PlayerCodecForceFeatureInstaller(
             }
             return skipped(environment, "missing-class-loader")
         }
-        val requestCoverage = if (preference != PlayerCodecPreference.FOLLOW_HOST) {
+        if (requestPreference != preference) {
+            environment.logInfo(
+                "$ID.downgraded",
+                "[BIL] AV1 与强制软解不可同时使用，编码偏好已降级为 H.264"
+            )
+        }
+        val requestCapability = if (stripAv1Only) DECODE_CAPABILITY else CODEC_CAPABILITY
+        val requestCoverage = if (requestPreference != PlayerCodecPreference.FOLLOW_HOST || stripAv1Only) {
             listOf(
                 installRequestFamily(
                     environment, loader,
                     MOSS_CLASSES_UNITE, REQUEST_CLASSES_UNITE,
                     setOf("executePlayViewUnite", "playViewUnite", "executePlayView", "playView"),
-                    nestedVod = true
+                    nestedVod = true,
+                    capability = requestCapability
                 ),
                 installRequestFamily(
                     environment, loader,
                     MOSS_CLASSES_LEGACY, REQUEST_CLASSES_LEGACY,
                     setOf("executePlayView", "playView"),
-                    nestedVod = false
+                    nestedVod = false,
+                    capability = requestCapability
                 )
             ).fold(InstallCoverage()) { total, current ->
                 InstallCoverage(total.available + current.available, total.installed + current.installed)
             }
         } else InstallCoverage()
-        val decodeCoverage = if (decodeMode != PlayerDecodeMode.FOLLOW_HOST) {
+        val optionCoverage = if (decodeMode != PlayerDecodeMode.FOLLOW_HOST) {
             installDecodePaths(environment, loader)
         } else InstallCoverage()
-        reportCapabilityCoverage(environment, CODEC_CAPABILITY, requestCoverage)
+        // 强制软解的请求侧 AV1 清位与 ijk 选项改写同属"解码方式"，一并计入它的覆盖单位。
+        val decodeCoverage = if (stripAv1Only) {
+            InstallCoverage(optionCoverage.available + requestCoverage.available,
+                optionCoverage.installed + requestCoverage.installed)
+        } else optionCoverage
+        if (!stripAv1Only) reportCapabilityCoverage(environment, CODEC_CAPABILITY, requestCoverage)
         reportCapabilityCoverage(environment, DECODE_CAPABILITY, decodeCoverage)
 
-        val installed = requestCoverage.installed + decodeCoverage.installed
-        val expected = requestCoverage.available + decodeCoverage.available
+        val installed = requestCoverage.installed + optionCoverage.installed
+        val expected = requestCoverage.available + optionCoverage.available
         if (installed == 0) return skipped(environment, "missing-host-structure")
-        if (requestCoverage.installed > 0) {
+        if (requestCoverage.installed > 0 && !stripAv1Only) {
             environment.reportRuntimeEvidence(CODEC_CAPABILITY, FeatureRuntimeStage.ADAPTED)
         }
         if (decodeCoverage.installed > 0) {
@@ -88,7 +108,8 @@ internal class PlayerCodecForceFeatureInstaller(
         mossCandidates: List<String>,
         requestCandidates: List<String>,
         methodNames: Set<String>,
-        nestedVod: Boolean
+        nestedVod: Boolean,
+        capability: String
     ): InstallCoverage = runCatching {
         val handlerClass = KavaMemberLookup.classOrNull(loader, MOSS_HANDLER)?.takeIf { it.isInterface }
         val resolved = mossCandidates.asSequence().flatMap { mossName ->
@@ -110,7 +131,7 @@ internal class PlayerCodecForceFeatureInstaller(
                 RequestResolution(owner, request, sync, async)
             }
         }.firstOrNull() ?: return InstallCoverage()
-        val access = RequestAccess.resolve(resolved.request, nestedVod, preference)
+        val access = RequestAccess.resolve(resolved.request, nestedVod, requestPreference)
             ?: return InstallCoverage()
         var available = 0
         var installed = 0
@@ -118,7 +139,7 @@ internal class PlayerCodecForceFeatureInstaller(
             available++
             if (registerRequestHook(
                     environment,
-                    CODEC_CAPABILITY,
+                    capability,
                     "$ID.request.${resolved.request.simpleName}",
                     resolved.owner,
                     method,
@@ -130,7 +151,7 @@ internal class PlayerCodecForceFeatureInstaller(
             available++
             if (registerRequestHook(
                     environment,
-                    CODEC_CAPABILITY,
+                    capability,
                     "$ID.request.${resolved.request.simpleName}.async",
                     resolved.owner,
                     method,
@@ -156,7 +177,7 @@ internal class PlayerCodecForceFeatureInstaller(
             before {
                 val original = argOrNull(0) ?: return@before
                 environment.reportRuntimeEvidence(capability, FeatureRuntimeStage.OBSERVED)
-                access.rewrite(original, preference)?.let { updated ->
+                access.rewrite(original, requestPreference)?.let { updated ->
                     args[0] = updated
                     environment.reportRuntimeEvidence(capability, FeatureRuntimeStage.APPLIED)
                 }
@@ -261,16 +282,21 @@ internal class PlayerCodecForceFeatureInstaller(
         val preferSetter: Method,
         val fnvalGetter: Method,
         val fnvalSetter: Method,
-        val preferredCode: Any
+        /** null = 跟随宿主编码，只清 AV1 能力位（强制软解的硬约束）。 */
+        val preferredCode: Any?
     ) {
         fun rewrite(original: Any, preference: PlayerCodecPreference): Any? = runCatching {
             val targetValue = targetGetter?.invoke(original) ?: original
             val fnval = (fnvalGetter.invoke(targetValue) as? Number)?.toLong() ?: return null
-            val expectedFnval = PlayerCodecForcePolicy.expectedFnval(fnval, preference) ?: return null
+            val expectedFnval = if (preferredCode == null) {
+                PlayerCodecForcePolicy.withoutAv1(fnval)
+            } else {
+                PlayerCodecForcePolicy.expectedFnval(fnval, preference) ?: return null
+            }
             val currentCode = preferGetter.invoke(targetValue)
-            if (currentCode == preferredCode && fnval == expectedFnval) return null
+            if ((preferredCode == null || currentCode == preferredCode) && fnval == expectedFnval) return null
             val updatedTarget = targetPlan.edit(targetValue) { builder ->
-                preferSetter.invoke(builder, preferredCode)
+                if (preferredCode != null) preferSetter.invoke(builder, preferredCode)
                 fnvalSetter.invoke(builder, adaptNumber(expectedFnval, fnvalSetter.parameterTypes[0]))
             }
             if (targetSetter == null) updatedTarget else requestPlan.edit(original) { builder ->
@@ -297,7 +323,12 @@ internal class PlayerCodecForceFeatureInstaller(
                 }
                 val codeType = preferGetter?.returnType ?: return null
                 val preferSetter = targetPlan.method("setPreferCodecType", codeType) ?: return null
-                val preferredCode = codeValue(codeType, preference) ?: return null
+                // 跟随宿主时不改偏好（只清 AV1 位）；其余偏好必须能解析出宿主枚举值。
+                val preferredCode = if (preference == PlayerCodecPreference.FOLLOW_HOST) {
+                    null
+                } else {
+                    codeValue(codeType, preference) ?: return null
+                }
                 val fnvalGetter = target.methods.firstOrNull { method ->
                     method.name == "getFnval" && method.parameterCount == 0 &&
                         Number::class.java.isAssignableFrom(box(method.returnType))

@@ -87,6 +87,22 @@ class PlayerCodecForceFeatureInstallerTest {
         assertEquals(16, legacy.getFnval())
     }
 
+    /** AV1 × 强制软解按方案硬约束降级：请求改成优先 H.264 并清 AV1 位。 */
+    @Test
+    fun `av1 preference with forced software decoding requests h264 instead`() {
+        val registrar = PlayerPortTestRegistrar()
+        PlayerCodecForceFeatureInstaller(
+            PlayerCodecPreference.AV1.value,
+            PlayerDecodeMode.FORCE_SOFTWARE.value
+        ).install(environment(registrar))
+        val actual = registrar.invoke(
+            "player_codec_force.request.PlayViewUniteReq",
+            PlayerMoss(), arrayOf<Any?>(PlayViewUniteReq(VideoVod(CodeType.CODE_UNKNOWN, 2064)))
+        ) { callbackArgs -> callbackArgs[0] } as PlayViewUniteReq
+        assertEquals(CodeType.CODE264, actual.getVod().getPreferCodecType())
+        assertEquals(16, actual.getVod().getFnval())
+    }
+
     @Test
     fun `decode mode registers bundle and native option guards`() {
         val registrar = PlayerPortTestRegistrar()
@@ -95,9 +111,19 @@ class PlayerCodecForceFeatureInstallerTest {
             PlayerDecodeMode.FORCE_SOFTWARE.value
         ).install(environment(registrar))
 
-        assertEquals(FeatureInstallResult.Installed(3), result)
-        assertEquals(3, registrar.hooks.size)
+        // 3 个 ijk 选项守卫 + 4 个请求入口（强制软解的硬约束：让服务端不下发 AV1 流）。
+        assertEquals(FeatureInstallResult.Installed(7), result)
+        assertEquals(7, registrar.hooks.size)
         assertTrue(registrar.hooks.containsKey("player_codec_force.bundle"))
+        val source = PlayViewUniteReq(VideoVod(CodeType.CODE_UNKNOWN, 2064))
+        val stripped = registrar.invoke(
+            "player_codec_force.request.PlayViewUniteReq",
+            PlayerMoss(), arrayOf<Any?>(source)
+        ) { callbackArgs -> callbackArgs[0] } as PlayViewUniteReq
+        // 跟随宿主：编码偏好原样，只清 AV1 能力位。
+        assertEquals(CodeType.CODE_UNKNOWN, stripped.getVod().getPreferCodecType())
+        assertEquals(16, stripped.getVod().getFnval())
+        assertEquals(2064, source.getVod().getFnval())
         registrar.hooks.filterKeys { it.startsWith("player_codec_force.option.") }.forEach { (id, entry) ->
             val type = entry.member.parameterTypes[2]
             val args = if (type == String::class.java) {
