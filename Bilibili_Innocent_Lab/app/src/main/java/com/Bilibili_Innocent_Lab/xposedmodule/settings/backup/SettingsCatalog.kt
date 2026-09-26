@@ -21,7 +21,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.settings.appearance.ModalBackdropB
 internal object SettingsCatalog {
     const val PRODUCT_ID = "bilibili-innocent-lab.settings"
     const val SCOPE_ID = "core-user-settings"
-    const val CATALOG_VERSION = 29
+    const val CATALOG_VERSION = 30
     const val ID_PLAYER_DEFAULT_SPEED = "player.default_speed.percent"
     const val ID_PLAYER_LONG_PRESS_SPEED = "player.long_press_speed.percent"
     const val ID_FREE_COPY_COMMENT = "free_copy.comment.enabled"
@@ -39,6 +39,7 @@ internal object SettingsCatalog {
     const val ID_AI_DECLARED_VIDEOS_BLOCKED = "video.ai_declared.blocked"
     const val ID_AI_DECLARED_VIDEOS_STRONG_MODE = "video.ai_declared.strong_mode"
     const val ID_BILI_ACCESS_KEY_AUTHORIZED = "communication.bili_access_key.authorized"
+    const val ID_AI_DECLARED_VIDEOS_PRECHECK = "video.ai_declared.precheck"
 
     private fun bool(
         id: String,
@@ -161,6 +162,8 @@ internal object SettingsCatalog {
         // 两边都读，所以重启宿主与重建模块界面都要。
         bool(ID_AI_DECLARED_VIDEOS_STRONG_MODE, FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE,
             R.string.block_ai_declared_videos_strong_mode, introducedCatalogVersion = 28),
+        bool(ID_AI_DECLARED_VIDEOS_PRECHECK, FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_PRECHECK,
+            R.string.ai_declared_precheck, introducedCatalogVersion = 30),
         bool("home.recommend.live.removed", FeaturePreferences.REMOVE_HOME_RECOMMEND_LIVE, R.string.remove_home_recommend_live),
         bool("home.recommend.pgc.removed", FeaturePreferences.REMOVE_HOME_RECOMMEND_PGC,
             R.string.remove_home_recommend_pgc, introducedCatalogVersion = 14),
@@ -694,7 +697,7 @@ internal object SettingsCatalog {
     val byStorageKey: Map<String, SettingSpec> = specs.associateBy(SettingSpec::storageKey)
 
     init {
-        check(specs.size == 150) { "Expected 150 catalog settings, found ${specs.size}" }
+        check(specs.size == 151) { "Expected 151 catalog settings, found ${specs.size}" }
         check(byId.size == specs.size) { "Duplicate logical setting id" }
         check(specs.map(SettingSpec::storageKey).distinct().size == specs.size) {
             "Duplicate settings storage key"

@@ -274,13 +274,16 @@ class MainActivity : SkinnedActivity() {
     private var homeRecommendBlockedAuthors = ""
     private var homeRecommendSectionPickEnabled = false
     private var blockAiDeclaredVideos = false
-    private var blockAiDeclaredVideosStrongMode = false
+    internal var blockAiDeclaredVideosStrongMode = false
+    /** 强力模式 · 获取 access_key（推荐预检）的用户意图；实际生效还要通用授权。 */
+    internal var blockAiDeclaredVideosPrecheck = false
+    internal var aiStrongModeEntry: View? = null
+    internal var aiStrongModeSummaryView: NativeTextView? = null
     internal fun isBlockAiDeclaredVideosEnabled(): Boolean = blockAiDeclaredVideos
     /** 实验性兼容「获取 access_key」授权；强力模式以它为前提。 */
     internal var biliAccessKeyAuthorized = false
     internal var biliAccessKeySwitch: com.Bilibili_Innocent_Lab.xposedmodule.ui.view.MaterialSwitch? = null
     internal var biliAccessKeyProgrammaticSwitch = false
-    internal var aiStrongModeSwitch: com.Bilibili_Innocent_Lab.xposedmodule.ui.view.MaterialSwitch? = null
     private var videoRelateBlockedAuthors = ""
     private var videoRelateBlockedTags = ""
     internal var removeHomeRecommendLive = false
@@ -4213,6 +4216,7 @@ class MainActivity : SkinnedActivity() {
         blockAiDeclaredVideosStrongMode =
             uiSettings.bool(FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE)
         biliAccessKeyAuthorized = uiSettings.bool(FeaturePreferences.BILI_ACCESS_KEY_AUTHORIZED)
+        blockAiDeclaredVideosPrecheck = uiSettings.bool(FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_PRECHECK)
         videoRelateBlockedAuthors = uiSettings.string(FeaturePreferences.VIDEO_RELATE_BLOCKED_AUTHORS)
         videoRelateBlockedTags = uiSettings.string(FeaturePreferences.VIDEO_RELATE_BLOCKED_TAGS)
         removeHomeRecommendLive = uiSettings.bool(FeaturePreferences.REMOVE_HOME_RECOMMEND_LIVE)
@@ -10257,8 +10261,8 @@ class MainActivity : SkinnedActivity() {
             textColor = colorResource(R.color.colorTextDark)
             textSize = 12f
         }
-        // 强力模式的开关本体在总开关下面，总开关关着或未授权获取 access_key 时置灰：
-        // 宿主侧它的实际生效值 = 总开关开 且 强力模式开 且 已授权（AiDeclaredVideoPolicy.effectiveStrongMode）。
+        // 强力模式是总开关下面的二级勾选面板入口，总开关关着时置灰（宿主侧它只在总开关开着时生效）。
+        // 面板里两项独立：屏蔽发布者；获取 access_key（推荐预检，实际生效还要通用授权）。
         MaterialSwitch(
             lparams = LayoutParams(widthMatchParent = true) {
                 topMargin = 12.dp
@@ -10274,7 +10278,7 @@ class MainActivity : SkinnedActivity() {
             isChecked = blockAiDeclaredVideos
             setOnCheckedChangeListener { _, isChecked ->
                 blockAiDeclaredVideos = isChecked
-                aiStrongModeSwitch?.isEnabled = isChecked && biliAccessKeyAuthorized
+                updateAiStrongModeEntry()
                 runCatching {
                     prefs().edit {
                         putBoolean(FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS, isChecked)
@@ -10291,38 +10295,56 @@ class MainActivity : SkinnedActivity() {
             textColor = colorResource(R.color.colorTextDark)
             textSize = 12f
         }
-        MaterialSwitch(
+        LinearLayout(
             lparams = LayoutParams(widthMatchParent = true) {
                 topMargin = 8.dp
                 bottomMargin = 5.dp
+            },
+            init = {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                background = selfRippleBackground(10f)
+                updatePadding(horizontal = 4.dp, vertical = 9.dp)
+                isClickable = true
+                isFocusable = true
+                contentDescription = stringResource(R.string.block_ai_declared_videos_strong_mode)
+                settingsDestinations.bind(SettingsCatalog.ID_AI_DECLARED_VIDEOS_STRONG_MODE, this)
+                settingsDestinations.bind(SettingsCatalog.ID_AI_DECLARED_VIDEOS_PRECHECK, this)
+                setOnClickListener { showAiStrongModeDialog(it) }
+                aiStrongModeEntry = this
+                isEnabled = blockAiDeclaredVideos
+                alpha = if (blockAiDeclaredVideos) 1f else 0.5f
             }
         ) {
-            aiStrongModeSwitch = this
-            bindFavoriteSwitch(this, FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE, directToggle = true)
-            text = stringResource(R.string.block_ai_declared_videos_strong_mode)
-            settingsDestinations.bind(SettingsCatalog.ID_AI_DECLARED_VIDEOS_STRONG_MODE, this)
-            isAllCaps = false
-            textColor = colorResource(R.color.colorTextGray)
-            textSize = 15f
-            isChecked = blockAiDeclaredVideosStrongMode && biliAccessKeyAuthorized
-            isEnabled = blockAiDeclaredVideos && biliAccessKeyAuthorized
-            setOnCheckedChangeListener { _, isChecked ->
-                blockAiDeclaredVideosStrongMode = isChecked
-                runCatching {
-                    prefs().edit {
-                        putBoolean(FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE, isChecked)
-                    }
-                }.onFailure { t ->
-                    Log.e("BilibiliInnocentLab", "write ai declared strong mode prefs failed", t)
+            LinearLayout(
+                lparams = LayoutParams { weight = 1f },
+                init = { orientation = LinearLayout.VERTICAL }
+            ) {
+                TextView(lparams = LayoutParams(widthMatchParent = true)) {
+                    text = stringResource(R.string.block_ai_declared_videos_strong_mode)
+                    textColor = colorResource(R.color.colorTextGray)
+                    textSize = 15f
+                }
+                TextView(lparams = LayoutParams(widthMatchParent = true) { topMargin = 4.dp }) {
+                    aiStrongModeSummaryView = this
+                    alpha = 0.68f
+                    text = aiStrongModeSummary()
+                    textColor = colorResource(R.color.colorTextDark)
+                    textSize = 12f
+                }
+                // 供设置搜索命中面板里的两项。
+                TextView(lparams = LayoutParams(widthMatchParent = true)) {
+                    visibility = View.GONE
+                    text = listOf(R.string.ai_declared_block_author, R.string.ai_declared_precheck)
+                        .joinToString(" · ") { stringResource(it) }
                 }
             }
-        }
-        TextView(lparams = LayoutParams(widthMatchParent = true)) {
-            alpha = 0.6f
-            setLineSpacing(6f, 1f)
-            text = stringResource(R.string.block_ai_declared_videos_strong_mode_tip)
-            textColor = colorResource(R.color.colorTextDark)
-            textSize = 12f
+            ImageView(lparams = LayoutParams(18.dp, 18.dp)) {
+                setImageResource(R.drawable.ic_chevron_down)
+                rotation = -90f
+                alpha = 0.8f
+                imageTintList = stateColorResource(R.color.colorTextGray)
+            }
         }
         MaterialSwitch(
             lparams = LayoutParams(widthMatchParent = true) {

@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * 强力模式：详情页首屏推荐的后台限速预检。
+ * 强力模式 · 获取 access_key：详情页首屏推荐的后台限速预检。
  *
  * 推荐卡本身不带创作声明（抓包 5 份 View 响应 + `RelateCard` 全字段树核对），只能逐个查详情。
  * 每打开一个详情页，取首屏推荐里**尚未确认过**的前 [PER_PAGE] 个视频，单线程每 [SPACING_MS] 查一个；

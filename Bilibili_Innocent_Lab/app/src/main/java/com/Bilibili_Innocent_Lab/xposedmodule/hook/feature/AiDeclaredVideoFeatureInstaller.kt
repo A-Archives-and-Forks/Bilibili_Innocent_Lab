@@ -29,8 +29,10 @@ import java.lang.reflect.Method
  */
 internal class AiDeclaredVideoFeatureInstaller(
     private val enabled: Boolean,
-    /** 实际生效值：宿主入口已按「强力模式开 且 已授权获取 access_key」合成。 */
-    private val strongMode: Boolean
+    /** 强力模式 · 屏蔽发布者。 */
+    private val strongMode: Boolean,
+    /** 强力模式 · 获取 access_key 推荐预检；宿主入口已按「预检开 且 已授权」合成。 */
+    private val precheck: Boolean = false
 ) : FeatureInstaller {
 
     override val id: String = AiDeclaredVideoPolicy.ID
@@ -81,7 +83,7 @@ internal class AiDeclaredVideoFeatureInstaller(
         val playlist = installPlaylistSkipper(environment, loader)
         // 连播的连锁保险单独计数：一个列表里连着几集 AI 很常见，额度比详情页补位宽。
         val playlistGuard = AiRedirectGuard(maxRedirects = PLAYLIST_SKIPS, windowMillis = 60_000L)
-        val prechecker = if (strongMode) installPrechecker(environment, loader, interceptor) else null
+        val prechecker = if (precheck) installPrechecker(environment, loader, interceptor) else null
         val handle: (Any, Boolean) -> Any = { reply, passive ->
             interceptor.process(
                 reply, environment, guard, passive,
@@ -156,7 +158,7 @@ internal class AiDeclaredVideoFeatureInstaller(
             if (routes < PATHS) add("routes:$routes/$PATHS")
             if (!interceptor.relateStripReady) add("missing-relate-writeback")
             if (feedRoutes == 0) add("missing-relates-feed")
-            if (strongMode && prechecker == null) add("missing-precheck")
+            if (precheck && prechecker == null) add("missing-precheck")
             if (playlist == null) add("missing-playlist-skip")
             if (strongMode && environment.writeScanSnapshot == null) add("missing-snapshot-sink")
         }
@@ -187,7 +189,7 @@ internal class AiDeclaredVideoFeatureInstaller(
         if (probe == null || query == null) {
             environment.logError(
                 "ai_declared_precheck_missing",
-                "[BIL] 推荐预检锚点缺失(account=${probe != null}, view=${query != null})，强力模式不做预检"
+                "[BIL] 推荐预检锚点缺失(account=${probe != null}, view=${query != null})，不做推荐预检"
             )
             return null
         }

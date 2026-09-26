@@ -140,6 +140,9 @@ internal object ReleaseHighlightsCatalog {
         ReleaseHighlight("ai-declared-videos-strong-mode", HighlightKind.NEW,
             R.string.highlights_ai_declared_videos_strong_mode,
             HighlightDestination(SettingsCatalog.ID_AI_DECLARED_VIDEOS_STRONG_MODE)),
+        ReleaseHighlight("ai-declared-videos-precheck", HighlightKind.NEW,
+            R.string.highlights_ai_declared_precheck,
+            HighlightDestination(SettingsCatalog.ID_AI_DECLARED_VIDEOS_PRECHECK)),
         ReleaseHighlight("bili-access-key", HighlightKind.NEW,
             R.string.highlights_bili_access_key,
             HighlightDestination(SettingsCatalog.ID_BILI_ACCESS_KEY_AUTHORIZED))

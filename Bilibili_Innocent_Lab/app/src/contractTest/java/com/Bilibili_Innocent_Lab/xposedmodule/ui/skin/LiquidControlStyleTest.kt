@@ -73,8 +73,9 @@ class LiquidControlStyleTest {
         // 钉住总数而不是 >=：搬迁不允许让任何一个弹窗掉出统计。新增弹窗时一并改这里。
         // 2026-09-20：液态玻璃并入柔光美学，「界面美学」单选弹窗被「高级材质」开关取代，
         // 弹窗总数 34 → 33。
-        // 2026-09-26：新增「获取 access_key」风险二次确认（BiliAccessKeyDialogs.kt），33 → 34。
-        assertEquals(34, dialogs)
+        // 2026-09-26：新增「获取 access_key」风险二次确认（BiliAccessKeyDialogs.kt），33 → 34；
+        // 同日强力模式改为二级勾选面板（AiStrongModeDialogs.kt），34 → 35。
+        assertEquals(35, dialogs)
         // 「管理常用」改用定宽 presentSizedModalDialog（EXACTLY 行宽保证把手钉右缘）。
         assertTrue(SettingsUiSource.function("showSettingsFavoritesDialog").contains("presentSizedModalDialog(dialog, container, width, anchor)"))
         val presenter = SettingsUiSource.function("presentSizedModalDialog")

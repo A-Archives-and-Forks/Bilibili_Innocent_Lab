@@ -199,7 +199,10 @@ internal object DiagnosticCapabilityCatalog {
         "home.recommend.feedback_auto_confirm" to "MODULE_UI",
         // 只是强力模式的前置授权：宿主侧合成进 ai_declared_author_block 的生效值，
         // 本身没有独立的宿主能力；令牌状态只以 ai_declared_access_key_status 状态码出现在本地诊断里。
-        "communication.bili_access_key.authorized" to "HOST_GATE"
+        "communication.bili_access_key.authorized" to "HOST_GATE",
+        // 强力模式 · 获取 access_key（推荐预检）：结果体现在 ai_declared_video_block 的运行证据与
+        // ai_declared_video_status 的 partial 原因里，没有独立的宿主能力单位。
+        "video.ai_declared.precheck" to "HOST_GATE"
     )
     val byId = definitions.associateBy { it.id }
     val byLocatorKey = definitions.filter { it.locatorKey != null }.associateBy { it.locatorKey!! }

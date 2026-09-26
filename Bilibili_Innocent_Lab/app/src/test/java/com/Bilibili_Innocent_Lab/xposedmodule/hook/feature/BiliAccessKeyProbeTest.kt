@@ -53,9 +53,9 @@ class BiliAccessKeyProbeTest {
     }
 
     @Test
-    fun `strong mode requires the access key authorization`() {
-        assertTrue(AiDeclaredVideoPolicy.effectiveStrongMode(strongMode = true, accessKeyAuthorized = true))
-        assertFalse(AiDeclaredVideoPolicy.effectiveStrongMode(strongMode = true, accessKeyAuthorized = false))
-        assertFalse(AiDeclaredVideoPolicy.effectiveStrongMode(strongMode = false, accessKeyAuthorized = true))
+    fun `recommendation precheck requires the access key authorization`() {
+        assertTrue(AiDeclaredVideoPolicy.effectivePrecheck(precheck = true, accessKeyAuthorized = true))
+        assertFalse(AiDeclaredVideoPolicy.effectivePrecheck(precheck = true, accessKeyAuthorized = false))
+        assertFalse(AiDeclaredVideoPolicy.effectivePrecheck(precheck = false, accessKeyAuthorized = true))
     }
 }

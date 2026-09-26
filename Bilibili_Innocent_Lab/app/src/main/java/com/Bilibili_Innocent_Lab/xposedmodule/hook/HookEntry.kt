@@ -161,10 +161,10 @@ class HookEntry : XposedModule() {
         @Volatile
         private var hostRecyclerViewClass: Class<*>? = null
 
-        /** 强力模式的实际生效值：必须先在兼容设置里授权获取 access_key。 */
-        private fun aiDeclaredStrongModeEffective(prefs: HookConfigSource): Boolean =
-            com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.AiDeclaredVideoPolicy.effectiveStrongMode(
-                strongMode = prefs.getBoolean(FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE, false),
+        /** 强力模式 · 获取 access_key（推荐预检）的实际生效值：必须同时有通用授权。 */
+        private fun aiDeclaredPrecheckEffective(prefs: HookConfigSource): Boolean =
+            com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.AiDeclaredVideoPolicy.effectivePrecheck(
+                precheck = prefs.getBoolean(FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_PRECHECK, false),
                 accessKeyAuthorized = prefs.getBoolean(FeaturePreferences.BILI_ACCESS_KEY_AUTHORIZED, false)
             )
 
@@ -3119,7 +3119,10 @@ class HookEntry : XposedModule() {
                             FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS,
                             false
                         ),
-                        aiDeclaredStrongMode = aiDeclaredStrongModeEffective(prefs)
+                        aiDeclaredStrongMode = prefs.getBoolean(
+                            FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE,
+                            false
+                        )
                     )
                 )
             )
@@ -3300,7 +3303,11 @@ class HookEntry : XposedModule() {
                     // 与相关推荐卡，两者互不依赖、各自降级；强力模式只在总开关开着时有意义。
                     AiDeclaredVideoFeatureInstaller(
                         enabled = prefs.getBoolean(FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS, false),
-                        strongMode = aiDeclaredStrongModeEffective(prefs)
+                        strongMode = prefs.getBoolean(
+                            FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE,
+                            false
+                        ),
+                        precheck = aiDeclaredPrecheckEffective(prefs)
                     )
                 )
             )

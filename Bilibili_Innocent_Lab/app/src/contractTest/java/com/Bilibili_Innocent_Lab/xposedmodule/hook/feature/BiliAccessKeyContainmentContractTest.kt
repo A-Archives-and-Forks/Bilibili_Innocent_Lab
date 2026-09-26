@@ -10,7 +10,7 @@ import org.junit.Test
 
 /**
  * access_key 只允许以"状态码"离开宿主侧探测层：不缓存、不记日志、不上报原文。
- * 强力模式必须以授权为前提，两处读取强力模式的地方都走同一个合成函数。
+ * 强力模式里只有「获取 access_key」（推荐预检）以授权为前提，经同一个合成函数读取。
  */
 class BiliAccessKeyContainmentContractTest {
     private val probe = SourceContract.read("hook/feature/BiliAccessKeyProbe.kt")
@@ -32,9 +32,12 @@ class BiliAccessKeyContainmentContractTest {
         assertFalse(precheck.contains("getAccessKey"))
     }
 
-    @Test fun bothStrongModeReadersRequireAuthorization() {
-        assertEquals(2, Regex("aiDeclaredStrongModeEffective\\(prefs\\)").findAll(entry).count())
-        assertFalse(entry.contains("BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE,\n                            false"))
+    /** 强力模式拆成两项后：只有推荐预检以授权为前提，屏蔽发布者照旧只读自己的开关。 */
+    @Test fun onlyTheRecommendationPrecheckRequiresAuthorization() {
+        assertEquals(1, Regex("""precheck = aiDeclaredPrecheckEffective\(prefs\)""").findAll(entry).count())
         assertTrue(entry.contains("accessKeyAuthorized = prefs.getBoolean(FeaturePreferences.BILI_ACCESS_KEY_AUTHORIZED, false)"))
+        assertTrue(entry.contains("precheck = prefs.getBoolean(FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_PRECHECK, false)"))
+        val install = installer.after("override fun install(").before("private fun installPrechecker(")
+        assertTrue(install.contains("if (precheck) installPrechecker("))
     }
 }

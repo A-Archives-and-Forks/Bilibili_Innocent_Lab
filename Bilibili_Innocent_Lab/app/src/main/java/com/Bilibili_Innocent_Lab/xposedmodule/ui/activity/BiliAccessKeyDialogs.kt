@@ -18,9 +18,9 @@ import android.widget.TextView as NativeTextView
 
 /**
  * 「获取 access_key」授权前的风险二次确认；只有点了确认按钮才写入授权。
- * 已授权时直接返回（关闭授权不需要确认）。
+ * 已授权时直接返回（关闭授权不需要确认）。[onAuthorized] 在确认并写入之后回调（强力模式面板据此勾上本项）。
  */
-internal fun MainActivity.showBiliAccessKeyConfirmDialog(anchor: View? = null) {
+internal fun MainActivity.showBiliAccessKeyConfirmDialog(anchor: View? = null, onAuthorized: (() -> Unit)? = null) {
     if (biliAccessKeyAuthorized) return
     val density = resources.displayMetrics.density
     val dialog = Dialog(this).also { installDialogElasticInteraction(it) }
@@ -48,33 +48,36 @@ internal fun MainActivity.showBiliAccessKeyConfirmDialog(anchor: View? = null) {
         dismissWithAnimation(dialog, container) {}
     }, NativeLinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
     buttons.addView(createTermsActionButton(getString(R.string.bili_access_key_confirm_accept), filled = true) {
-        dismissWithAnimation(dialog, container) { setBiliAccessKeyAuthorized(true) }
+        dismissWithAnimation(dialog, container) {
+            setBiliAccessKeyAuthorized(true)
+            onAuthorized?.invoke()
+        }
     }, NativeLinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginStart = (8 * density).toInt() })
     container.addView(buttons)
     presentModalDialog(dialog, container, anchor)
 }
 
 /**
- * 写入授权并同步两处界面：兼容区的授权开关、AI 区的强力模式开关。
- * 撤销授权时强力模式一并写成关闭——用户看到的状态与宿主实际生效值一致，重新授权后需手动再开。
+ * 写入授权并同步两处界面：兼容区的授权开关、AI 区强力模式入口的摘要。
+ * 撤销授权时强力模式的「获取 access_key」一并写成关闭（屏蔽发布者不受影响），重新授权后需在面板里再勾。
  */
 internal fun MainActivity.setBiliAccessKeyAuthorized(authorized: Boolean) {
     val saved = runCatching {
         prefs().edit(commit = true) {
             putBoolean(FeaturePreferences.BILI_ACCESS_KEY_AUTHORIZED, authorized)
-            if (!authorized) putBoolean(FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE, false)
+            if (!authorized) putBoolean(FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_PRECHECK, false)
         }
     }.onFailure { t ->
         Log.e("BilibiliInnocentLab", "write access key authorization failed", t)
     }.isSuccess
-    if (saved) biliAccessKeyAuthorized = authorized
+    if (saved) {
+        biliAccessKeyAuthorized = authorized
+        if (!authorized) blockAiDeclaredVideosPrecheck = false
+    }
     biliAccessKeyProgrammaticSwitch = true
     biliAccessKeySwitch?.isChecked = biliAccessKeyAuthorized
     biliAccessKeyProgrammaticSwitch = false
-    aiStrongModeSwitch?.let { strong ->
-        if (!biliAccessKeyAuthorized) strong.isChecked = false
-        strong.isEnabled = biliAccessKeyAuthorized && isBlockAiDeclaredVideosEnabled()
-    }
+    updateAiStrongModeEntry()
     if (!saved) {
         toast(getString(R.string.bili_access_key_save_failed))
         return

@@ -130,11 +130,11 @@ class SettingsCatalogTest {
     }
 
     @Test
-    fun `catalog is a unique allowlist with 150 settings`() {
-        assertEquals(150, SettingsCatalog.specs.size)
-        assertEquals(150, SettingsCatalog.specs.map { it.id }.distinct().size)
-        assertEquals(150, SettingsCatalog.specs.map { it.storageKey }.distinct().size)
-        assertEquals(147, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.AUTOMATIC })
+    fun `catalog is a unique allowlist with 151 settings`() {
+        assertEquals(151, SettingsCatalog.specs.size)
+        assertEquals(151, SettingsCatalog.specs.map { it.id }.distinct().size)
+        assertEquals(151, SettingsCatalog.specs.map { it.storageKey }.distinct().size)
+        assertEquals(148, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.AUTOMATIC })
         assertEquals(3, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.MANUAL })
         assertTrue(SettingsCatalog.specs.all { it.accepts(it.defaultValue) })
         assertTrue(SettingsCatalog.specs.all { it.id.matches(Regex("[a-z0-9][a-z0-9._-]{0,127}")) })
@@ -365,7 +365,7 @@ class SettingsCatalogTest {
         val expected = requireNotNull(javaClass.classLoader?.getResourceAsStream("settings-backup/catalog-v13.txt"))
             .bufferedReader().useLines { it.filter(String::isNotBlank).toList() }
         assertEquals(expected, SettingsCatalog.specs.filter { it.introducedCatalogVersion <= 13 }.map { it.id }.sorted())
-        assertEquals(29, SettingsCatalog.CATALOG_VERSION)
+        assertEquals(30, SettingsCatalog.CATALOG_VERSION)
         val added = SettingsCatalog.specs.filter { it.introducedCatalogVersion == 13 }
         assertEquals(6, added.size)
         assertTrue(added.all { it.restorePolicy == RestorePolicy.AUTOMATIC && ImportEffect.RESTART_BILIBILI in it.effects })
@@ -524,9 +524,24 @@ class SettingsCatalogTest {
         assertTrue(ImportEffect.RESTART_BILIBILI in spec.effects)
     }
 
+    /** 强力模式拆分：「获取 access_key」推荐预检独立成项，默认关；授权本身仍是 v29 的手动恢复项。 */
+    @Test
+    fun `catalog v30 splits the ai declared precheck out of strong mode`() {
+        val expected = requireNotNull(
+            javaClass.classLoader?.getResourceAsStream("settings-backup/catalog-v30.txt")
+        ).bufferedReader().useLines { it.filter(String::isNotBlank).toList() }
+        assertEquals(expected, SettingsCatalog.specs.filter { it.introducedCatalogVersion <= 30 }.map { it.id }.sorted())
+        val spec = SettingsCatalog.specs.single { it.introducedCatalogVersion == 30 }
+        assertEquals(SettingsCatalog.ID_AI_DECLARED_VIDEOS_PRECHECK, spec.id)
+        assertEquals("block_ai_declared_videos_precheck", spec.storageKey)
+        assertEquals(SettingValue.Bool(false), spec.defaultValue)
+        assertEquals(RestorePolicy.AUTOMATIC, spec.restorePolicy)
+        assertTrue(ImportEffect.RESTART_BILIBILI in spec.effects)
+    }
+
     @Test
     fun `catalog types and manual roaming boundary are explicit`() {
-        assertEquals(114, SettingsCatalog.specs.count { it.type == SettingValueType.BOOLEAN })
+        assertEquals(115, SettingsCatalog.specs.count { it.type == SettingValueType.BOOLEAN })
         assertEquals(11, SettingsCatalog.specs.count { it.type == SettingValueType.INTEGER })
         assertEquals(25, SettingsCatalog.specs.count { it.type == SettingValueType.STRING })
 

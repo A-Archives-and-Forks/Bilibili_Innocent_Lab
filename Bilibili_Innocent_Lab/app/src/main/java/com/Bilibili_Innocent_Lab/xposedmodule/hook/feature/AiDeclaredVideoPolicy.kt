@@ -127,9 +127,9 @@ internal object AiDeclaredVideoPolicy {
      * `spmid` 为 `main.my-history.recommend.0`，只读 `viewBase`/`arc`/`supplement`、不看 `ecode`。
      * 对它只记已知 aid，不改写、不提示、不记发布者、不占连锁保险。
      */
-    /** 强力模式以「获取 access_key」授权为前提；没授权时一律按关闭处理（界面上开关也不可用）。 */
-    fun effectiveStrongMode(strongMode: Boolean, accessKeyAuthorized: Boolean): Boolean =
-        strongMode && accessKeyAuthorized
+    /** 推荐预检以「获取 access_key」通用授权为前提；没授权时一律按关闭处理。屏蔽发布者不需要授权。 */
+    fun effectivePrecheck(precheck: Boolean, accessKeyAuthorized: Boolean): Boolean =
+        precheck && accessKeyAuthorized
 
     fun isPassiveRequest(spmid: String?): Boolean = spmid != null && spmid.startsWith("main.my-history")
 

@@ -61,7 +61,8 @@ internal object FeaturePreferences {
     const val BLOCK_AI_DECLARED_VIDEOS = "block_ai_declared_videos"
 
     /**
-     * 强力模式：详情页确认声明后，把发布者记进「屏蔽 UP」的点选观测面。
+     * 强力模式 · 屏蔽发布者（键名沿用最初的「强力模式」开关，已开启的用户不受影响）：
+     * 详情页确认声明后，把发布者记进「屏蔽 UP」的点选观测面。
      *
      * 宿主侧只写本进程的 [AuthorPickSession] 与观测快照，**不写配置**；
      * 长期名单仍由模块 App 在前台时并入 [HOME_RECOMMEND_BLOCKED_AUTHORS]，
@@ -70,11 +71,17 @@ internal object FeaturePreferences {
     const val BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE = "block_ai_declared_videos_strong_mode"
 
     /**
+     * 强力模式 · 获取 access_key：打开详情页后在后台预检首屏推荐（[AiRelatePrechecker]）。
+     * 实际生效 = 本项 且 [BILI_ACCESS_KEY_AUTHORIZED]（通用授权）；只在 [BLOCK_AI_DECLARED_VIDEOS] 开着时有意义。
+     */
+    const val BLOCK_AI_DECLARED_VIDEOS_PRECHECK = "block_ai_declared_videos_precheck"
+
+    /**
      * 实验性兼容：允许模块在哔哩哔哩进程内读取当前登录账号的 access_key。**默认关**，打开前必须二次确认风险。
      * 这是**通用授权**：任何需要账号身份的功能都以它为前提（读取经 [BiliAccessKeyProbe]），并在说明里注明。
      *
      * 令牌原文只在宿主进程内存里读、用完即弃：不写盘、不进日志/诊断/回执/备份，也不离开宿主进程。
-     * [BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE] 以它为前提（强力模式的实际生效条件 = 强力模式开 且 本项已授权）。
+     * [BLOCK_AI_DECLARED_VIDEOS_PRECHECK] 以它为前提（推荐预检的实际生效条件 = 预检开 且 本项已授权）。
      * 备份恢复为 MANUAL：换机导入备份不会悄悄重新授权。
      */
     const val BILI_ACCESS_KEY_AUTHORIZED = "bili_access_key_authorized"
