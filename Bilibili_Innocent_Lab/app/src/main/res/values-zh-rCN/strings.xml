@@ -945,12 +945,12 @@
     <string name="highlights_ai_declared_videos">跳过带「含AI生成内容」声明的视频：详情页自动换成相关视频，首页和相关推荐会提前过滤。</string>
     <string name="highlights_ai_declared_videos_strong_mode">可选同时屏蔽被拦截视频的 UP 主，自动并入你的 UP 屏蔽名单。</string>
     <string name="bili_access_key_authorize">获取哔哩哔哩 access_key</string>
-    <string name="bili_access_key_authorize_tip">授权后，模块可以在哔哩哔哩进程内读取当前登录账号的 access_key，供需要账号身份的功能调用（目前用于「屏蔽 AI 声明视频」强力模式的后台预检）。需要它的功能会注明以此为前提。令牌只在哔哩哔哩进程内存中使用，不保存、不上传、不导出。修改后需重启哔哩哔哩生效。</string>
+    <string name="bili_access_key_authorize_tip">授权后，需要账号身份的功能可使用当前登录账号的 access_key（目前用于强力模式）。令牌只在哔哩哔哩内使用，不保存、不上传。重启哔哩哔哩后生效。</string>
     <string name="bili_access_key_confirm_title">获取 access_key 前请确认风险</string>
-    <string name="bili_access_key_confirm_message">access_key 等同于你的哔哩哔哩账号登录凭证，持有它就能以你的身份访问账号。\n\n授权后：\n• 这是一项通用授权，需要账号身份的功能都可以调用它，每个依赖它的功能都会在说明中注明。目前只有「屏蔽 AI 声明视频」强力模式在用：借哔哩哔哩自己的请求通道，在后台查询详情页推荐里的视频是否带 AI 声明（每个详情页最多 10 个、每秒 1 个、10 分钟内最多 60 个）。\n• 模块只在哔哩哔哩进程内读取令牌，用来判断账号是否已登录、令牌是否仍然有效。令牌原文不保存，不写入日志、诊断和设置备份，也不会发送给 Innocent_Lab 设置界面或任何第三方。\n\n风险：\n• 以账号身份发起的后台请求属于非官方的自动化请求，仍有可能触发哔哩哔哩风控，最坏情况下账号会被要求验证或暂时限制访问。\n• 如果设备上还装有不受信任的模块或被修改过的哔哩哔哩，它们同样可能读取令牌，本模块无法防范。\n\n你可以随时关闭本开关撤销授权，关闭后所有依赖它的功能随之停用。</string>
+    <string name="bili_access_key_confirm_message">access_key 相当于账号登录凭证。\n\n• 用途：供需要账号身份的功能使用，目前是强力模式的后台预检。\n• 处理：只在哔哩哔哩内读取，不保存、不记录、不上传。\n• 风险：后台请求可能触发风控，账号可能被要求验证或暂时受限；设备上其他不受信任的模块也可能读到令牌。\n\n可随时关闭以撤销授权。</string>
     <string name="bili_access_key_confirm_accept">知晓并授权</string>
     <string name="bili_access_key_authorized">已授权，重启哔哩哔哩后生效</string>
-    <string name="bili_access_key_revoked">已撤销授权，依赖它的功能（如强力模式）随之停用（重启哔哩哔哩后生效）</string>
+    <string name="bili_access_key_revoked">已撤销授权，依赖它的功能已停用，重启哔哩哔哩后生效</string>
     <string name="bili_access_key_save_failed">access_key 授权设置保存失败，已保留原设置。</string>
     <string name="highlights_bili_access_key">实验性兼容新增 access_key 授权，供需要账号身份的功能调用；强力模式已用它在后台预检详情页推荐里的 AI 声明视频。</string>
     <string name="recommendation_blocklist_description">勾选保留，取消勾选移除；保存后重启哔哩哔哩生效。反馈面板中的新选择尚未长期保存。</string>
