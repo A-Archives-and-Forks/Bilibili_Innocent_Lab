@@ -16,6 +16,7 @@ internal enum class BiliAccessKeyState(val code: String) {
 
 /**
  * 在哔哩哔哩进程内读取当前登录账号的 access_key 状态（「获取 access_key」授权后才会被调用）。
+ * 这是供所有需要账号身份的功能共用的入口，目前的调用方是 AI 声明屏蔽强力模式的推荐预检。
  *
  * 锚点（27 个本地宿主 8.84.0–9.13.0 逐版一致、均未混淆）：
  * `com.bilibili.lib.accounts.BiliAccounts.get(Context)` → `getAccessToken()` →

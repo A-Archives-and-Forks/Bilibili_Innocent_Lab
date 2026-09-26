@@ -71,6 +71,7 @@ internal object FeaturePreferences {
 
     /**
      * 实验性兼容：允许模块在哔哩哔哩进程内读取当前登录账号的 access_key。**默认关**，打开前必须二次确认风险。
+     * 这是**通用授权**：任何需要账号身份的功能都以它为前提（读取经 [BiliAccessKeyProbe]），并在说明里注明。
      *
      * 令牌原文只在宿主进程内存里读、用完即弃：不写盘、不进日志/诊断/回执/备份，也不离开宿主进程。
      * [BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE] 以它为前提（强力模式的实际生效条件 = 强力模式开 且 本项已授权）。
