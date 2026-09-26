@@ -1208,7 +1208,11 @@ class MainActivity : SkinnedActivity() {
             .setDuration(180L)
             .setInterpolator(emphasizedAccelerate)
             // 背板压暗层随卡片淡出：锚点路径由 controller 的 onFrame 自己推进度，不走这里。
-            .setUpdateListener { dialogScrims[dialog]?.alpha = container.alpha }
+            // 缩放会移动卡片里的玻璃表面，逐帧通知皮肤按新位置重新采样（见入场处注释）。
+            .setUpdateListener {
+                dialogScrims[dialog]?.alpha = container.alpha
+                notifyPreparedSkinPositionChanged()
+            }
             .setListener(object : AnimatorListenerAdapter() {
                 override fun onAnimationEnd(animation: Animator) {
                     dialog.dismiss()
@@ -2519,6 +2523,7 @@ class MainActivity : SkinnedActivity() {
                     (coveredContent as? ModalCardRoot)?.excludeMotionSurface(morphLayer, morphLayer.alpha)
                 },
                 onExpanded = ::notifyExpanded,
+                onContentMoved = { notifyPreparedSkinPositionChanged() },
                 onClosed = {
                     dismissAfterFinalFrame(dialog) {
                         (pendingAnchoredAfterClose.getAndSet(null) ?: onBackDismiss).invoke()
@@ -2735,6 +2740,7 @@ class MainActivity : SkinnedActivity() {
                             container.scaleY = 1f - 0.05f * progress
                             container.alpha = 1f - 0.15f * progress
                             scrim?.alpha = container.alpha
+                            notifyPreparedSkinPositionChanged()
                         }
                     }
                 },
@@ -2749,6 +2755,14 @@ class MainActivity : SkinnedActivity() {
                                 .scaleX(1f).scaleY(1f).alpha(1f)
                                 .setDuration(260L)
                                 .setInterpolator(emphasizedDecelerate)
+                                // ViewPropertyAnimator 的监听器是黏性的：原先这里隐式沿用入场监听器推进
+                                // 模糊与压暗，显式设置时要把那两项带上，再加上逐帧位置通知。
+                                .setUpdateListener {
+                                    backdropBlur?.apply(container.alpha)
+                                    scrim?.alpha = container.alpha
+                                    notifyPreparedSkinPositionChanged()
+                                }
+                                .withEndAction { notifyPreparedSkinPositionChanged() }
                                 .start()
                             scrim?.animate()?.alpha(1f)
                                 ?.setDuration(260L)
@@ -2910,13 +2924,20 @@ class MainActivity : SkinnedActivity() {
                 // 无锚点弹窗没有形变时钟，借它自己的入场进度推模糊。退场由
                 // 共用的 dismissWithAnimation 负责，窗口撤掉时模糊随之消失（硬切，
                 // 与这条路径本来的淡出观感一致），不去改那 72 个调用点。
+                // 缩放入场会移动卡片里按钮等玻璃表面的屏幕位置，但属性动画既不触发滚动回调，
+                // 也不重录子 View 的显示列表：不逐帧通知的话，表面采样会停在动画中途的位置，
+                // 要等下一次无关重绘才按真实位置重采，按钮光影就会在打开后整体跳一下。
+                // 与锚点形变路径（IconAnchoredMotionController.onContentMoved，2026-09-26 真机
+                // 插桩 + 录屏验证）同一机制；本路径未单独做真机录屏。
                 .setUpdateListener {
                     backdropBlur?.apply(container.alpha)
                     scrim?.alpha = container.alpha
+                    notifyPreparedSkinPositionChanged()
                 }
                 .withEndAction {
                     backdropBlur?.apply(1f)
                     scrim?.alpha = 1f
+                    notifyPreparedSkinPositionChanged()
                     notifyExpanded()
                 }
                 .start()

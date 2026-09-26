@@ -35,6 +35,14 @@ internal class IconAnchoredMotionController(
     /** 每帧的展开进度；供背景毛玻璃这类"跟着同一个时钟"的附属效果使用，不另开动画。 */
     private val onFrame: (Float) -> Unit = {},
     private val onExpanded: () -> Unit = {},
+    /**
+     * 卡片内容的平移已写入（每帧一次，落定到展开端时再一次）。
+     *
+     * 平移移动的是渲染节点，不会重录卡片里玻璃按钮的显示列表；皮肤要靠这个通知按新原点重采，
+     * 否则按钮光影停在形变中途的位置，落定约半秒后才被无关刷新补上而"跳"一下
+     * （2026-09-26 真机插桩：形变全程原点 2273、落定后 2236，缩放恒为 1）。
+     */
+    private val onContentMoved: () -> Unit = {},
     private val onClosed: () -> Unit
 ) {
     private val enterInterpolator = PathInterpolator(
@@ -157,6 +165,7 @@ internal class IconAnchoredMotionController(
         content.alpha = 1f
         content.translationX = 0f
         content.translationY = 0f
+        onContentMoved()
         content.elevation = contentElevation
         // 描边斜坡本来就收在 1，这里只是把浮点误差钉成整数 255。
         contentBackground?.alpha = 255
@@ -388,6 +397,7 @@ internal class IconAnchoredMotionController(
         onFrame(clamped)
         content.translationX = frame.contentTranslationXPx
         content.translationY = frame.contentTranslationYPx
+        onContentMoved()
         titleMotion?.apply(clamped)
     }
 

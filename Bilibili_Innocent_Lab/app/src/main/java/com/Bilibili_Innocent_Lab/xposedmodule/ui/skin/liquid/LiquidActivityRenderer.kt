@@ -1150,7 +1150,10 @@ internal class LiquidActivityRenderer(
         // 遮罩还是之前某一帧的轮廓，玻璃里就会留下一道旧轮廓的圆角缝，上下两块折射的是
         // 背景的不同位置——"两个画面割断"，自定义背景下尤其明显（2026-09-24 真机实证：
         // 关掉实时截图缝即消失）。与滚动同一机制：形变期改采稳定底图，静默后自动回到实时档。
-        if (existing != null && view is LiquidMotionSurfaceFrameProvider && (
+        // 只处理主窗口里的形变（二级页）：弹窗窗口的形变层不在主窗口截图里，截图中的反馈遮罩割不到它，
+        // 抑制没有收益，却会让每次开关弹窗都整组失效两次（进入抑制 + 静默后解除）——真机实测解除那次
+        // 主页面整屏玻璃重录一帧 37ms、弹窗被拖到 40ms（2026-09-27 framestats + 事件日志）。
+        if (existing != null && view is LiquidMotionSurfaceFrameProvider && view.rootView === boundRoot?.rootView && (
                 existing.left != bounds.left || existing.top != bounds.top ||
                     existing.right != bounds.right || existing.bottom != bounds.bottom ||
                     existing.radiusPx != radiusPx)
@@ -1368,6 +1371,11 @@ internal class LiquidActivityRenderer(
         // 零位移的滚动回调同样会走这条链路，若在此刻切底图，所有玻璃会在一次
         // 无事发生的回调里 real→stable 闪一下。
         var surfaceMoved = false
+        // 只有主窗口里的表面移动才意味着"被截的内容在动"（实时截图至少滞后一帧，会折射出旧位置）。
+        // 弹窗窗口里的玻璃移动时，被截的主窗口内容是静止的，实时截图始终有效：照常按新原点重录，
+        // 但不切稳定底图、不降级、不排静默后的整组重录——否则每开一次弹窗，动画结束约 250ms 后
+        // 主页面整组玻璃重录 + 补截图，真机 framestats 实测为一帧 39ms、弹窗窗口被拖到 42ms（2026-09-27）。
+        val mainWindowRoot = boundRoot?.rootView
         try {
             val surfaceIterator = surfaceViews.entries.iterator()
             while (surfaceIterator.hasNext()) {
@@ -1380,7 +1388,7 @@ internal class LiquidActivityRenderer(
                 // 原值比对结果无意义；shouldRefresh 对 !visible 本就会忽略该参数。
                 val originChanged = visible &&
                     !entry.value.matchesOrigin(movedSurfaceLocation[0], movedSurfaceLocation[1])
-                if (originChanged) surfaceMoved = true
+                if (originChanged && windowRoot === mainWindowRoot) surfaceMoved = true
                 if (entry.value.refreshState.shouldRefresh(visible,
                         originChanged = originChanged,
                         contentChanged = LiquidRefreshBatch.surfaceContentChanged(
