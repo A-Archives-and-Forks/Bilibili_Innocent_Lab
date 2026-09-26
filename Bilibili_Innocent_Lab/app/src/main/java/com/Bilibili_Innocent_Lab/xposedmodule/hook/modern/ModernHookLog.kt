@@ -2,7 +2,14 @@ package com.Bilibili_Innocent_Lab.xposedmodule.hook.modern
 
 import android.util.Log
 
-/** API 102 模块日志的进程内窄入口，避免业务 Hook 反向依赖框架实例。 */
+/**
+ * API 102 模块日志的进程内窄入口，避免业务 Hook 反向依赖框架实例。
+ *
+ * **记日志绝不能抛**：全仓日志都汇到这里，调用方常在 Hook 链之外（宿主主线程的 post、
+ * 模块后台线程、代理回调）。框架 binder 断开时 `module.log` 会抛，未绑定 sink 时
+ * `android.util.Log` 在 JVM 单测里也会抛；任何一种逃逸到宿主栈都会杀进程。
+ * 所以框架通道失败退到 `android.util.Log`，再失败就静默丢弃这一条。
+ */
 internal object ModernHookLog {
     private const val TAG = "BilibiliInnocentLab"
 
@@ -13,13 +20,28 @@ internal object ModernHookLog {
         sink = runtime::log
     }
 
-    fun info(message: String) {
-        val target = sink
-        if (target != null) target(message, null) else Log.i(TAG, message)
+    internal fun bindSink(target: ((String, Throwable?) -> Unit)?) {
+        sink = target
     }
 
-    fun error(message: String, throwable: Throwable? = null) {
+    fun info(message: String) = write(message, null, error = false)
+
+    fun error(message: String, throwable: Throwable? = null) = write(message, throwable, error = true)
+
+    private fun write(message: String, throwable: Throwable?, error: Boolean) {
         val target = sink
-        if (target != null) target(message, throwable) else Log.e(TAG, message, throwable)
+        if (target != null) {
+            try {
+                target(message, throwable)
+                return
+            } catch (_: Throwable) {
+                // 框架通道不可用：退到系统日志。
+            }
+        }
+        try {
+            if (error) Log.e(TAG, message, throwable) else Log.i(TAG, message)
+        } catch (_: Throwable) {
+            // 日志通道全部不可用时丢弃这一条，不能把异常带回调用方。
+        }
     }
 }
