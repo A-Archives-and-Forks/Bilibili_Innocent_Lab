@@ -37,17 +37,7 @@ internal fun requireMatchingReplyTopologyThread(
 }
 
 /** 动态代理未知回调的故障开放返回值；避免旧版宿主对 primitive 返回值拆箱时崩溃。 */
-internal fun defaultReplyTopologyProxyValue(returnType: Class<*>): Any? = when (returnType) {
-    java.lang.Boolean.TYPE -> false
-    java.lang.Byte.TYPE -> 0.toByte()
-    java.lang.Character.TYPE -> '\u0000'
-    java.lang.Short.TYPE -> 0.toShort()
-    java.lang.Integer.TYPE -> 0
-    java.lang.Long.TYPE -> 0L
-    java.lang.Float.TYPE -> 0f
-    java.lang.Double.TYPE -> 0.0
-    else -> null
-}
+internal fun defaultReplyTopologyProxyValue(returnType: Class<*>): Any? = hostProxyDefaultValue(returnType)
 
 /**
  * 单次分页请求的逻辑取消句柄。取消只负责断开模块侧持有关系和抑制迟到回调，

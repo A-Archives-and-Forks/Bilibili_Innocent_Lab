@@ -2,6 +2,7 @@ package com.Bilibili_Innocent_Lab.xposedmodule.hook.feature
 
 import android.os.Bundle
 import android.view.View
+import com.Bilibili_Innocent_Lab.xposedmodule.runtime.HostThreadGuard
 import com.Bilibili_Innocent_Lab.xposedmodule.runtime.KavaMemberLookup
 import java.lang.reflect.Modifier
 import java.lang.reflect.Proxy
@@ -38,11 +39,15 @@ internal object LegacyFeedbackPanel {
                     val extra = panel.legacyEntries(original.filterNotNull()).map { entry ->
                         val callback = Proxy.newProxyInstance(listener.classLoader, arrayOf(listener)) { proxy, method, args ->
                             when {
-                                method == action -> { entry.click(); null }
+                                // 宿主菜单在主线程点击时直接调用，不经过 Hook 链，需自带兜底。
+                                method == action -> {
+                                    HostThreadGuard.run("section_pick.legacy_click") { entry.click() }
+                                    null
+                                }
                                 method.name == "equals" -> proxy === args?.firstOrNull()
                                 method.name == "hashCode" -> System.identityHashCode(proxy)
                                 method.name == "toString" -> "BILabNativeMenuAction"
-                                else -> null
+                                else -> hostProxyDefaultValue(method.returnType)
                             }
                         }
                         ctor.newInstance(entry.title, callback)

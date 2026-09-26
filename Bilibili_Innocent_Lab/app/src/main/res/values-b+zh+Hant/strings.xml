@@ -18,7 +18,7 @@
     <string name="player_decode_mode_hardware">強制硬解</string>
     <string name="player_decode_mode_software">強制軟解</string>
     <string name="block_component_library_download">禁止下載 App 基礎元件庫</string>
-    <string name="block_component_library_download_tip">啟用後可在下方勾選要攔截的資源池。只攔下載，不刪已有檔案，需先在嗶哩嗶哩儲存設定中清理一次才看得出效果；被攔資源池對應的功能會缺少資源。</string>
+    <string name="block_component_library_download_tip">啟用後可在下方勾選要攔截的資源池。被攔資源池不再下載，嗶哩嗶哩下次重新整理資源清單時還會刪除該池已下載的檔案；對應功能會缺少資源。</string>
     <string name="block_component_library_download_save_failed">元件庫設定儲存失敗，已保留原設定。</string>
     <string name="component_pool_block">選擇要攔截的資源池</string>
     <string name="component_pool_block_dialog_title">選擇要攔截的資源池</string>

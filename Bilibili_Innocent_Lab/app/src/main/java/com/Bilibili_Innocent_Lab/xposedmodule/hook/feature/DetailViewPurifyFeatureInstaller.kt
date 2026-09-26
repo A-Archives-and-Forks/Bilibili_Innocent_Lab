@@ -3,6 +3,7 @@ package com.Bilibili_Innocent_Lab.xposedmodule.hook.feature
 import android.view.View
 import android.view.ViewGroup
 import androidx.core.view.isGone
+import com.Bilibili_Innocent_Lab.xposedmodule.runtime.HostThreadGuard
 import com.Bilibili_Innocent_Lab.xposedmodule.runtime.KavaMemberLookup
 import java.lang.reflect.InvocationHandler
 import java.lang.reflect.Method
@@ -267,18 +268,23 @@ internal class DetailViewRuleHider(
      *
      * `equals`/`hashCode`/`toString` 必须自己答——它们也会走到代理上，
      * 交给宿主接口会抛（接口没有这些方法的实现）。
+     *
+     * 挂载回调由 RecyclerView 在宿主主线程的布局流程里直接调用，不经过 Hook 链，
+     * 框架的 PROTECTIVE 兜不住，所以整段走 [HostThreadGuard]；其余未知方法按返回类型给零值。
      */
     private class Handler(private val owner: DetailViewRuleHider) : InvocationHandler {
         override fun invoke(proxy: Any, method: Method, args: Array<out Any?>?): Any? =
             when (method.name) {
                 DetailViewPurifyPolicy.ATTACHED_CALLBACK -> {
-                    owner.onChildAttached(args?.firstOrNull())
+                    HostThreadGuard.run("detail_view_purify.attached") {
+                        owner.onChildAttached(args?.firstOrNull())
+                    }
                     null
                 }
                 "equals" -> proxy === args?.firstOrNull()
                 "hashCode" -> System.identityHashCode(proxy)
                 "toString" -> "DetailViewRuleHider"
-                else -> null
+                else -> hostProxyDefaultValue(method.returnType)
             }
     }
 

@@ -228,7 +228,7 @@
     <string name="client_update_settings">Update prompts</string>
     <string name="block_app_update">Disable client update prompts</string>
     <string name="block_component_library_download">Block App component-library downloads</string>
-    <string name="block_component_library_download_tip">When enabled, pick the resource pools to block below. Downloads are blocked but existing files are kept, so clear the App component library in Bilibili storage settings once to see the effect. Features backed by a blocked pool will be missing resources.</string>
+    <string name="block_component_library_download_tip">When enabled, pick the resource pools to block below. Blocked pools are no longer downloaded, and Bilibili also deletes their downloaded files the next time it refreshes its resource list. Features backed by a blocked pool will be missing resources.</string>
     <string name="block_component_library_download_save_failed">Could not save the component-library setting. The previous setting was kept.</string>
     <string name="component_pool_block">Pick resource pools to block</string>
     <string name="component_pool_block_dialog_title">Pick resource pools to block</string>

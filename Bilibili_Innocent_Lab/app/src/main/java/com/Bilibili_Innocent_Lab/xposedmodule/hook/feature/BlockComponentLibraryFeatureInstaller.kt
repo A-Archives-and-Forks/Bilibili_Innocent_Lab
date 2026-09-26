@@ -306,7 +306,8 @@ internal object ComponentLibraryPoolMatcher {
      * 而不是一个总开关。**空集时只扫描不过滤**，否则面板永远没有候选可勾——
      * 这是四个列表型面共同的纪律，见 AGENTS 勾选面板条目。
      *
-     * 另：本功能**只拦再次下载、不删已有文件**，要先在存储设置里清一次才看得出效果。
+     * 另：清单里消失的模块会被宿主当作弃用模块**删除本地文件**（`lib.mod.T#r`，日志
+     * `remote config delete abandon mod`，8.84.0–9.13.0 都有），所以拦截不只是"不再下载"。
      */
     val DEFAULT_KEYWORDS: Set<String> = emptySet()
 }
