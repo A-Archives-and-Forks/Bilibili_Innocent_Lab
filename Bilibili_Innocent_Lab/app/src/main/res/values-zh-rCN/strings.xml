@@ -939,7 +939,7 @@
     <string name="recommendation_blocklist_manage">管理推荐屏蔽</string>
     <string name="recommendation_blocklist_manage_tip">确认反馈面板中的屏蔽项，或取消误屏蔽。</string>
     <string name="block_ai_declared_videos">屏蔽含 AI 生成声明的视频</string>
-    <string name="block_ai_declared_videos_tip">打开带有「含AI生成内容」声明的视频时，自动跳到一个相关视频；没有可用的相关视频时显示提示页。首页推荐会按 AI 创作标签提前过滤，已确认的视频也会从相关推荐中移除。</string>
+    <string name="block_ai_declared_videos_tip">打开带有「含AI生成内容」声明的视频时，自动跳到一个相关视频（连播时直接播放下一集）；没有可用的相关视频时显示提示页。首页推荐会按 AI 创作标签提前过滤，已确认的视频也会从相关推荐中移除。</string>
     <string name="block_ai_declared_videos_strong_mode">强力模式：同时屏蔽发布者</string>
     <string name="block_ai_declared_videos_strong_mode_tip">拦截到声明视频时，本次运行内立即屏蔽其 UP 主，并在下次打开 Innocent_Lab 时自动并入「按 UP 主过滤推荐」，无需打开自动确认。误屏蔽可在「管理推荐屏蔽」中移除。</string>
     <string name="highlights_ai_declared_videos">跳过带「含AI生成内容」声明的视频：详情页自动换成相关视频，首页和相关推荐会提前过滤。</string>

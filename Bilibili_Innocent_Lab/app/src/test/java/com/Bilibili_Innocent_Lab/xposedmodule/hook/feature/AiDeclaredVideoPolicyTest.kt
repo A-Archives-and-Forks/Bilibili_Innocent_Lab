@@ -61,6 +61,32 @@ class AiDeclaredVideoPolicyTest {
         assertFalse(policy.feedUriDeclaresAigc(broken))
     }
 
+    @Test fun preGateOnlyPassesWhenAigcFollowsTheCreationTagsKey() {
+        // AI 话题卡：aigc 只在 ai_tags（排在 creation_tags 前面）→ 预判即挡，不做整段解码。
+        assertFalse(policy.mayDeclareAigc(feedUri(creationTags = "知识-杂谈", aiTags = "人工智能-aigc-其他")))
+        assertTrue(policy.mayDeclareAigc(feedUri(creationTags = "人工智能-aigc")))
+        assertTrue(policy.mayDeclareAigc(feedUri(creationTags = "人工智能-AIGC")))
+        assertTrue(policy.feedUriDeclaresAigc(feedUri(creationTags = "人工智能-AIGC")))
+        assertFalse(policy.mayDeclareAigc("bilibili://video/1?x=aigc"))
+        // 键后窗口之外的 aigc 不算。
+        val far = "creation_tags" + "x".repeat(2000) + "aigc"
+        assertFalse(policy.mayDeclareAigc(far))
+    }
+
+    @Test fun repeatedJudgementsOfTheSameUriAreStable() {
+        val uri = feedUri(creationTags = "人工智能-aigc")
+        repeat(3) { assertTrue(policy.feedUriDeclaresAigc(uri)) }
+        val miss = feedUri(creationTags = "音乐-aigc音乐")
+        repeat(3) { assertFalse(policy.feedUriDeclaresAigc(miss)) }
+    }
+
+    @Test fun onlyTheHistoryPageSpmidIsPassive() {
+        assertTrue(policy.isPassiveRequest("main.my-history.recommend.0"))
+        assertFalse(policy.isPassiveRequest("main.ugc-video-detail.0.0"))
+        assertFalse(policy.isPassiveRequest(""))
+        assertFalse(policy.isPassiveRequest(null))
+    }
+
     @Test fun queryParameterReadsTheExactNameWithoutDecoding() {
         val uri = "bilibili://video/1?cid=2&player_preload=%7B%7D&player_preload_x=9"
         assertEquals("%7B%7D", policy.queryParameter(uri, "player_preload"))
@@ -98,10 +124,13 @@ class AiDeclaredVideoPolicyTest {
 
     /** 按抓包形状拼一条首页卡片 uri：`player_preload` 是 URL 编码的 JSON，`qn_feature` 是其中的 JSON 字符串。 */
     private fun feedUri(creationTags: String?, aiTags: String = "音乐-内容看点-演唱翻唱", title: String = "t"): String {
-        val feature = JSONObject().apply {
-            put("title", title)
-            put("ai_tags", aiTags)
-            creationTags?.let { put("creation_tags", it) }
+        // 手工拼串：org.json 不保证键序，而服务端下发的顺序是 title → ai_tags → creation_tags →
+        // general_tags（2026-09-25 抓包），预判正是依赖 ai_tags 排在 creation_tags 之前。
+        val feature = buildString {
+            append("{\"title\":").append(JSONObject.quote(title))
+            append(",\"ai_tags\":").append(JSONObject.quote(aiTags))
+            creationTags?.let { append(",\"creation_tags\":").append(JSONObject.quote(it)) }
+            append(",\"general_tags\":\"\",\"ip_tags\":\"\"}")
         }
         val preload = JSONObject().apply {
             put("expire_time", 1790346275)

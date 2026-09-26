@@ -67,8 +67,24 @@ internal class AiDeclaredVideoFeatureInstaller(
             null
         }
         val guard = AiRedirectGuard()
-        val handle: (Any) -> Any = { reply ->
-            interceptor.process(reply, environment, guard) { name, mid ->
+        // 缺了就一律按详情页处理：退化成"历史页也会拦"，不会退化成"详情页不拦"。
+        val spmidGetter = KavaMemberLookup.methodOrNull(requestClass, "getSpmid")
+            ?.takeIf { it.returnType == classOf<String>() }
+        if (spmidGetter == null) {
+            environment.logError("ai_declared_spmid_absent", "[BIL] ViewReq#getSpmid 不可用，无法区分历史页后台请求")
+        }
+        fun passive(request: Any?): Boolean = runCatching {
+            request != null && spmidGetter != null &&
+                AiDeclaredVideoPolicy.isPassiveRequest(spmidGetter.invoke(request) as? String)
+        }.getOrDefault(false)
+        val playlist = installPlaylistSkipper(environment, loader)
+        // 连播的连锁保险单独计数：一个列表里连着几集 AI 很常见，额度比详情页补位宽。
+        val playlistGuard = AiRedirectGuard(maxRedirects = PLAYLIST_SKIPS, windowMillis = 60_000L)
+        val handle: (Any, Boolean) -> Any = { reply, passive ->
+            interceptor.process(
+                reply, environment, guard, passive,
+                playlist = playlist, playlistGuard = playlistGuard
+            ) { name, mid ->
                 authors?.let { recordAuthor(environment, it, name, mid) }
             }
         }
@@ -84,7 +100,7 @@ internal class AiDeclaredVideoFeatureInstaller(
                 after {
                     if (hasThrowable) return@after
                     val original = result ?: return@after
-                    val updated = handle(original)
+                    val updated = handle(original, passive(argOrNull(0)))
                     if (updated !== original) result = updated
                 }
             }
@@ -103,8 +119,10 @@ internal class AiDeclaredVideoFeatureInstaller(
                 ) {
                     before {
                         val original = argOrNull(1) ?: return@before
-                        val proxy = MossResponseHandlerProxy.wrapTransform(handlerClass, original, handle)
-                            ?: return@before
+                        val isPassive = passive(argOrNull(0))
+                        val proxy = MossResponseHandlerProxy.wrapTransform(handlerClass, original) { reply ->
+                            handle(reply, isPassive)
+                        } ?: return@before
                         args[1] = proxy
                     }
                 }
@@ -133,6 +151,7 @@ internal class AiDeclaredVideoFeatureInstaller(
         val partial = buildList {
             if (routes < PATHS) add("routes:$routes/$PATHS")
             if (!interceptor.relateStripReady) add("missing-relate-writeback")
+            if (playlist == null) add("missing-playlist-skip")
             if (strongMode && environment.writeScanSnapshot == null) add("missing-snapshot-sink")
         }
         environment.reportStatus(
@@ -142,12 +161,56 @@ internal class AiDeclaredVideoFeatureInstaller(
         environment.logInfo(
             "ai_declared_installed",
             "[BIL] AI 声明拦截已安装，routes=$routes, strong=$strongMode, " +
-                "relateStrip=${interceptor.relateStripReady}"
+                "relateStrip=${interceptor.relateStripReady}, playlist=${playlist != null}"
         )
         return FeatureInstallResult.Installed(routes, complete = partial.isEmpty())
     }
 
-    /** 强力模式：本进程立即生效 + 发布到点选观测面，长期名单由模块 App 并入。 */
+    /**
+     * 连播跳过的两个 Hook：记下最新的连播调度对象、在条目构造时给已知 AI 标失效。
+     * 任一环节缺失返回 null，连播退回详情页那条行为（离开列表跳转补位），状态报 partial。
+     */
+    private fun installPlaylistSkipper(environment: HookEnvironment, loader: ClassLoader): AiPlaylistSkipper? {
+        val skipper = AiPlaylistSkipper.resolve(loader) ?: run {
+            environment.logError("ai_declared_playlist_missing", "[BIL] 连播跳过锚点缺失，连播中将按详情页方式改道")
+            return null
+        }
+        return runCatching {
+            val director = checkNotNull(KavaMemberLookup.classOrNull(loader, AiPlaylistSkipper.DIRECTOR_CLASS))
+            val descriptor = checkNotNull(KavaMemberLookup.classOrNull(loader, AiPlaylistSkipper.MEDIA_DESCRIPTOR_CLASS))
+            director.declaredConstructors.forEachIndexed { index, constructor ->
+                environment.registrar.constructor("ai_declared.playlist.director.$index", constructor) {
+                    after { thisObject?.let(skipper::onDirectorCreated) }
+                }
+            }
+            environment.registrar.exact(
+                "ai_declared.playlist.construct", descriptor, "constructWith", classOf<Array<Any>>()
+            ) {
+                before {
+                    val target = thisObject ?: return@before
+                    @Suppress("UNCHECKED_CAST")
+                    val values = argOrNull(0) as? Array<Any?> ?: return@before
+                    if (skipper.onConstruct(target, values)) {
+                        environment.reportRuntimeEvidence(AiDeclaredVideoPolicy.CAPABILITY_DETAIL, FeatureRuntimeStage.APPLIED)
+                    }
+                }
+            }
+            skipper
+        }.getOrElse {
+            environment.logError("ai_declared_playlist_register", "[BIL] 连播跳过 Hook 注册失败: $it")
+            null
+        }
+    }
+
+    /**
+     * 本进程已发布过的发布者（名字小写）。
+     *
+     * 发布与否**只**看这份集合：`AuthorPickSession` 上限 64 且与三点面板共用，写满后 `add` 恒为 false，
+     * 早先以它的返回值决定发布，会让第 33 位之后的发布者既不即时生效也进不了名单。
+     */
+    private val publishedAuthors = AiAuthorLedger(MineComponentSnapshotCodec.MAX_ENTRY_COUNT)
+
+    /** 强力模式：本进程立即生效（尽力而为）+ 发布到点选观测面，长期名单由模块 App 并入。 */
     private fun recordAuthor(
         environment: HookEnvironment,
         publisher: ScanSnapshotPublisher,
@@ -157,7 +220,8 @@ internal class AiDeclaredVideoFeatureInstaller(
         val safeName = name?.trim()?.takeIf(String::isNotEmpty)
         mid.takeIf { it > 0 }?.let { AuthorPickSession.add(it.toString()) }
         if (safeName == null) return
-        if (!AuthorPickSession.add(safeName)) return
+        AuthorPickSession.add(safeName)
+        if (!publishedAuthors.claim(safeName)) return
         publisher.accumulate(
             MineComponentScanEntry.create(
                 "author", safeName, safeName, AiDeclaredVideoPolicy.AUTHOR_PICK_ORIGIN_URI, true
@@ -179,6 +243,23 @@ internal class AiDeclaredVideoFeatureInstaller(
         const val CHANNEL_STATUS = "ai_declared_video_status"
         const val HANDLER_CLASS = "com.bilibili.lib.moss.api.MossResponseHandler"
         const val PATHS = 2
+        const val PLAYLIST_SKIPS = 10
+    }
+}
+
+/**
+ * 强力模式"这位发布者本进程发布过没有"的账本；与 [AuthorPickSession] 的容量彻底脱钩。
+ * 上限对齐观测快照的条目上限——再多发布也会被快照截断。
+ */
+internal class AiAuthorLedger(private val max: Int) {
+    private val names = HashSet<String>()
+
+    /** 返回 true 表示这次应当发布（首次见到且未超上限）。 */
+    @Synchronized
+    fun claim(name: String): Boolean {
+        val key = name.trim().lowercase()
+        if (key.isEmpty() || key in names || names.size >= max) return false
+        return names.add(key)
     }
 }
 
@@ -202,21 +283,37 @@ internal class AiDeclaredReplyInterceptor private constructor(
         val candidates: List<AiDeclaredVideoPolicy.RelateCandidate>
     )
 
+    /**
+     * @param passive 非详情页的后台请求（见 [AiDeclaredVideoPolicy.isPassiveRequest]）：
+     *   只把命中的 aid 记进注册表，不改写、不提示、不记发布者、不占连锁保险。
+     */
     fun process(
         original: Any,
         environment: HookEnvironment,
         guard: AiRedirectGuard,
+        passive: Boolean = false,
+        playlist: AiPlaylistRoute? = null,
+        playlistGuard: AiRedirectGuard = guard,
         onDeclaredAuthor: (String?, Long) -> Unit
     ): Any = runCatching {
         if (!reply.isInstance(original)) return@runCatching original
         if (defaultInstance != null && original === defaultInstance) return@runCatching original
         environment.reportRuntimeEvidence(AiDeclaredVideoPolicy.ID, FeatureRuntimeStage.OBSERVED)
         val facts = read.facts(original)
+        if (passive) {
+            if (facts.declared) AiDeclaredVideoRegistry.add(facts.aid)
+            return@runCatching original
+        }
+        // 服务端已经下发了错误码（真的 404、仅自己可见、青少年模式）就交给宿主，不覆盖。
+        if (rewrite.hasHostError(original)) return@runCatching original
         if (facts.declared) {
             environment.reportRuntimeEvidence(AiDeclaredVideoPolicy.CAPABILITY_DETAIL, FeatureRuntimeStage.OBSERVED)
             AiDeclaredVideoRegistry.add(facts.aid)
             runCatching { onDeclaredAuthor(facts.ownerName, facts.ownerMid) }.onFailure {
                 environment.logError("ai_declared_author_failed", "[BIL] 强力模式记录发布者失败: ${it.javaClass.simpleName}")
+            }
+            playlist?.takeIf { it.ownsPlaylistItem(facts.aid) }?.let { route ->
+                return@runCatching skipInPlaylist(original, route, environment, playlistGuard)
             }
             return@runCatching intercept(original, facts, environment, guard)
         }
@@ -239,6 +336,34 @@ internal class AiDeclaredReplyInterceptor private constructor(
         environment.reportRuntimeEvidence(AiDeclaredVideoPolicy.ID, FeatureRuntimeStage.ERROR)
         environment.logError("ai_declared_copy_failed", "[BIL] AI 声明拦截改写失败，保留原响应: $it")
         original
+    }
+
+    /**
+     * 连播里的条目：不改写跳转（那会离开整个列表），让宿主自己切下一集，响应原样交付。
+     * 没有下一集、连播已销毁或连续跳太多次 → 宿主原生提示页，仍停留在列表里。
+     */
+    private fun skipInPlaylist(
+        original: Any,
+        route: AiPlaylistRoute,
+        environment: HookEnvironment,
+        playlistGuard: AiRedirectGuard
+    ): Any {
+        val messages = InjectedUiLocale.messages()
+        val skipped = playlistGuard.tryAcquire() && route.skipToNext()
+        val updated = if (skipped) original else rewrite.block(original, messages.aiDeclaredBlockedHint)
+        environment.reportRuntimeEvidence(AiDeclaredVideoPolicy.CAPABILITY_DETAIL, FeatureRuntimeStage.APPLIED)
+        environment.reportRuntimeEvidence(AiDeclaredVideoPolicy.ID, FeatureRuntimeStage.APPLIED)
+        environment.logInfo(
+            "ai_declared_playlist",
+            "[BIL] 连播中遇到含 AI 生成声明的视频，" + if (skipped) "已切到下一集" else "无下一集，显示提示页"
+        )
+        ReflectAccess.currentApplication()?.let { context ->
+            VersionAdapter.showAdaptToast(
+                context,
+                if (skipped) messages.aiDeclaredPlaylistSkippedToast else messages.aiDeclaredBlockedHint
+            )
+        }
+        return updated
     }
 
     private fun intercept(
@@ -384,6 +509,9 @@ internal class AiDeclaredReplyInterceptor private constructor(
         private val notFoundValue: Int,
         private val privacyValue: Int
     ) {
+        /** 同一份响应再过一次（或服务端本就报错）时保持幂等：已有非 0 错误码就不再改写。 */
+        fun hasHostError(reply: Any): Boolean = (getEcodeValue.invoke(reply) as? Int ?: 0) != 0
+
         fun redirect(original: Any, url: String): Any = write(original, notFoundValue, url, "")
 
         fun block(original: Any, message: String): Any = write(original, privacyValue, "", message)

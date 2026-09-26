@@ -939,7 +939,7 @@
     <string name="recommendation_blocklist_manage">Manage recommendation blocks</string>
     <string name="recommendation_blocklist_manage_tip">Confirm feedback selections or remove accidental blocks.</string>
     <string name="block_ai_declared_videos">Block videos declared as AI-generated</string>
-    <string name="block_ai_declared_videos_tip">Opening a video that carries the “Contains AI-generated content” declaration jumps to a related video instead; with no usable related video, the page shows a notice. Home recommendations are also filtered by the AI creation tag, and videos confirmed here are removed from related recommendations.</string>
+    <string name="block_ai_declared_videos_tip">Opening a video that carries the “Contains AI-generated content” declaration jumps to a related video instead (in playlists it skips to the next item); with no usable related video, the page shows a notice. Home recommendations are also filtered by the AI creation tag, and videos confirmed here are removed from related recommendations.</string>
     <string name="block_ai_declared_videos_strong_mode">Strong mode: also block the uploader</string>
     <string name="block_ai_declared_videos_strong_mode_tip">When a declared video is intercepted, its uploader is blocked for the rest of the session and added to Filter recommendations by uploader the next time Innocent_Lab opens, without needing auto-confirm. Remove mistakes in Manage recommendation blocks.</string>
     <string name="highlights_ai_declared_videos">Videos declared as AI-generated are skipped: the detail page jumps to a related video, and Home and related recommendations drop them in advance.</string>

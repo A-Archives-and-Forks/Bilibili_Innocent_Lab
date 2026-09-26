@@ -495,9 +495,13 @@ class HomeRecommendPurifyFeatureInstallerTest {
 
     /** 与抓包同形：`player_preload` 是 URL 编码 JSON，`qn_feature` 是其中的 JSON 字符串。 */
     private fun aiFeedUri(creationTags: String?): String {
-        val feature = org.json.JSONObject().put("ai_tags", "人工智能-aigc-其他ai生成内容")
-        creationTags?.let { feature.put("creation_tags", it) }
-        val preload = org.json.JSONObject().put("qn_feature", feature.toString())
+        // 按服务端顺序手工拼（ai_tags 在 creation_tags 前）；org.json 不保证键序。
+        val feature = buildString {
+            append("{\"ai_tags\":\"人工智能-aigc-其他ai生成内容\"")
+            creationTags?.let { append(",\"creation_tags\":").append(org.json.JSONObject.quote(it)) }
+            append("}")
+        }
+        val preload = org.json.JSONObject().put("qn_feature", feature)
         return "bilibili://video/1?cid=2&player_preload=" +
             java.net.URLEncoder.encode(preload.toString(), "UTF-8")
     }

@@ -75,19 +75,59 @@ internal object AiDeclaredVideoPolicy {
     /**
      * 首页卡片 `uri` 是否带 `creation_tags` 含 `aigc` 的特征串。
      *
-     * 热路径纪律：`player_preload` 编码后可达 34 KB（长期文档 2026-09-02 条目），
-     * 所以先对原串做一次不分配的 `contains("aigc")` 预判——绝大多数卡片在这里就结束；
-     * 只有命中才截取参数、URL 解码、解两层 JSON。任何一步失败都按"不是"放行。
+     * 热路径纪律：`player_preload` 编码后可达 34 KB（长期文档 2026-09-02 条目），宿主每调一次
+     * `getItems` 整张列表都要重判，所以预判只用原生 `String.indexOf`（**不许**用
+     * `contains(ignoreCase = true)`：Kotlin 那条走逐字符的通用比较，34 KB 上是毫秒级）：
+     * 先找 `creation_tags` 键，再要求 `aigc` 出现在键后 [CREATION_TAGS_WINDOW] 个字符内。
+     * `ai_tags` 排在 `creation_tags` 前面，所以只在 `ai_tags` 里带 aigc 的 AI 话题卡在这一步就被挡掉，
+     * 不会去做整段解码。通过预判的才截取参数、URL 解码、解两层 JSON，结论按 uri 串缓存。
+     * 任何一步失败都按"不是"放行。
      */
     fun feedUriDeclaresAigc(uri: String?): Boolean {
-        if (uri.isNullOrEmpty() || !uri.contains("aigc", ignoreCase = true)) return false
-        return runCatching {
-            val encoded = queryParameter(uri, "player_preload") ?: return false
+        if (uri.isNullOrEmpty() || !mayDeclareAigc(uri)) return false
+        decodedResults.get(uri)?.let { return it }
+        val result = runCatching {
+            val encoded = queryParameter(uri, "player_preload") ?: return@runCatching false
             val preload = JSONObject(URLDecoder.decode(encoded, "UTF-8"))
-            val feature = preload.optString("qn_feature").takeIf(String::isNotBlank) ?: return false
+            val feature = preload.optString("qn_feature").takeIf(String::isNotBlank)
+                ?: return@runCatching false
             creationTagsDeclareAigc(JSONObject(feature).optString("creation_tags"))
         }.getOrDefault(false)
+        decodedResults.put(uri, result)
+        return result
     }
+
+    /** 只用原生查找，不分配。 */
+    internal fun mayDeclareAigc(uri: String): Boolean {
+        val key = uri.indexOf(CREATION_TAGS_KEY)
+        if (key < 0) return false
+        val limit = key + CREATION_TAGS_KEY.length + CREATION_TAGS_WINDOW
+        return uri.indexOf("aigc", key).let { it in 0 until limit } ||
+            uri.indexOf("AIGC", key).let { it in 0 until limit }
+    }
+
+    private const val CREATION_TAGS_KEY = "creation_tags"
+
+    /** 编码后的 `creation_tags` 值：抓包最长约 60 个汉字 × 9 字节，留足余量。 */
+    private const val CREATION_TAGS_WINDOW = 1024
+
+    /** 通过预判的卡片才进缓存；有界，按访问序淘汰。 */
+    private val decodedResults = object {
+        private val map = object : LinkedHashMap<String, Boolean>(16, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Boolean>?) = size > 64
+        }
+        @Synchronized fun get(key: String): Boolean? = map[key]
+        @Synchronized fun put(key: String, value: Boolean) { map[key] = value }
+    }
+
+    /**
+     * 这次 View 请求是不是详情页发的。
+     *
+     * 9.13.0 起历史记录页（`HistoryContentViewModel$applyRecommend`）也在后台调 `executeView`，
+     * `spmid` 为 `main.my-history.recommend.0`，只读 `viewBase`/`arc`/`supplement`、不看 `ecode`。
+     * 对它只记已知 aid，不改写、不提示、不记发布者、不占连锁保险。
+     */
+    fun isPassiveRequest(spmid: String?): Boolean = spmid != null && spmid.startsWith("main.my-history")
 
     /** 首页卡片的 `param` 对视频卡就是 aid 的十进制串；其他卡型读不出正数时返回 null。 */
     fun aidFromParam(param: String?): Long? = param?.trim()?.toLongOrNull()?.takeIf { it > 0 }

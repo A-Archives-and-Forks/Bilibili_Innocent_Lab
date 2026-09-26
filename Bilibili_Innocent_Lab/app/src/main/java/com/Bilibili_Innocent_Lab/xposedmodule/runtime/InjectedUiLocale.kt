@@ -40,7 +40,9 @@ internal data class InjectedUiMessages(
      * 没有可用补位时的提示：同时写进宿主原生"不可见"错误页（`ecode_config.msg`）与 toast。
      * 不带占位符——它会原样出现在宿主页面上。
      */
-    val aiDeclaredBlockedHint: String
+    val aiDeclaredBlockedHint: String,
+    /** 连播里跳过了含 AI 生成声明的一集、继续播下一集时的回执。 */
+    val aiDeclaredPlaylistSkippedToast: String
 )
 
 /**
@@ -290,7 +292,8 @@ internal object InjectedUiLocale {
                 "confirm it in Innocent_Lab to keep it.",
         aiDeclaredRedirectToast =
             "Skipped a video declared as AI-generated and opened a related one instead.",
-        aiDeclaredBlockedHint = "This video is declared as AI-generated and was blocked by Innocent_Lab."
+        aiDeclaredBlockedHint = "This video is declared as AI-generated and was blocked by Innocent_Lab.",
+        aiDeclaredPlaylistSkippedToast = "Skipped a video declared as AI-generated; playing the next one."
     )
 
     private val SIMPLIFIED_CHINESE_MESSAGES = InjectedUiMessages(
@@ -306,7 +309,8 @@ internal object InjectedUiLocale {
         // 模块名一律保持英文 Innocent_Lab，不随界面语言翻译。
         panelBlockRecordedToast = "已记下 %1\$s，对之后加载的推荐生效；在 Innocent_Lab 中确认后长期保留。",
         aiDeclaredRedirectToast = "已跳过含 AI 生成声明的视频，为你换成了相关视频",
-        aiDeclaredBlockedHint = "该视频含 AI 生成声明，已由 Innocent_Lab 屏蔽"
+        aiDeclaredBlockedHint = "该视频含 AI 生成声明，已由 Innocent_Lab 屏蔽",
+        aiDeclaredPlaylistSkippedToast = "已跳过含 AI 生成声明的视频，继续播放下一个"
     )
 
     private val TRADITIONAL_CHINESE_MESSAGES = InjectedUiMessages(
@@ -322,7 +326,8 @@ internal object InjectedUiLocale {
         // 模块名一律保持英文 Innocent_Lab，不随界面语言翻译。
         panelBlockRecordedToast = "已記下 %1\$s，對之後載入的推薦生效；在 Innocent_Lab 中確認後長期保留。",
         aiDeclaredRedirectToast = "已略過含 AI 生成聲明的影片，為你換成了相關影片",
-        aiDeclaredBlockedHint = "此影片含 AI 生成聲明，已由 Innocent_Lab 封鎖"
+        aiDeclaredBlockedHint = "此影片含 AI 生成聲明，已由 Innocent_Lab 封鎖",
+        aiDeclaredPlaylistSkippedToast = "已略過含 AI 生成聲明的影片，繼續播放下一部"
     )
 
     private val TRADITIONAL_CHINESE_REGIONS = setOf("TW", "HK", "MO")
