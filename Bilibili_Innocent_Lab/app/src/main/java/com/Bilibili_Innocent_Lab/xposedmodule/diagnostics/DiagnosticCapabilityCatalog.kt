@@ -196,7 +196,10 @@ internal object DiagnosticCapabilityCatalog {
         // 只决定模块 App 要不要把反馈面板记下的点选自动并入名单；宿主收下这个键但从不读，
         // 真正生效的是并入之后的 home.recommend.blocked_tids / blocked_authors 两份名单，
         // 它们各自已经有能力条目，所以这里没有独立的宿主能力可诊断。
-        "home.recommend.feedback_auto_confirm" to "MODULE_UI"
+        "home.recommend.feedback_auto_confirm" to "MODULE_UI",
+        // 只是强力模式的前置授权：宿主侧合成进 ai_declared_author_block 的生效值，
+        // 本身没有独立的宿主能力；令牌状态只以 ai_declared_access_key_status 状态码出现在本地诊断里。
+        "communication.bili_access_key.authorized" to "HOST_GATE"
     )
     val byId = definitions.associateBy { it.id }
     val byLocatorKey = definitions.filter { it.locatorKey != null }.associateBy { it.locatorKey!! }

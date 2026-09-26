@@ -127,6 +127,10 @@ internal object AiDeclaredVideoPolicy {
      * `spmid` 为 `main.my-history.recommend.0`，只读 `viewBase`/`arc`/`supplement`、不看 `ecode`。
      * 对它只记已知 aid，不改写、不提示、不记发布者、不占连锁保险。
      */
+    /** 强力模式以「获取 access_key」授权为前提；没授权时一律按关闭处理（界面上开关也不可用）。 */
+    fun effectiveStrongMode(strongMode: Boolean, accessKeyAuthorized: Boolean): Boolean =
+        strongMode && accessKeyAuthorized
+
     fun isPassiveRequest(spmid: String?): Boolean = spmid != null && spmid.startsWith("main.my-history")
 
     /** 首页卡片的 `param` 对视频卡就是 aid 的十进制串；其他卡型读不出正数时返回 null。 */

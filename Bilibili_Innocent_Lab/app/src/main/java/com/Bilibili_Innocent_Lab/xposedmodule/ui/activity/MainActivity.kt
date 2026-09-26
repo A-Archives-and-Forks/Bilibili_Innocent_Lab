@@ -275,6 +275,12 @@ class MainActivity : SkinnedActivity() {
     private var homeRecommendSectionPickEnabled = false
     private var blockAiDeclaredVideos = false
     private var blockAiDeclaredVideosStrongMode = false
+    internal fun isBlockAiDeclaredVideosEnabled(): Boolean = blockAiDeclaredVideos
+    /** 实验性兼容「获取 access_key」授权；强力模式以它为前提。 */
+    internal var biliAccessKeyAuthorized = false
+    internal var biliAccessKeySwitch: com.Bilibili_Innocent_Lab.xposedmodule.ui.view.MaterialSwitch? = null
+    internal var biliAccessKeyProgrammaticSwitch = false
+    internal var aiStrongModeSwitch: com.Bilibili_Innocent_Lab.xposedmodule.ui.view.MaterialSwitch? = null
     private var videoRelateBlockedAuthors = ""
     private var videoRelateBlockedTags = ""
     internal var removeHomeRecommendLive = false
@@ -4206,6 +4212,7 @@ class MainActivity : SkinnedActivity() {
         blockAiDeclaredVideos = uiSettings.bool(FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS)
         blockAiDeclaredVideosStrongMode =
             uiSettings.bool(FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE)
+        biliAccessKeyAuthorized = uiSettings.bool(FeaturePreferences.BILI_ACCESS_KEY_AUTHORIZED)
         videoRelateBlockedAuthors = uiSettings.string(FeaturePreferences.VIDEO_RELATE_BLOCKED_AUTHORS)
         videoRelateBlockedTags = uiSettings.string(FeaturePreferences.VIDEO_RELATE_BLOCKED_TAGS)
         removeHomeRecommendLive = uiSettings.bool(FeaturePreferences.REMOVE_HOME_RECOMMEND_LIVE)
@@ -5985,6 +5992,31 @@ class MainActivity : SkinnedActivity() {
                         alpha = 0.6f
                         setLineSpacing(6f, 1f)
                         text = stringResource(R.string.communication_compatibility_tip)
+                        textColor = colorResource(R.color.colorTextDark)
+                        textSize = 12f
+                    }
+                    MaterialSwitch(lparams = LayoutParams(widthMatchParent = true) { bottomMargin = 5.dp }) {
+                        text = stringResource(R.string.bili_access_key_authorize)
+                        settingsDestinations.bind(SettingsCatalog.ID_BILI_ACCESS_KEY_AUTHORIZED, this)
+                        textColor = colorResource(R.color.colorTextGray)
+                        textSize = 15f
+                        isAllCaps = false
+                        isChecked = biliAccessKeyAuthorized
+                        biliAccessKeySwitch = this
+                        setOnCheckedChangeListener { button, checked ->
+                            if (biliAccessKeyProgrammaticSwitch) return@setOnCheckedChangeListener
+                            // 打开必须先过风险确认：开关先弹回原状态，确认后才真正写入。
+                            biliAccessKeyProgrammaticSwitch = true
+                            button.isChecked = biliAccessKeyAuthorized
+                            biliAccessKeyProgrammaticSwitch = false
+                            if (checked) showBiliAccessKeyConfirmDialog(anchor = button)
+                            else setBiliAccessKeyAuthorized(false)
+                        }
+                    }
+                    TextView(lparams = LayoutParams(widthMatchParent = true) { bottomMargin = 12.dp }) {
+                        alpha = 0.6f
+                        setLineSpacing(6f, 1f)
+                        text = stringResource(R.string.bili_access_key_authorize_tip)
                         textColor = colorResource(R.color.colorTextDark)
                         textSize = 12f
                     }
@@ -10225,8 +10257,8 @@ class MainActivity : SkinnedActivity() {
             textColor = colorResource(R.color.colorTextDark)
             textSize = 12f
         }
-        // 强力模式的开关本体在总开关下面，总开关关着时置灰：宿主侧它只在总开关开着时生效。
-        var aiStrongModeSwitch: com.Bilibili_Innocent_Lab.xposedmodule.ui.view.MaterialSwitch? = null
+        // 强力模式的开关本体在总开关下面，总开关关着或未授权获取 access_key 时置灰：
+        // 宿主侧它的实际生效值 = 总开关开 且 强力模式开 且 已授权（AiDeclaredVideoPolicy.effectiveStrongMode）。
         MaterialSwitch(
             lparams = LayoutParams(widthMatchParent = true) {
                 topMargin = 12.dp
@@ -10242,7 +10274,7 @@ class MainActivity : SkinnedActivity() {
             isChecked = blockAiDeclaredVideos
             setOnCheckedChangeListener { _, isChecked ->
                 blockAiDeclaredVideos = isChecked
-                aiStrongModeSwitch?.isEnabled = isChecked
+                aiStrongModeSwitch?.isEnabled = isChecked && biliAccessKeyAuthorized
                 runCatching {
                     prefs().edit {
                         putBoolean(FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS, isChecked)
@@ -10272,8 +10304,8 @@ class MainActivity : SkinnedActivity() {
             isAllCaps = false
             textColor = colorResource(R.color.colorTextGray)
             textSize = 15f
-            isChecked = blockAiDeclaredVideosStrongMode
-            isEnabled = blockAiDeclaredVideos
+            isChecked = blockAiDeclaredVideosStrongMode && biliAccessKeyAuthorized
+            isEnabled = blockAiDeclaredVideos && biliAccessKeyAuthorized
             setOnCheckedChangeListener { _, isChecked ->
                 blockAiDeclaredVideosStrongMode = isChecked
                 runCatching {

@@ -70,6 +70,15 @@ internal object FeaturePreferences {
     const val BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE = "block_ai_declared_videos_strong_mode"
 
     /**
+     * 实验性兼容：允许模块在哔哩哔哩进程内读取当前登录账号的 access_key。**默认关**，打开前必须二次确认风险。
+     *
+     * 令牌原文只在宿主进程内存里读、用完即弃：不写盘、不进日志/诊断/回执/备份，也不离开宿主进程。
+     * [BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE] 以它为前提（强力模式的实际生效条件 = 强力模式开 且 本项已授权）。
+     * 备份恢复为 MANUAL：换机导入备份不会悄悄重新授权。
+     */
+    const val BILI_ACCESS_KEY_AUTHORIZED = "bili_access_key_authorized"
+
+    /**
      * 要拦截下载的组件库资源池。
      *
      * 与其余四个勾选面同构：`_SELECTORS` 是面板勾出来的，`_RULES` 是手填的，

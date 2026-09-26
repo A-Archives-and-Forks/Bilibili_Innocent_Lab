@@ -130,12 +130,12 @@ class SettingsCatalogTest {
     }
 
     @Test
-    fun `catalog is a unique allowlist with 149 settings`() {
-        assertEquals(149, SettingsCatalog.specs.size)
-        assertEquals(149, SettingsCatalog.specs.map { it.id }.distinct().size)
-        assertEquals(149, SettingsCatalog.specs.map { it.storageKey }.distinct().size)
+    fun `catalog is a unique allowlist with 150 settings`() {
+        assertEquals(150, SettingsCatalog.specs.size)
+        assertEquals(150, SettingsCatalog.specs.map { it.id }.distinct().size)
+        assertEquals(150, SettingsCatalog.specs.map { it.storageKey }.distinct().size)
         assertEquals(147, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.AUTOMATIC })
-        assertEquals(2, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.MANUAL })
+        assertEquals(3, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.MANUAL })
         assertTrue(SettingsCatalog.specs.all { it.accepts(it.defaultValue) })
         assertTrue(SettingsCatalog.specs.all { it.id.matches(Regex("[a-z0-9][a-z0-9._-]{0,127}")) })
     }
@@ -365,7 +365,7 @@ class SettingsCatalogTest {
         val expected = requireNotNull(javaClass.classLoader?.getResourceAsStream("settings-backup/catalog-v13.txt"))
             .bufferedReader().useLines { it.filter(String::isNotBlank).toList() }
         assertEquals(expected, SettingsCatalog.specs.filter { it.introducedCatalogVersion <= 13 }.map { it.id }.sorted())
-        assertEquals(28, SettingsCatalog.CATALOG_VERSION)
+        assertEquals(29, SettingsCatalog.CATALOG_VERSION)
         val added = SettingsCatalog.specs.filter { it.introducedCatalogVersion == 13 }
         assertEquals(6, added.size)
         assertTrue(added.all { it.restorePolicy == RestorePolicy.AUTOMATIC && ImportEffect.RESTART_BILIBILI in it.effects })
@@ -507,9 +507,26 @@ class SettingsCatalogTest {
         }
     }
 
+    /** access_key 授权：默认关、恢复必须手动确认（换机导入备份不会悄悄重新授权）。 */
+    @Test
+    fun `catalog v29 adds the access key authorization as a manual restore switch`() {
+        val expected = requireNotNull(
+            javaClass.classLoader?.getResourceAsStream("settings-backup/catalog-v29.txt")
+        ).bufferedReader().useLines { it.filter(String::isNotBlank).toList() }
+        assertEquals(expected, SettingsCatalog.specs.filter { it.introducedCatalogVersion <= 29 }.map { it.id }.sorted())
+        val added = SettingsCatalog.specs.filter { it.introducedCatalogVersion == 29 }
+        assertEquals(listOf(SettingsCatalog.ID_BILI_ACCESS_KEY_AUTHORIZED), added.map { it.id })
+        val spec = added.single()
+        assertEquals("bili_access_key_authorized", spec.storageKey)
+        assertEquals(SettingValueType.BOOLEAN, spec.type)
+        assertEquals(SettingValue.Bool(false), spec.defaultValue)
+        assertEquals(RestorePolicy.MANUAL, spec.restorePolicy)
+        assertTrue(ImportEffect.RESTART_BILIBILI in spec.effects)
+    }
+
     @Test
     fun `catalog types and manual roaming boundary are explicit`() {
-        assertEquals(113, SettingsCatalog.specs.count { it.type == SettingValueType.BOOLEAN })
+        assertEquals(114, SettingsCatalog.specs.count { it.type == SettingValueType.BOOLEAN })
         assertEquals(11, SettingsCatalog.specs.count { it.type == SettingValueType.INTEGER })
         assertEquals(25, SettingsCatalog.specs.count { it.type == SettingValueType.STRING })
 

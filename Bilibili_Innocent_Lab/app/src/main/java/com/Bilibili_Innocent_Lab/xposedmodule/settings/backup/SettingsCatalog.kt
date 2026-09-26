@@ -21,7 +21,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.settings.appearance.ModalBackdropB
 internal object SettingsCatalog {
     const val PRODUCT_ID = "bilibili-innocent-lab.settings"
     const val SCOPE_ID = "core-user-settings"
-    const val CATALOG_VERSION = 28
+    const val CATALOG_VERSION = 29
     const val ID_PLAYER_DEFAULT_SPEED = "player.default_speed.percent"
     const val ID_PLAYER_LONG_PRESS_SPEED = "player.long_press_speed.percent"
     const val ID_FREE_COPY_COMMENT = "free_copy.comment.enabled"
@@ -38,6 +38,7 @@ internal object SettingsCatalog {
     const val ID_MATERIAL_COLOR_SPEC = "module_ui.material_color_spec"
     const val ID_AI_DECLARED_VIDEOS_BLOCKED = "video.ai_declared.blocked"
     const val ID_AI_DECLARED_VIDEOS_STRONG_MODE = "video.ai_declared.strong_mode"
+    const val ID_BILI_ACCESS_KEY_AUTHORIZED = "communication.bili_access_key.authorized"
 
     private fun bool(
         id: String,
@@ -123,6 +124,8 @@ internal object SettingsCatalog {
         bool("communication.compatibility.enabled", CommunicationCompatibilityStore.KEY,
             R.string.communication_compatibility_mode, default = CommunicationCompatibilityStore.DEFAULT,
             restorePolicy = RestorePolicy.MANUAL, introducedCatalogVersion = 22),
+        bool(ID_BILI_ACCESS_KEY_AUTHORIZED, FeaturePreferences.BILI_ACCESS_KEY_AUTHORIZED,
+            R.string.bili_access_key_authorize, restorePolicy = RestorePolicy.MANUAL, introducedCatalogVersion = 29),
         bool("ads.home_banner.hidden", HookEntry.PREF_BANNER_ENABLED, R.string.banner_ad_enable, default = true),
         bool("ads.merchandise.hidden", HookEntry.PREF_MERCH_ENABLED, R.string.merch_ad_enable, default = true),
 
@@ -691,7 +694,7 @@ internal object SettingsCatalog {
     val byStorageKey: Map<String, SettingSpec> = specs.associateBy(SettingSpec::storageKey)
 
     init {
-        check(specs.size == 149) { "Expected 149 catalog settings, found ${specs.size}" }
+        check(specs.size == 150) { "Expected 150 catalog settings, found ${specs.size}" }
         check(byId.size == specs.size) { "Duplicate logical setting id" }
         check(specs.map(SettingSpec::storageKey).distinct().size == specs.size) {
             "Duplicate settings storage key"

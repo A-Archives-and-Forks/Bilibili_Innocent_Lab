@@ -29,6 +29,7 @@ import java.lang.reflect.Method
  */
 internal class AiDeclaredVideoFeatureInstaller(
     private val enabled: Boolean,
+    /** 实际生效值：宿主入口已按「强力模式开 且 已授权获取 access_key」合成。 */
     private val strongMode: Boolean
 ) : FeatureInstaller {
 
@@ -80,10 +81,12 @@ internal class AiDeclaredVideoFeatureInstaller(
         val playlist = installPlaylistSkipper(environment, loader)
         // 连播的连锁保险单独计数：一个列表里连着几集 AI 很常见，额度比详情页补位宽。
         val playlistGuard = AiRedirectGuard(maxRedirects = PLAYLIST_SKIPS, windowMillis = 60_000L)
+        val prechecker = if (strongMode) installPrechecker(environment, loader, interceptor) else null
         val handle: (Any, Boolean) -> Any = { reply, passive ->
             interceptor.process(
                 reply, environment, guard, passive,
-                playlist = playlist, playlistGuard = playlistGuard
+                playlist = playlist, playlistGuard = playlistGuard,
+                onRelateCandidates = prechecker?.let { it::submit }
             ) { name, mid ->
                 authors?.let { recordAuthor(environment, it, name, mid) }
             }
@@ -100,7 +103,7 @@ internal class AiDeclaredVideoFeatureInstaller(
                 after {
                     if (hasThrowable) return@after
                     val original = result ?: return@after
-                    val updated = handle(original, passive(argOrNull(0)))
+                    val updated = handle(original, passive(argOrNull(0)) || AiRelatePrechecker.isQueryThread())
                     if (updated !== original) result = updated
                 }
             }
@@ -119,7 +122,7 @@ internal class AiDeclaredVideoFeatureInstaller(
                 ) {
                     before {
                         val original = argOrNull(1) ?: return@before
-                        val isPassive = passive(argOrNull(0))
+                        val isPassive = passive(argOrNull(0)) || AiRelatePrechecker.isQueryThread()
                         val proxy = MossResponseHandlerProxy.wrapTransform(handlerClass, original) { reply ->
                             handle(reply, isPassive)
                         } ?: return@before
@@ -137,6 +140,7 @@ internal class AiDeclaredVideoFeatureInstaller(
             )
         }
         if (routes == 0) return missing(environment, "no-safe-united-path")
+        val feedRoutes = installRelatesFeed(environment, loader, mossClass, handlerClass, interceptor)
 
         environment.reportCapabilityCoverage(
             AiDeclaredVideoPolicy.CAPABILITY_DETAIL, ready = true, routes, PATHS
@@ -151,6 +155,8 @@ internal class AiDeclaredVideoFeatureInstaller(
         val partial = buildList {
             if (routes < PATHS) add("routes:$routes/$PATHS")
             if (!interceptor.relateStripReady) add("missing-relate-writeback")
+            if (feedRoutes == 0) add("missing-relates-feed")
+            if (strongMode && prechecker == null) add("missing-precheck")
             if (playlist == null) add("missing-playlist-skip")
             if (strongMode && environment.writeScanSnapshot == null) add("missing-snapshot-sink")
         }
@@ -161,9 +167,112 @@ internal class AiDeclaredVideoFeatureInstaller(
         environment.logInfo(
             "ai_declared_installed",
             "[BIL] AI 声明拦截已安装，routes=$routes, strong=$strongMode, " +
-                "relateStrip=${interceptor.relateStripReady}, playlist=${playlist != null}"
+                "relateStrip=${interceptor.relateStripReady}, relatesFeed=$feedRoutes, " +
+                "precheck=${prechecker != null}, playlist=${playlist != null}"
         )
         return FeatureInstallResult.Installed(routes, complete = partial.isEmpty())
+    }
+
+    /**
+     * 强力模式的推荐后台预检。账号令牌状态只在预检线程上读（读 AccountStorage 可能触盘，不放进 attach），
+     * 状态变化才上报，报的只是 ready/not_logged_in/expired/unavailable，令牌原文不出这一层。
+     */
+    private fun installPrechecker(
+        environment: HookEnvironment,
+        loader: ClassLoader,
+        interceptor: AiDeclaredReplyInterceptor
+    ): AiRelatePrechecker? {
+        val probe = BiliAccessKeyProbe.resolve(loader)
+        val query = AiViewQuery.resolve(loader, interceptor::isDeclared)
+        if (probe == null || query == null) {
+            environment.logError(
+                "ai_declared_precheck_missing",
+                "[BIL] 推荐预检锚点缺失(account=${probe != null}, view=${query != null})，强力模式不做预检"
+            )
+            return null
+        }
+        val lastState = java.util.concurrent.atomic.AtomicReference<BiliAccessKeyState?>(null)
+        return AiRelatePrechecker(
+            query = query::query,
+            ready = {
+                val context = ReflectAccess.currentApplication()
+                val state = context?.let(probe::state) ?: BiliAccessKeyState.UNAVAILABLE
+                if (lastState.getAndSet(state) != state) {
+                    environment.reportStatus(ACCESS_KEY_STATUS, state.code)
+                }
+                state == BiliAccessKeyState.READY
+            },
+            onDeclared = { aid ->
+                if (AiDeclaredVideoRegistry.add(aid)) {
+                    environment.reportRuntimeEvidence(AiDeclaredVideoPolicy.ID, FeatureRuntimeStage.APPLIED)
+                }
+            }
+        )
+    }
+
+    /**
+     * 推荐「加载更多」删已知 AI 卡；独立于详情页拦截，缺失只让这一条降级。
+     * @return 注册成功的入口数（同步 + 异步，最多 2）。
+     */
+    private fun installRelatesFeed(
+        environment: HookEnvironment,
+        loader: ClassLoader,
+        mossClass: Class<*>,
+        handlerClass: Class<*>?,
+        interceptor: AiDeclaredReplyInterceptor
+    ): Int {
+        val stripper = AiRelatesFeedStripper.resolve(loader)
+        val requestClass = KavaMemberLookup.classOrNull(loader, AiRelatesFeedStripper.REQUEST_CLASS)
+        if (stripper == null || requestClass == null) {
+            environment.logError("ai_declared_feed_missing", "[BIL] 推荐续页结构缺失，加载更多的推荐不做 AI 声明过滤")
+            return 0
+        }
+        val errorLogged = java.util.concurrent.atomic.AtomicBoolean(false)
+        val transform: (Any) -> Any = transform@{ reply ->
+            runCatching {
+                val (updated, removed) = stripper.strip(reply, interceptor::isKnownAiCard) ?: return@transform reply
+                environment.reportRuntimeEvidence(AiDeclaredVideoPolicy.ID, FeatureRuntimeStage.APPLIED, removed)
+                updated
+            }.getOrElse {
+                environment.reportRuntimeEvidence(AiDeclaredVideoPolicy.ID, FeatureRuntimeStage.ERROR)
+                if (errorLogged.compareAndSet(false, true)) {
+                    environment.logError("ai_declared_feed_copy", "[BIL] 推荐续页 AI 卡过滤失败，保留原响应: ${it.javaClass.simpleName}")
+                }
+                reply
+            }
+        }
+        var installed = 0
+        runCatching {
+            environment.registrar.exact(
+                "ai_declared.feed.sync", mossClass, AiRelatesFeedStripper.SYNC_METHOD, requestClass
+            ) {
+                after {
+                    if (hasThrowable) return@after
+                    val original = result ?: return@after
+                    val updated = transform(original)
+                    if (updated !== original) result = updated
+                }
+            }
+            installed++
+        }.onFailure {
+            environment.logError("ai_declared_feed_sync", "[BIL] 推荐续页同步 Hook 注册失败: $it")
+        }
+        if (handlerClass != null) {
+            runCatching {
+                environment.registrar.exact(
+                    "ai_declared.feed.async", mossClass, AiRelatesFeedStripper.ASYNC_METHOD, requestClass, handlerClass
+                ) {
+                    before {
+                        val original = argOrNull(1) ?: return@before
+                        args[1] = MossResponseHandlerProxy.wrapTransform(handlerClass, original, transform) ?: return@before
+                    }
+                }
+                installed++
+            }.onFailure {
+                environment.logError("ai_declared_feed_async", "[BIL] 推荐续页异步 Hook 注册失败: $it")
+            }
+        }
+        return installed
     }
 
     /**
@@ -241,6 +350,7 @@ internal class AiDeclaredVideoFeatureInstaller(
     private companion object {
         const val TARGET_PACKAGE = "tv.danmaku.bili"
         const val CHANNEL_STATUS = "ai_declared_video_status"
+        const val ACCESS_KEY_STATUS = "ai_declared_access_key_status"
         const val HANDLER_CLASS = "com.bilibili.lib.moss.api.MossResponseHandler"
         const val PATHS = 2
         const val PLAYLIST_SKIPS = 10
@@ -274,6 +384,12 @@ internal class AiDeclaredReplyInterceptor private constructor(
 ) {
     val relateStripReady: Boolean get() = strip != null
 
+    /** 一份 View 响应是不是带声明（预检查询用）。 */
+    fun isDeclared(candidate: Any): Boolean = reply.isInstance(candidate) && read.facts(candidate).declared
+
+    /** 推荐卡是不是本进程已知的 AI 视频；推荐续页复用同一判定。 */
+    fun isKnownAiCard(card: Any): Boolean = read.isKnownAiCard(card)
+
     /** 从一份响应里读出的最小事实；宿主消息不越过这一层。 */
     private data class Facts(
         val aid: Long,
@@ -294,6 +410,7 @@ internal class AiDeclaredReplyInterceptor private constructor(
         passive: Boolean = false,
         playlist: AiPlaylistRoute? = null,
         playlistGuard: AiRedirectGuard = guard,
+        onRelateCandidates: ((List<Long>) -> Unit)? = null,
         onDeclaredAuthor: (String?, Long) -> Unit
     ): Any = runCatching {
         if (!reply.isInstance(original)) return@runCatching original
@@ -316,6 +433,10 @@ internal class AiDeclaredReplyInterceptor private constructor(
                 return@runCatching skipInPlaylist(original, route, environment, playlistGuard)
             }
             return@runCatching intercept(original, facts, environment, guard)
+        }
+        // 强力模式预检：只为用户真正打开的详情页排队，失败不影响本次响应。
+        onRelateCandidates?.let { submit ->
+            runCatching { submit(facts.candidates.filter { it.isVideo }.map { it.aid }) }
         }
         val chain = strip ?: return@runCatching original
         if (facts.candidates.none { it.isVideo && AiDeclaredVideoRegistry.contains(it.aid) }) {
