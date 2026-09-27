@@ -172,7 +172,7 @@ internal class PlayerSpeedFeatureInstaller(
             point: PlayerSpeedLocator.DefaultSpeedPoint,
             requested: Float
         ): DefaultSpeedResult {
-            if (!requested.isFinite() || requested !in 0.25f..4f ||
+            if (!requested.isFinite() || requested !in PlayerSpeedConfig.MIN_MULTIPLIER..PlayerSpeedConfig.MAX_MULTIPLIER ||
                 point.flows.size != 2 || point.speedGetters.size !in 1..2) {
                 return DefaultSpeedResult.UNEXPECTED_STATE
             }

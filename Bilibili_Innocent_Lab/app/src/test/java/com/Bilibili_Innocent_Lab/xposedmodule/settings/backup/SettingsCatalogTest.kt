@@ -372,8 +372,8 @@ class SettingsCatalogTest {
         assertTrue(added.filter { it.type == SettingValueType.BOOLEAN }.all { it.defaultValue == SettingValue.Bool(false) })
         added.filter { it.type == SettingValueType.INTEGER }.forEach {
             assertEquals(SettingValue.IntValue(0), it.defaultValue)
-            listOf(0, 25, 125, 275, 400).forEach { value -> assertTrue(it.accepts(SettingValue.IntValue(value))) }
-            listOf(-1, 1, 24, 401, Int.MAX_VALUE).forEach { value -> assertFalse(it.accepts(SettingValue.IntValue(value))) }
+            listOf(0, 10, 25, 125, 275, 400, 475, 800).forEach { value -> assertTrue(it.accepts(SettingValue.IntValue(value))) }
+            listOf(-1, 1, 9, 801, Int.MAX_VALUE).forEach { value -> assertFalse(it.accepts(SettingValue.IntValue(value))) }
         }
     }
 

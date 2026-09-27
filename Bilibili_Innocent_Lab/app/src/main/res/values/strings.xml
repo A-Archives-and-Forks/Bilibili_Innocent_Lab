@@ -858,7 +858,7 @@
     <string name="player_speed_multiplier">%1$s×</string>
     <string name="player_long_press_speed_paused">Saved: %1$s · inactive while acceleration is disabled</string>
     <string name="player_speed_tip">Default speed applies to new videos; manual changes remain available during playback. Long-press speed is temporary and releasing restores the base speed. Disabling long-press acceleration does not disable default speed. Follow Bilibili leaves its defaults unchanged. Restart Bilibili to apply.</string>
-    <string name="player_speed_input_tip">Enter a speed from 0.25× to 4×, with up to two decimal places. Follow Bilibili restores the original behavior.</string>
+    <string name="player_speed_input_tip">Enter a speed from 0.1× to 8×, with up to two decimal places. Follow Bilibili restores the original behavior.</string>
     <string name="player_speed_input_hint">For example, 1.25</string>
     <string name="player_speed_invalid">Enter a value from 0.25 to 4, with up to two decimal places.</string>
     <string name="player_speed_save_failed">Could not save. Please try again.</string>

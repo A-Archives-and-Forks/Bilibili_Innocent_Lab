@@ -858,7 +858,7 @@
     <string name="player_speed_multiplier">%1$s×</string>
     <string name="player_long_press_speed_paused">已保存：%1$s · 禁用长按加速期间不生效</string>
     <string name="player_speed_tip">默认倍速用于新视频，播放中手动调速仍有效。长按只临时改变速度，松手恢复基础速度；禁用长按加速不影响默认倍速。跟随哔哩哔哩时不干预。重启哔哩哔哩后生效。</string>
-    <string name="player_speed_input_tip">输入 0.25～4 倍，最多两位小数；选择“跟随哔哩哔哩”恢复原有行为。</string>
+    <string name="player_speed_input_tip">输入 0.1～8 倍，最多两位小数；选择“跟随哔哩哔哩”恢复原有行为。</string>
     <string name="player_speed_input_hint">例如 1.25</string>
     <string name="player_speed_invalid">请输入 0.25～4 之间的数值，最多两位小数。</string>
     <string name="player_speed_save_failed">保存失败，请重试。</string>

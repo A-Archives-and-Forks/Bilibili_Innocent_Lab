@@ -64,8 +64,16 @@ class PlayerDefaultSpeedTest {
         assertEquals(DefaultSpeedResult.UNEXPECTED_STATE, apply(manager, 2f))
         assertEquals(1.5f, manager.x.value)
     }
+    @Test fun `range endpoints reach the flow`() {
+        listOf(PlayerSpeedConfig.MIN_MULTIPLIER, PlayerSpeedConfig.MAX_MULTIPLIER).forEach {
+            val manager = Manager()
+            assertEquals(DefaultSpeedResult.APPLIED, apply(manager, it))
+            assertEquals(it, manager.x.value)
+        }
+    }
+
     @Test fun `invalid runtime multipliers cannot reach the flow`() {
-        listOf(Float.NaN, Float.POSITIVE_INFINITY, -1f, 0f, 4.01f).forEach {
+        listOf(Float.NaN, Float.POSITIVE_INFINITY, -1f, 0f, 0.09f, 8.01f).forEach {
             val manager = Manager()
             assertEquals(DefaultSpeedResult.UNEXPECTED_STATE, apply(manager, it))
             assertEquals(1f, manager.x.value)

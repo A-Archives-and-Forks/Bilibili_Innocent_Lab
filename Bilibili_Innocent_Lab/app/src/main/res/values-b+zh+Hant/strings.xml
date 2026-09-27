@@ -858,7 +858,7 @@
     <string name="player_speed_multiplier">%1$s×</string>
     <string name="player_long_press_speed_paused">已儲存：%1$s · 停用長按加速期間不生效</string>
     <string name="player_speed_tip">預設倍速用於新影片，播放中手動調速仍有效。長按只暫時改變速度，放開恢復基礎速度；停用長按加速不影響預設倍速。跟隨 Bilibili 時不干預。重新啟動 Bilibili 後生效。</string>
-    <string name="player_speed_input_tip">輸入 0.25～4 倍，最多兩位小數；選擇「跟隨 Bilibili」恢復原有行為。</string>
+    <string name="player_speed_input_tip">輸入 0.1～8 倍，最多兩位小數；選擇「跟隨 Bilibili」恢復原有行為。</string>
     <string name="player_speed_input_hint">例如 1.25</string>
     <string name="player_speed_invalid">請輸入 0.25～4 之間的數值，最多兩位小數。</string>
     <string name="player_speed_save_failed">儲存失敗，請重試。</string>

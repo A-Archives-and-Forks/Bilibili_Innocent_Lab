@@ -13,7 +13,7 @@ import java.util.WeakHashMap
 
 /** Per-player state only: no media identities leave this object or survive process lifetime. */
 internal class PlayerSpeedSessions(private val requested: Float) {
-    init { require(requested.isFinite() && requested in 0.25f..4f) }
+    init { require(requested.isFinite() && requested in PlayerSpeedConfig.MIN_MULTIPLIER..PlayerSpeedConfig.MAX_MULTIPLIER) }
     private val bases = WeakHashMap<Any, Field>()
     private val initialized = WeakHashMap<Any, Boolean>()
     private val media = WeakHashMap<Any, String>()

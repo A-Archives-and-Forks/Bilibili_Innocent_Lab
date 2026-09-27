@@ -211,7 +211,7 @@ class PlayerSpeedSessionsTest {
     }
 
     @Test fun invalidSpeedsNeverCreateRuntimePolicy() {
-        for (value in listOf(0f, -1f, Float.NaN, Float.POSITIVE_INFINITY, 4.01f)) {
+        for (value in listOf(0f, -1f, Float.NaN, Float.POSITIVE_INFINITY, 0.09f, 8.01f)) {
             assertThrows(IllegalArgumentException::class.java) { PlayerSpeedSessions(value) }
         }
     }
