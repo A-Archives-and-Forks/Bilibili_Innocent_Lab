@@ -954,9 +954,9 @@
     <string name="highlights_ai_declared_videos">跳过带「含AI生成内容」声明的视频：详情页自动换成相关视频，首页和相关推荐会提前过滤。</string>
     <string name="highlights_ai_declared_videos_strong_mode">强力模式改为勾选面板：可分别开启屏蔽发布者、获取 access_key 预检推荐。</string>
     <string name="bili_access_key_authorize">获取哔哩哔哩 access_key</string>
-    <string name="bili_access_key_authorize_tip">授权后，需要账号身份的功能可使用当前登录账号的 access_key（目前用于强力模式）。令牌只在哔哩哔哩内使用，不保存、不上传。重启哔哩哔哩后生效。</string>
+    <string name="bili_access_key_authorize_tip">授权后，需要账号身份的功能可使用当前登录账号的 access_key（目前用于强力模式）。令牌只在哔哩哔哩内使用，不会被包括但不限于保存、记录、上传至除本机安全内存以外的其他存储区域。重启哔哩哔哩后生效。</string>
     <string name="bili_access_key_confirm_title">获取 access_key 前请确认风险</string>
-    <string name="bili_access_key_confirm_message">access_key 相当于账号登录凭证。\n\n• 用途：供需要账号身份的功能使用，目前是强力模式的后台预检。\n• 处理：只在哔哩哔哩内读取，不保存、不记录、不上传。\n• 风险：后台请求可能触发风控，账号可能被要求验证或暂时受限；设备上其他不受信任的模块也可能读到令牌。\n\n可随时关闭以撤销授权。</string>
+    <string name="bili_access_key_confirm_message">access_key 相当于账号登录凭证。\n\n• 用途：供需要账号身份的功能使用，目前是强力模式的后台预检。\n• 处理：只在哔哩哔哩内读取，不会被包括但不限于保存、记录、上传至除本机安全内存以外的其他存储区域。\n• 风险：后台请求可能触发风控，账号可能被要求验证或暂时受限；设备上其他不受信任的模块也可能读到令牌。\n\n可随时关闭以撤销授权。</string>
     <string name="bili_access_key_confirm_accept">知晓并授权</string>
     <string name="bili_access_key_authorized">已授权，重启哔哩哔哩后生效</string>
     <string name="bili_access_key_revoked">已撤销授权，依赖它的功能已停用，重启哔哩哔哩后生效</string>

@@ -954,9 +954,9 @@
     <string name="highlights_ai_declared_videos">略過帶「含AI生成內容」聲明的影片：詳細頁自動換成相關影片，首頁與相關推薦會提前過濾。</string>
     <string name="highlights_ai_declared_videos_strong_mode">強力模式改為勾選面板：可分別開啟封鎖發布者、取得 access_key 預檢推薦。</string>
     <string name="bili_access_key_authorize">取得嗶哩嗶哩 access_key</string>
-    <string name="bili_access_key_authorize_tip">授權後，需要帳號身分的功能可使用目前登入帳號的 access_key（目前用於強力模式）。權杖只在嗶哩嗶哩內使用，不儲存、不上傳。重新啟動嗶哩嗶哩後生效。</string>
+    <string name="bili_access_key_authorize_tip">授權後，需要帳號身分的功能可使用目前登入帳號的 access_key（目前用於強力模式）。權杖只在嗶哩嗶哩內使用，不會被包括但不限於儲存、記錄、上傳至除本機安全記憶體以外的其他儲存區域。重新啟動嗶哩嗶哩後生效。</string>
     <string name="bili_access_key_confirm_title">取得 access_key 前請確認風險</string>
-    <string name="bili_access_key_confirm_message">access_key 相當於帳號登入憑證。\n\n• 用途：供需要帳號身分的功能使用，目前是強力模式的背景預檢。\n• 處理：只在嗶哩嗶哩內讀取，不儲存、不記錄、不上傳。\n• 風險：背景請求可能觸發風控，帳號可能被要求驗證或暫時受限；裝置上其他不受信任的模組也可能讀到權杖。\n\n可隨時關閉以撤銷授權。</string>
+    <string name="bili_access_key_confirm_message">access_key 相當於帳號登入憑證。\n\n• 用途：供需要帳號身分的功能使用，目前是強力模式的背景預檢。\n• 處理：只在嗶哩嗶哩內讀取，不會被包括但不限於儲存、記錄、上傳至除本機安全記憶體以外的其他儲存區域。\n• 風險：背景請求可能觸發風控，帳號可能被要求驗證或暫時受限；裝置上其他不受信任的模組也可能讀到權杖。\n\n可隨時關閉以撤銷授權。</string>
     <string name="bili_access_key_confirm_accept">知曉並授權</string>
     <string name="bili_access_key_authorized">已授權，重新啟動嗶哩嗶哩後生效</string>
     <string name="bili_access_key_revoked">已撤銷授權，依賴它的功能已停用，重新啟動嗶哩嗶哩後生效</string>
