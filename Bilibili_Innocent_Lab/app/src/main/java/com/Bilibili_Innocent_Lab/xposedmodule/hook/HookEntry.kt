@@ -50,6 +50,10 @@ import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.DanmakuPurifyFeatureI
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.DanmakuPurifyPolicy
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.DynamicPurifyFeatureInstaller
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.DynamicTabsFeatureInstaller
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.SemanticJudge
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.SemanticSettings
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.SemanticSurface
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.SemanticPresets
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.DetailAppPromotionFeatureInstaller
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.ExternalBrowserFeatureInstaller
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.FeatureInstallCoordinator
@@ -2649,6 +2653,25 @@ class HookEntry : XposedModule() {
             }
             // 局部遮蔽把功能安装链统一约束在只读配置接口上。
             val prefs: HookConfigSource = hookConfig
+            // JEV 语义判定的共享配置（实验性功能 → 兼容）；Key 为空或地址非法时为 null，任何过滤面都不建判定器。
+            val semanticSettings = SemanticSettings.from(
+                apiKey = prefs.getString(RemoteHookConfigContract.KEY_SEMANTIC_JEV_API_KEY, "").orEmpty(),
+                endpoint = prefs.getString(FeaturePreferences.SEMANTIC_JEV_ENDPOINT, "").orEmpty(),
+                sensitivity = prefs.getString(FeaturePreferences.SEMANTIC_JEV_SENSITIVITY, "").orEmpty(),
+                waitFirstScreen = prefs.getBoolean(FeaturePreferences.SEMANTIC_JEV_WAIT_FIRST_SCREEN, false)
+            )
+            /** 某个过滤面的判定器：开关关、Key 无效或一个类型都没勾选时为 null。 */
+            fun semanticJudge(
+                enabledKey: String,
+                rulesKey: String,
+                surface: SemanticSurface,
+                batchSize: Int = SemanticJudge.MAX_BATCH,
+                timeoutMs: Int = SemanticJudge.DEFAULT_TIMEOUT_MS
+            ): SemanticJudge? {
+                if (semanticSettings == null || !prefs.getBoolean(enabledKey, false)) return null
+                val raw = prefs.getString(rulesKey, SemanticPresets.defaultSelection(surface))
+                return semanticSettings.judge(SemanticPresets.selected(surface, raw), batchSize, timeoutMs)
+            }
             val versionAdapterResetTimestamp = hookConfig.getLong(
                 RemoteHookConfigContract.KEY_ADAPTER_RESET_TIMESTAMP,
                 0L
@@ -2787,6 +2810,18 @@ class HookEntry : XposedModule() {
 
             // 已授权安装链所需的宿主 Context；只在当前调用栈使用，不进入长期缓存。
             val attachedContext = authorizationContext.applicationContext ?: authorizationContext
+            // 首页推荐与相关推荐共用同一个判定器：规则相同，同一标题在两处只判一次。
+            val videoSemanticJudge = semanticJudge(
+                FeaturePreferences.VIDEO_SEMANTIC_FILTER_ENABLED,
+                FeaturePreferences.VIDEO_SEMANTIC_FILTER_RULES,
+                SemanticSurface.VIDEO
+            )
+            // 智能过滤的 debug 观测日志目录（宿主私有 files）；release 为 null，不写任何文件。
+            val semanticLogDir = if (com.Bilibili_Innocent_Lab.xposedmodule.BuildConfig.DEBUG) {
+                runCatching { attachedContext.filesDir }.getOrNull()
+            } else {
+                null
+            }
 
             featureInstallCoordinator.installAll(
                 listOf(
@@ -2976,7 +3011,14 @@ class HookEntry : XposedModule() {
                         removeLiveUpEntries = prefs.getBoolean(
                             FeaturePreferences.REMOVE_DYNAMIC_LIVE_UP_ENTRIES,
                             false
-                        )
+                        ),
+                        // 智能过滤动态：开关关闭、Key 为空或地址非法时为 null，不创建判定器。
+                        semanticJudge = semanticJudge(
+                            FeaturePreferences.DYNAMIC_SEMANTIC_FILTER_ENABLED,
+                            FeaturePreferences.DYNAMIC_SEMANTIC_FILTER_RULES,
+                            SemanticSurface.DYNAMIC
+                        ),
+                        semanticLogDir = semanticLogDir
                     ),
                     SearchHomeRecommendFeatureInstaller(prefs.getBoolean(FeaturePreferences.HIDE_SEARCH_HOME_RECOMMEND, false)),
                     SearchPurifyFeatureInstaller(
@@ -3122,7 +3164,9 @@ class HookEntry : XposedModule() {
                         aiDeclaredStrongMode = prefs.getBoolean(
                             FeaturePreferences.BLOCK_AI_DECLARED_VIDEOS_STRONG_MODE,
                             false
-                        )
+                        ),
+                        semanticJudge = videoSemanticJudge,
+                        semanticLogDir = semanticLogDir
                     )
                 )
             )
@@ -3402,7 +3446,9 @@ class HookEntry : XposedModule() {
                         ),
                         rawPickedTagIds = prefs.getString(
                             FeaturePreferences.HOME_RECOMMEND_BLOCKED_TIDS, ""
-                        ).orEmpty()
+                        ).orEmpty(),
+                        semanticJudge = videoSemanticJudge,
+                        semanticLogDir = semanticLogDir
                     )
                 )
             )
@@ -3520,7 +3566,13 @@ class HookEntry : XposedModule() {
                             FeaturePreferences.COMMENT_USER_FILTER_RULES,
                             ""
                         ).orEmpty(),
-                        points = hostAdaptResult?.commentFilter
+                        points = hostAdaptResult?.commentFilter,
+                        semanticJudge = semanticJudge(
+                            FeaturePreferences.COMMENT_SEMANTIC_FILTER_ENABLED,
+                            FeaturePreferences.COMMENT_SEMANTIC_FILTER_RULES,
+                            SemanticSurface.COMMENT
+                        ),
+                        semanticLogDir = semanticLogDir
                     )
                 )
             )
@@ -3539,7 +3591,15 @@ class HookEntry : XposedModule() {
                         removeVipColorful = prefs.getBoolean(
                             FeaturePreferences.REMOVE_VIP_COLORFUL_DANMAKU,
                             false
-                        )
+                        ),
+                        semanticJudge = semanticJudge(
+                            FeaturePreferences.DANMAKU_SEMANTIC_FILTER_ENABLED,
+                            FeaturePreferences.DANMAKU_SEMANTIC_FILTER_RULES,
+                            SemanticSurface.DANMAKU,
+                            batchSize = DanmakuPurifyFeatureInstaller.SEMANTIC_BATCH_SIZE,
+                            timeoutMs = DanmakuPurifyFeatureInstaller.SEMANTIC_TIMEOUT_MS
+                        ),
+                        semanticLogDir = semanticLogDir
                     ),
                     LiveRoomWidgetFeatureInstaller(
                         blockRoomSwitch = prefs.getBoolean(

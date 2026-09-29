@@ -4,7 +4,10 @@ import com.Bilibili_Innocent_Lab.xposedmodule.runtime.KavaMemberLookup
 import com.highcapable.kavaref.extension.classOf
 import com.highcapable.kavaref.extension.isStatic
 import com.highcapable.kavaref.extension.isSubclassOf
+import android.os.Looper
+import java.io.File
 import java.lang.reflect.Method
+import java.util.IdentityHashMap
 
 /**
  * 在动态页 protobuf 边界过滤动态卡片，并按需清掉话题栏与顶部 UP 栏中的直播条目。
@@ -44,13 +47,23 @@ internal class DynamicPurifyFeatureInstaller(
     private val removeLockedChargeOnly: Boolean,
     private val hideTopicList: Boolean,
     private val removeLiveUpEntries: Boolean,
-    private val hideFrequentVisits: Boolean = false
+    private val hideFrequentVisits: Boolean = false,
+    /**
+     * 「智能过滤动态」：开关打开且 JEV 配置有效时非空（见 [SemanticJudge.fromSettings]）。
+     * 与其它设置一样只在宿主 attach 时确定；缓存只在内存，关闭开关重启后不留任何判定。
+     */
+    private val semanticJudge: SemanticJudge? = null,
+    /** debug 构建的观测日志目录（宿主私有 files）；release 为 null，不写任何文件。 */
+    private val semanticLogDir: File? = null,
+    /** 主线程上只查缓存、绝不联网；单测可替换。 */
+    private val isMainThread: () -> Boolean = { Looper.myLooper() == Looper.getMainLooper() }
 ) : FeatureInstaller {
 
     override val id: String = ID
     override val capabilityIds: List<String> get() = buildList {
         if (keywords.isNotEmpty()) add("dynamic_keyword_filter_enabled")
         if (authorRules.isNotEmpty()) add("dynamic_author_filter_enabled")
+        if (semanticJudge != null) add("dynamic_semantic_filter_enabled")
         if (removePromotion) add("dynamic_promotions_removed")
         if (removeLockedChargeOnly) add("dynamic_charge_only_removed")
         if (hideTopicList) add("dynamic_topic_list_hidden")
@@ -71,7 +84,8 @@ internal class DynamicPurifyFeatureInstaller(
 
     private val anyRequested: Boolean
         get() = keywords.isNotEmpty() || authorRules.isNotEmpty() || removePromotion ||
-            removeLockedChargeOnly || hideTopicList || removeLiveUpEntries || hideFrequentVisits
+            removeLockedChargeOnly || hideTopicList || removeLiveUpEntries || hideFrequentVisits ||
+            semanticJudge != null
 
     override fun install(environment: HookEnvironment): FeatureInstallResult {
         if (!anyRequested) {
@@ -86,14 +100,23 @@ internal class DynamicPurifyFeatureInstaller(
             ?: return missing(environment, "missing-moss-class")
 
         val itemMembers = if (hideFrequentVisits && keywords.isEmpty() && authorRules.isEmpty() &&
-            !removePromotion && !removeLockedChargeOnly) null else resolveItemMembers(loader)
+            !removePromotion && !removeLockedChargeOnly && semanticJudge == null) null else resolveItemMembers(loader)
         val plan = DynamicPurifyPolicy.Plan(
             keywords = if (itemMembers?.hasTextSource == true) keywords else emptySet(),
             authorRules = authorRules.available(itemMembers?.hasAuthorSource == true && itemMembers.author?.origName != null,
                 itemMembers?.hasAuthorSource == true && itemMembers.author?.uid != null),
             removePromotion = removePromotion && itemMembers?.promotion != null,
-            removeLockedChargeOnly = removeLockedChargeOnly && itemMembers?.chargeOnly != null
+            removeLockedChargeOnly = removeLockedChargeOnly && itemMembers?.chargeOnly != null,
+            semanticEnabled = semanticJudge != null && itemMembers?.hasTextSource == true
         )
+        if (semanticJudge != null) {
+            val state = if (plan.semanticEnabled) "active rules=${semanticJudge.rules.joinToString(",") { it.id }} " +
+                "host=${semanticJudge.endpoint.let { runCatching { java.net.URL(it).host }.getOrNull() }} " +
+                "threshold=${semanticJudge.blockThreshold} mode=${if (semanticJudge.waitFirstScreen) "wait" else "pass"}"
+            else "missing-text-source"
+            environment.logInfo("dynamic_semantic_filter", "[BIL] 智能过滤动态: $state")
+            semanticLogDir?.let { SemanticDebugLog.append(it, "${System.currentTimeMillis()} install $state") }
+        }
 
         val feeds = FEED_METHODS.mapNotNull { spec -> resolveFeed(loader, mossClass, spec) }.filter { feed ->
             (plan.hasAnyItemJudgement && feed.listBuilder != null) ||
@@ -134,6 +157,7 @@ internal class DynamicPurifyFeatureInstaller(
             val usable = when (capability) {
                 "dynamic_keyword_filter_enabled" -> plan.keywords.isNotEmpty()
                 "dynamic_author_filter_enabled" -> plan.authorRules.isNotEmpty()
+                "dynamic_semantic_filter_enabled" -> plan.semanticEnabled
                 "dynamic_promotions_removed" -> plan.removePromotion
                 "dynamic_charge_only_removed" -> plan.removeLockedChargeOnly
                 "dynamic_frequent_visits_hidden" -> feeds.any { it.wholeUpList != null }
@@ -165,6 +189,7 @@ internal class DynamicPurifyFeatureInstaller(
         }
         account(keywords.isNotEmpty(), plan.keywords.isNotEmpty(), "keyword")
         account(authorRules.isNotEmpty(), plan.authorRules == authorRules, "author")
+        account(semanticJudge != null, plan.semanticEnabled, "semantic")
         account(removePromotion, plan.removePromotion, "promotion")
         account(removeLockedChargeOnly, plan.removeLockedChargeOnly, "charge-only")
         account(hideTopicList, feeds.any { it.clearTopicList != null }, "topic-list")
@@ -309,8 +334,10 @@ internal class DynamicPurifyFeatureInstaller(
         val dynamicList = invoke(feed.dynamicListGetter, reply) ?: return null
         val items = invoke(feed.listGetter, dynamicList) as? List<*> ?: return null
         if (items.isEmpty()) return null
+        val semantic = if (plan.semanticEnabled) semanticVerdicts(items, itemMembers) else null
         val retained = ProtobufListRetention.retainOrNull(items) { item ->
-            !DynamicPurifyPolicy.shouldRemove(readSignals(item, itemMembers, plan), plan)
+            val semanticBlocked = semantic?.get(item) == SemanticVerdict.BLOCK
+            !DynamicPurifyPolicy.shouldRemove(readSignals(item, itemMembers, plan, semanticBlocked), plan)
         } ?: return null
         val removed = items.size - retained.size
         if (removed <= 0) return null
@@ -357,17 +384,73 @@ internal class DynamicPurifyFeatureInstaller(
         }
     }
 
+    /**
+     * 语义判定，三种路径：
+     * - 主线程：只查缓存（绝不联网）。
+     * - 首屏等待（`waitFirstScreen`）：在当前后台线程（Moss 回调）同步联网，带超时与冷却。
+     * - 首屏放行（默认）：先用缓存结果放行，未命中投递到模块后台线程判定，结果进缓存，下次加载生效。
+     * 任何失败都是 UNKNOWN（规则照常，fail-open）。
+     */
+    private fun semanticVerdicts(items: List<*>, members: ItemMembers): IdentityHashMap<Any, SemanticVerdict>? {
+        val judge = semanticJudge ?: return null
+        val present = items.filterNotNull()
+        val texts = present.map { semanticText(it, members) }
+        val mode = when {
+            isMainThread() -> SemanticMode.CACHE_ONLY
+            judge.waitFirstScreen -> SemanticMode.WAIT
+            else -> SemanticMode.PREFETCH
+        }
+        val logDir = semanticLogDir
+        val verdicts = judge.evaluate(
+            texts,
+            mode,
+            onReport = logDir?.let { dir -> { report, batch, result -> logSemanticBatch(dir, report, batch, result) } }
+        )
+        return IdentityHashMap<Any, SemanticVerdict>(present.size).apply {
+            present.forEachIndexed { index, item -> put(item, verdicts[index]) }
+        }
+    }
+
+    /** 送判文本：同一条动态的各段正文按行拼接（这里是给模型读的，不做关键词匹配，拼接无假命中问题）。 */
+    private fun semanticText(item: Any, members: ItemMembers): String {
+        val extend = members.extendGetter?.let { invoke(it, item) }
+        val modules = members.modulesGetter?.let { invoke(it, item) as? List<*> }
+        val parts = LinkedHashSet<String>()
+        streamText(members, extend, modules) { fragment -> parts += fragment.trim(); false }
+        return parts.filter(String::isNotEmpty).joinToString("\n")
+    }
+
+    private fun logSemanticBatch(
+        directory: File,
+        report: SemanticBatchReport,
+        texts: List<String>,
+        verdicts: List<SemanticVerdict>
+    ) {
+        val preview = texts.indices.joinToString(" | ") { index ->
+            "${verdicts[index].name.first()}:${texts[index].replace('\n', ' ').take(24)}"
+        }
+        SemanticDebugLog.append(
+            directory,
+            "${System.currentTimeMillis()} batch thread=${Thread.currentThread().name} total=${report.total} " +
+                "hits=${report.cacheHits} requested=${report.requested} blocked=${report.blocked} " +
+                "ms=${report.elapsedMs} outcome=${report.outcome} :: $preview"
+        )
+    }
+
     private fun readSignals(
         item: Any,
         members: ItemMembers,
-        plan: DynamicPurifyPolicy.Plan
+        plan: DynamicPurifyPolicy.Plan,
+        semanticBlocked: Boolean = false
     ): DynamicPurifyPolicy.Signals {
-        val extend = if (plan.needsText || plan.needsAuthor || plan.removeLockedChargeOnly) {
+        // 语义判定自己读正文（semanticText），这里只在配了关键词时读，避免每条多几次反射。
+        val needsKeywordText = plan.keywords.isNotEmpty()
+        val extend = if (needsKeywordText || plan.needsAuthor || plan.removeLockedChargeOnly) {
             members.extendGetter?.let { invoke(it, item) }
         } else {
             null
         }
-        val modules = if (plan.needsText || plan.removePromotion) {
+        val modules = if (needsKeywordText || plan.removePromotion) {
             members.modulesGetter?.let { invoke(it, item) as? List<*> }
         } else {
             null
@@ -393,6 +476,7 @@ internal class DynamicPurifyFeatureInstaller(
             authorMid = authorMid,
             promotion = promotion,
             lockedChargeOnly = lockedChargeOnly,
+            semanticBlocked = semanticBlocked,
             textFragments = { matches -> streamText(members, extend, modules, matches) }
         )
     }

@@ -56,6 +56,14 @@ internal object RemoteHookConfigContract {
     /** 用户手动请求重新适配的时间戳，只用于拒绝旧适配缓存。 */
     const val KEY_ADAPTER_RESET_TIMESTAMP = "adapt_reset_ts"
 
+    /**
+     * JEV 语义判定的 API Key。宿主需要它才能发请求，所以随 hook_config 下发并受摘要保护；
+     * 但它是凭据而不是偏好：**不进 SettingsCatalog、不进设置备份与导入预览、不进诊断**。
+     * 为空表示未配置；超长或类型不对一律按空处理（功能不启用）。
+     */
+    const val KEY_SEMANTIC_JEV_API_KEY = "semantic_jev_api_key"
+    const val MAX_SEMANTIC_JEV_API_KEY_LENGTH = 512
+
     private val metadataKeys = setOf(
         KEY_READY,
         KEY_SCHEMA_VERSION,
@@ -70,7 +78,8 @@ internal object RemoteHookConfigContract {
     )
     private val runtimeKeys = setOf(
         KEY_FREE_COPY_CONFIG_REVISION,
-        KEY_ADAPTER_RESET_TIMESTAMP
+        KEY_ADAPTER_RESET_TIMESTAMP,
+        KEY_SEMANTIC_JEV_API_KEY
     )
     val hookValueKeys: Set<String> = SettingsCatalog.specs
         .mapTo(linkedSetOf()) { it.storageKey }
@@ -103,6 +112,11 @@ internal object RemoteHookConfigContract {
             put(
                 KEY_ADAPTER_RESET_TIMESTAMP,
                 (raw[KEY_ADAPTER_RESET_TIMESTAMP] as? Long)?.coerceAtLeast(0L) ?: 0L
+            )
+            put(
+                KEY_SEMANTIC_JEV_API_KEY,
+                (raw[KEY_SEMANTIC_JEV_API_KEY] as? String)?.trim()
+                    ?.takeIf { it.length <= MAX_SEMANTIC_JEV_API_KEY_LENGTH }.orEmpty()
             )
         }
 
@@ -243,6 +257,11 @@ internal object RemoteHookConfigContract {
             ?: return "runtime-type:$KEY_ADAPTER_RESET_TIMESTAMP"
         if (freeCopyRevision < 0L) return "runtime-value:$KEY_FREE_COPY_CONFIG_REVISION"
         if (adapterResetTimestamp < 0L) return "runtime-value:$KEY_ADAPTER_RESET_TIMESTAMP"
+        val jevKey = values[KEY_SEMANTIC_JEV_API_KEY] as? String
+            ?: return "runtime-type:$KEY_SEMANTIC_JEV_API_KEY"
+        if (jevKey.length > MAX_SEMANTIC_JEV_API_KEY_LENGTH || jevKey != jevKey.trim()) {
+            return "runtime-value:$KEY_SEMANTIC_JEV_API_KEY"
+        }
         return null
     }
 
@@ -285,6 +304,7 @@ internal object RemoteHookConfigContract {
                 }
                 output.writeLong(values.getValue(KEY_FREE_COPY_CONFIG_REVISION) as Long)
                 output.writeLong(values.getValue(KEY_ADAPTER_RESET_TIMESTAMP) as Long)
+                output.writeString(values.getValue(KEY_SEMANTIC_JEV_API_KEY) as String)
             }
             bytes.toByteArray()
         }

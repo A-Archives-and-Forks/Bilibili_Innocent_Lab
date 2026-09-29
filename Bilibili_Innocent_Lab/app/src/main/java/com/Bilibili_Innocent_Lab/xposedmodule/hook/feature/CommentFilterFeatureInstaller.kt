@@ -1,7 +1,12 @@
 package com.Bilibili_Innocent_Lab.xposedmodule.hook.feature
 
+import com.highcapable.kavaref.extension.isSubclassOf
+import com.highcapable.kavaref.extension.classOf
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.VersionAdapter
+import com.Bilibili_Innocent_Lab.xposedmodule.runtime.KavaMemberLookup
+import com.highcapable.kavaref.extension.isStatic
 import java.lang.reflect.Method
+import java.util.concurrent.ConcurrentHashMap
 
 /**
  * 在公开 protobuf 评论列表边界按正文关键词、用户等级、@ 整条和发布者过滤。
@@ -22,7 +27,17 @@ internal class CommentFilterFeatureInstaller(
     removeAtOnlyComments: Boolean = false,
     userFilterEnabled: Boolean = false,
     rawUserRules: String = "",
-    private val points: VersionAdapter.CommentFilterPoints?
+    private val points: VersionAdapter.CommentFilterPoints?,
+    /**
+     * 智能过滤评论（JEV）。两层：① `ReplyMoss` 评论列表响应到达时（后台线程）只读正文、提前判定，
+     * 开了"首屏等待"就在该回调里等结果，第一屏即生效；② 列表 getter 只查缓存，未命中投后台，
+     * 下次加载生效。getter 可能在主线程，所以这一层绝不联网。
+     */
+    private val semanticJudge: SemanticJudge? = null,
+    /** debug 构建的观测日志目录；release 为 null。 */
+    private val semanticLogDir: java.io.File? = null,
+    /** 主线程上不做同步联网；单测可替换。 */
+    private val isMainThread: () -> Boolean = { android.os.Looper.myLooper() == android.os.Looper.getMainLooper() }
 ) : FeatureInstaller {
 
     override val id: String = ID
@@ -31,6 +46,7 @@ internal class CommentFilterFeatureInstaller(
         if (minimumLevel != null) add("comments_minimum_level_filter_enabled")
         if (removeAtOnly) add("comments_at_only_removed")
         if (!userRules.isEmpty()) add("comments_user_filter_enabled")
+        if (semanticJudge != null) add("comments_semantic_filter_enabled")
     }
 
     private val keywords = if (keywordFilterEnabled) {
@@ -51,7 +67,9 @@ internal class CommentFilterFeatureInstaller(
     }
 
     override fun install(environment: HookEnvironment): FeatureInstallResult {
-        if (keywords.isEmpty() && minimumLevel == null && !removeAtOnly && userRules.isEmpty()) {
+        if (keywords.isEmpty() && minimumLevel == null && !removeAtOnly && userRules.isEmpty() &&
+            semanticJudge == null
+        ) {
             environment.reportStatus(CHANNEL_STATUS, "disabled")
             return FeatureInstallResult.Skipped("disabled")
         }
@@ -94,7 +112,8 @@ internal class CommentFilterFeatureInstaller(
             keywords = if (accessors.hasMessagePath) keywords else emptySet(),
             minimumLevel = minimumLevel?.takeIf { accessors.hasLevelPath },
             removeAtOnly = removeAtOnly && accessors.hasAtPath,
-            userRules = userRules.available(accessors.hasAuthorNamePath, accessors.hasAuthorMidPath)
+            userRules = userRules.available(accessors.hasAuthorNamePath, accessors.hasAuthorMidPath),
+            semanticEnabled = semanticJudge != null && accessors.hasMessagePath
         )
         if (!plan.hasAnyJudgement) return missing(environment, "missing-judgement-getter")
 
@@ -106,8 +125,10 @@ internal class CommentFilterFeatureInstaller(
                         val source = result as? List<*> ?: return@after
                         if (source.isEmpty()) return@after
                         environment.reportRuntimeEvidence(ID, FeatureRuntimeStage.OBSERVED)
+                        val semantic = semanticVerdicts(source, accessors, plan)
                         val filtered = filterComments(source) { reply ->
-                            shouldRemove(readSignals(reply, accessors, plan), plan)
+                            semantic?.get(reply) == SemanticVerdict.BLOCK ||
+                                shouldRemove(readSignals(reply, accessors, plan), plan)
                         }
                         if (filtered !== source) {
                             result = filtered
@@ -141,7 +162,10 @@ internal class CommentFilterFeatureInstaller(
                         after {
                             val reply = result ?: return@after
                             environment.reportRuntimeEvidence(ID, FeatureRuntimeStage.OBSERVED)
-                            if (shouldRemove(readSignals(reply, accessors, plan), plan)) {
+                            // 单条置顶：绕过列表 memo（每次都是新包装，缓存它只会挤掉真正的列表条目）。
+                            val semanticBlocked = plan.semanticEnabled &&
+                                computeSemanticVerdicts(listOf(reply), accessors)?.get(reply) == SemanticVerdict.BLOCK
+                            if (semanticBlocked || shouldRemove(readSignals(reply, accessors, plan), plan)) {
                                 result = defaultReply
                                 environment.reportRuntimeEvidence(
                                     ID,
@@ -161,6 +185,8 @@ internal class CommentFilterFeatureInstaller(
             }
         }
         if (installed == 0) return missing(environment, "registration-failed")
+        // 提前判定层是加速通道，不计入覆盖单位：装不上时仍按"下次加载生效"工作。
+        if (plan.semanticEnabled) installMossPrefetch(environment, accessors)
         val sharedInstalled = installed
         val sharedExpected = adapted.replyListGetters.size + adapted.topReplyGetters.size
         for (capability in capabilityIds) {
@@ -168,6 +194,7 @@ internal class CommentFilterFeatureInstaller(
                 "comments_minimum_level_filter_enabled" -> accessors.hasLevelPath
                 "comments_at_only_removed" -> plan.removeAtOnly
                 "comments_user_filter_enabled" -> !plan.userRules.isEmpty()
+                "comments_semantic_filter_enabled" -> plan.semanticEnabled
                 else -> plan.keywords.isNotEmpty()
             }
             environment.reportCapabilityCoverage(capability, usable, sharedInstalled,
@@ -192,6 +219,10 @@ internal class CommentFilterFeatureInstaller(
         if (!userRules.isEmpty()) {
             expected += 1
             if (plan.userRules == userRules) installed += 1 else degraded += "author"
+        }
+        if (semanticJudge != null) {
+            expected += 1
+            if (plan.semanticEnabled) installed += 1 else degraded += "semantic"
         }
         if (degraded.isNotEmpty()) {
             environment.logError(
@@ -219,6 +250,145 @@ internal class CommentFilterFeatureInstaller(
             )
         }
         return FeatureInstallResult.Installed(installed, complete = installed == expected)
+    }
+
+    /**
+     * getter 层：整批取正文，缓存命中直接给结论，未命中投后台（不阻塞、不联网）。
+     * 正文读取与 [readSignals] 同一路径，保证缓存键一致。
+     */
+    private fun semanticVerdicts(
+        source: List<*>,
+        accessors: Accessors,
+        plan: JudgementPlan
+    ): java.util.IdentityHashMap<Any, SemanticVerdict>? {
+        if (semanticJudge == null || !plan.semanticEnabled) return null
+        return semanticMemo.getOrCompute(source) { computeSemanticVerdicts(source, accessors) }
+    }
+
+    private val semanticMemo = SemanticListMemo()
+
+    private fun computeSemanticVerdicts(
+        source: List<*>,
+        accessors: Accessors
+    ): java.util.IdentityHashMap<Any, SemanticVerdict>? {
+        val judge = semanticJudge ?: return null
+        val replies = source.filterNotNull()
+        if (replies.isEmpty()) return null
+        val texts = replies.map { messageOf(it, accessors) }
+        val verdicts = judge.evaluate(texts, SemanticMode.PREFETCH, onReport = reportTo("comment-getter"))
+        return java.util.IdentityHashMap<Any, SemanticVerdict>(replies.size).apply {
+            replies.forEachIndexed { index, reply -> put(reply, verdicts[index]) }
+        }
+    }
+
+    private fun messageOf(reply: Any, accessors: Accessors): String {
+        val content = invokeCompatible(accessors.content, reply)
+        return invokeCompatible(accessors.message, content)?.toString()?.trim().orEmpty()
+    }
+
+    /**
+     * 提前判定层：观察 `ReplyMoss` 的评论列表响应（主楼 / 楼中楼 / 对话），只读不改。
+     * 回调在后台线程时按设置等待或投后台；在主线程时只投后台。
+     */
+    private fun installMossPrefetch(environment: HookEnvironment, accessors: Accessors) {
+        val judge = semanticJudge ?: return
+        val replyInfoClass = accessors.content?.declaringClass ?: return
+        val loader = replyInfoClass.classLoader ?: return
+        val packageName = replyInfoClass.name.substringBeforeLast('.')
+        val moss = KavaMemberLookup.classOrNull(loader, "$packageName.ReplyMoss") ?: run {
+            environment.logInfo("comment_semantic_moss_missing", "[BIL] 智能过滤评论：未找到 ReplyMoss，仅用列表缓存层")
+            return
+        }
+        val handlerClass = KavaMemberLookup.classOrNull(loader, MOSS_HANDLER_CLASS)
+        val readers = ConcurrentHashMap<Class<*>, List<Method>>()
+        fun observe(response: Any) {
+            val texts = collectReplyTexts(response, replyInfoClass, accessors, readers)
+            if (texts.isEmpty()) return
+            val mode = if (judge.waitFirstScreen && !isMainThread()) SemanticMode.WAIT else SemanticMode.PREFETCH
+            judge.evaluate(texts, mode, onReport = reportTo("comment-moss"))
+        }
+        var hooks = 0
+        PREFETCH_RPCS.forEach { rpc ->
+            if (handlerClass != null) {
+                KavaMemberLookup.declaredMethods(moss, makeAccessible = true) {
+                    !it.isStatic && it.name == rpc && it.parameterCount == 2 &&
+                        it.parameterTypes[1] == handlerClass && it.returnType == Void.TYPE
+                }.singleOrNull()?.let { method ->
+                    runCatching {
+                        environment.registrar.exact("comment.semantic.async.$rpc", method.declaringClass,
+                            method.name, *method.parameterTypes) {
+                            before {
+                                val delegate = args.getOrNull(1) ?: return@before
+                                MossResponseHandlerProxy.wrap(handlerClass, delegate) { response -> observe(response) }
+                                    ?.let { args[1] = it }
+                            }
+                        }
+                        hooks += 1
+                    }
+                }
+            }
+            val syncName = "execute" + rpc.replaceFirstChar(Char::uppercaseChar)
+            KavaMemberLookup.declaredMethods(moss, makeAccessible = true) {
+                !it.isStatic && it.name == syncName && it.parameterCount == 1
+            }.singleOrNull()?.let { method ->
+                runCatching {
+                    environment.registrar.exact("comment.semantic.sync.$rpc", method.declaringClass,
+                        method.name, *method.parameterTypes) {
+                        after {
+                            if (hasThrowable) return@after
+                            result?.let { observe(it) }
+                        }
+                    }
+                    hooks += 1
+                }
+            }
+        }
+        environment.logInfo("comment_semantic_moss", "[BIL] 智能过滤评论：提前判定边界 $hooks 个")
+    }
+
+    /** 一层反射：响应对象上所有返回 ReplyInfo 或 List<ReplyInfo> 的 getter，外加每条 ReplyInfo 的子回复。 */
+    private fun collectReplyTexts(
+        response: Any,
+        replyInfoClass: Class<*>,
+        accessors: Accessors,
+        readers: ConcurrentHashMap<Class<*>, List<Method>>
+    ): List<String> {
+        fun gettersOf(type: Class<*>): List<Method> = readers.getOrPut(type) {
+            type.methods.filter { method ->
+                !method.isStatic && method.parameterCount == 0 && method.name.startsWith("get") &&
+                    (method.returnType == replyInfoClass || method.returnType isSubclassOf classOf<List<*>>())
+            }
+        }
+        val out = LinkedHashSet<String>()
+        fun addReply(reply: Any?, depth: Int) {
+            if (reply == null || !replyInfoClass.isInstance(reply) || out.size >= MOSS_MAX_TEXTS) return
+            messageOf(reply, accessors).takeIf(String::isNotEmpty)?.let(out::add)
+            if (depth > 0) return
+            gettersOf(replyInfoClass).filter { it.returnType isSubclassOf classOf<List<*>>() }.forEach { getter ->
+                (runCatching { getter.invoke(reply) }.getOrNull() as? List<*>)?.forEach { addReply(it, depth + 1) }
+            }
+        }
+        gettersOf(response.javaClass).forEach { getter ->
+            when (val value = runCatching { getter.invoke(response) }.getOrNull()) {
+                is List<*> -> value.forEach { addReply(it, 0) }
+                else -> addReply(value, 0)
+            }
+        }
+        return out.toList()
+    }
+
+    private fun reportTo(source: String): ((SemanticBatchReport, List<String>, List<SemanticVerdict>) -> Unit)? {
+        val dir = semanticLogDir ?: return null
+        return { report, texts, verdicts ->
+            val blocked = texts.indices.filter { verdicts[it] == SemanticVerdict.BLOCK }
+                .joinToString(" | ") { texts[it].take(24) }
+            SemanticDebugLog.append(
+                dir,
+                "${System.currentTimeMillis()} $source thread=${Thread.currentThread().name} total=${report.total} " +
+                    "requested=${report.requested} blocked=${report.blocked} ms=${report.elapsedMs} " +
+                    "outcome=${report.outcome} :: $blocked"
+            )
+        }
     }
 
     /** 只读当前启用判据真正需要的字段；未启用的判据一次反射都不做。 */
@@ -326,14 +496,16 @@ internal class CommentFilterFeatureInstaller(
         val keywords: Set<String>,
         val minimumLevel: Int?,
         val removeAtOnly: Boolean,
-        val userRules: AuthorRuleSet
+        val userRules: AuthorRuleSet,
+        /** 智能过滤：语义结论由 getter 层单独读正文取得，不走 [needsMessage]。 */
+        val semanticEnabled: Boolean = false
     ) {
         val needsMessage: Boolean
             get() = keywords.isNotEmpty() || removeAtOnly
 
         val hasAnyJudgement: Boolean
             get() = keywords.isNotEmpty() || minimumLevel != null || removeAtOnly ||
-                !userRules.isEmpty()
+                !userRules.isEmpty() || semanticEnabled
 
         fun describe(): String = buildList {
             if (keywords.isNotEmpty()) add("keyword=${keywords.size}")
@@ -342,6 +514,7 @@ internal class CommentFilterFeatureInstaller(
             if (!userRules.isEmpty()) {
                 add("author=${userRules.mids.size}uid+${userRules.names.size}name")
             }
+            if (semanticEnabled) add("semantic")
         }.joinToString("/")
     }
 
@@ -382,6 +555,11 @@ internal class CommentFilterFeatureInstaller(
         private const val MAX_KEYWORDS = 64
         private const val MIN_LEVEL = 1
         private const val MAX_LEVEL = 6
+        private const val MOSS_HANDLER_CLASS = "com.bilibili.lib.moss.api.MossResponseHandler"
+        /** 评论列表 RPC：主楼、楼中楼、对话。只观察，不改写响应。 */
+        private val PREFETCH_RPCS = listOf("mainList", "detailList", "dialogList")
+        /** 单次响应最多提取的不同正文数（主楼约 20 条 + 子回复预览）。 */
+        private const val MOSS_MAX_TEXTS = 80
 
         /**
          * 去掉 @ 名字后仍算"空正文"的残留标点。

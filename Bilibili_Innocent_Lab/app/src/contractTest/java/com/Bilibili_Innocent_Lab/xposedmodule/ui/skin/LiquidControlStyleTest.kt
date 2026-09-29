@@ -75,7 +75,9 @@ class LiquidControlStyleTest {
         // 弹窗总数 34 → 33。
         // 2026-09-26：新增「获取 access_key」风险二次确认（BiliAccessKeyDialogs.kt），33 → 34；
         // 同日强力模式改为二级勾选面板（AiStrongModeDialogs.kt），34 → 35。
-        assertEquals(35, dialogs)
+        // 2026-09-29：新增 JEV 语义判定配置面板（SemanticJevDialogs.kt），35 → 36；
+        // 同日新增各过滤面「屏蔽类型」勾选面板（同文件 showSemanticRulesDialog），36 → 37。
+        assertEquals(37, dialogs)
         // 「管理常用」改用定宽 presentSizedModalDialog（EXACTLY 行宽保证把手钉右缘）。
         assertTrue(SettingsUiSource.function("showSettingsFavoritesDialog").contains("presentSizedModalDialog(dialog, container, width, anchor)"))
         val presenter = SettingsUiSource.function("presentSizedModalDialog")

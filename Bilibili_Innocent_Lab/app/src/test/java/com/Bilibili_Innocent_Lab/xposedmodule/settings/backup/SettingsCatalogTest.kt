@@ -130,11 +130,11 @@ class SettingsCatalogTest {
     }
 
     @Test
-    fun `catalog is a unique allowlist with 151 settings`() {
-        assertEquals(151, SettingsCatalog.specs.size)
-        assertEquals(151, SettingsCatalog.specs.map { it.id }.distinct().size)
-        assertEquals(151, SettingsCatalog.specs.map { it.storageKey }.distinct().size)
-        assertEquals(148, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.AUTOMATIC })
+    fun `catalog is a unique allowlist with 162 settings`() {
+        assertEquals(162, SettingsCatalog.specs.size)
+        assertEquals(162, SettingsCatalog.specs.map { it.id }.distinct().size)
+        assertEquals(162, SettingsCatalog.specs.map { it.storageKey }.distinct().size)
+        assertEquals(159, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.AUTOMATIC })
         assertEquals(3, SettingsCatalog.specs.count { it.restorePolicy == RestorePolicy.MANUAL })
         assertTrue(SettingsCatalog.specs.all { it.accepts(it.defaultValue) })
         assertTrue(SettingsCatalog.specs.all { it.id.matches(Regex("[a-z0-9][a-z0-9._-]{0,127}")) })
@@ -365,7 +365,7 @@ class SettingsCatalogTest {
         val expected = requireNotNull(javaClass.classLoader?.getResourceAsStream("settings-backup/catalog-v13.txt"))
             .bufferedReader().useLines { it.filter(String::isNotBlank).toList() }
         assertEquals(expected, SettingsCatalog.specs.filter { it.introducedCatalogVersion <= 13 }.map { it.id }.sorted())
-        assertEquals(30, SettingsCatalog.CATALOG_VERSION)
+        assertEquals(32, SettingsCatalog.CATALOG_VERSION)
         val added = SettingsCatalog.specs.filter { it.introducedCatalogVersion == 13 }
         assertEquals(6, added.size)
         assertTrue(added.all { it.restorePolicy == RestorePolicy.AUTOMATIC && ImportEffect.RESTART_BILIBILI in it.effects })
@@ -539,11 +539,69 @@ class SettingsCatalogTest {
         assertTrue(ImportEffect.RESTART_BILIBILI in spec.effects)
     }
 
+    /**
+     * 智能过滤动态（JEV）：独立开关 + 三项非敏感配置，全部默认关/空/中灵敏度、自动恢复。
+     * API Key 是 hook_config 运行时键，**刻意不在目录里**，所以不会进入设置备份。
+     */
+    @Test
+    fun `catalog v31 adds the semantic filter switch and non secret jev settings`() {
+        val expected = requireNotNull(
+            javaClass.classLoader?.getResourceAsStream("settings-backup/catalog-v31.txt")
+        ).bufferedReader().useLines { it.filter(String::isNotBlank).toList() }
+        assertEquals(expected, SettingsCatalog.specs.filter { it.introducedCatalogVersion <= 31 }.map { it.id }.sorted())
+        val added = SettingsCatalog.specs.filter { it.introducedCatalogVersion == 31 }.associateBy { it.id }
+        assertEquals(
+            setOf(
+                SettingsCatalog.ID_DYNAMIC_SEMANTIC_FILTER,
+                SettingsCatalog.ID_SEMANTIC_JEV_ENDPOINT,
+                SettingsCatalog.ID_SEMANTIC_JEV_SENSITIVITY,
+                SettingsCatalog.ID_SEMANTIC_JEV_WAIT_FIRST_SCREEN
+            ),
+            added.keys
+        )
+        assertEquals(SettingValue.Bool(false), added.getValue(SettingsCatalog.ID_DYNAMIC_SEMANTIC_FILTER).defaultValue)
+        assertEquals(SettingValue.Text(""), added.getValue(SettingsCatalog.ID_SEMANTIC_JEV_ENDPOINT).defaultValue)
+        val sensitivity = added.getValue(SettingsCatalog.ID_SEMANTIC_JEV_SENSITIVITY)
+        assertEquals(SettingValue.Text("medium"), sensitivity.defaultValue)
+        assertEquals(setOf("low", "medium", "high"), sensitivity.allowedStrings)
+        assertEquals(SettingValue.Bool(false), added.getValue(SettingsCatalog.ID_SEMANTIC_JEV_WAIT_FIRST_SCREEN).defaultValue)
+        assertTrue(added.values.all { it.restorePolicy == RestorePolicy.AUTOMATIC && ImportEffect.RESTART_BILIBILI in it.effects })
+        assertTrue(SettingsCatalog.specs.none { "api_key" in it.id || "api_key" in it.storageKey })
+    }
+
+    /** 弹幕 / 评论 / 推荐视频三个智能过滤开关 + 四个面的屏蔽类型勾选；勾选默认值来自预设目录。 */
+    @Test
+    fun `catalog v32 adds semantic filter surfaces and rule selections`() {
+        val expected = requireNotNull(
+            javaClass.classLoader?.getResourceAsStream("settings-backup/catalog-v32.txt")
+        ).bufferedReader().useLines { it.filter(String::isNotBlank).toList() }
+        assertEquals(expected, SettingsCatalog.specs.filter { it.introducedCatalogVersion <= 32 }.map { it.id }.sorted())
+        val added = SettingsCatalog.specs.filter { it.introducedCatalogVersion == 32 }.associateBy { it.id }
+        assertEquals(7, added.size)
+        listOf(
+            SettingsCatalog.ID_DANMAKU_SEMANTIC_FILTER,
+            SettingsCatalog.ID_COMMENT_SEMANTIC_FILTER,
+            SettingsCatalog.ID_VIDEO_SEMANTIC_FILTER
+        ).forEach { assertEquals(SettingValue.Bool(false), added.getValue(it).defaultValue) }
+        mapOf(
+            SettingsCatalog.ID_DYNAMIC_SEMANTIC_RULES to com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.SemanticSurface.DYNAMIC,
+            SettingsCatalog.ID_DANMAKU_SEMANTIC_RULES to com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.SemanticSurface.DANMAKU,
+            SettingsCatalog.ID_COMMENT_SEMANTIC_RULES to com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.SemanticSurface.COMMENT,
+            SettingsCatalog.ID_VIDEO_SEMANTIC_RULES to com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.SemanticSurface.VIDEO
+        ).forEach { (id, surface) ->
+            assertEquals(
+                SettingValue.Text(com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.SemanticPresets.defaultSelection(surface)),
+                added.getValue(id).defaultValue
+            )
+        }
+        assertTrue(added.values.all { it.restorePolicy == RestorePolicy.AUTOMATIC && ImportEffect.RESTART_BILIBILI in it.effects })
+    }
+
     @Test
     fun `catalog types and manual roaming boundary are explicit`() {
-        assertEquals(115, SettingsCatalog.specs.count { it.type == SettingValueType.BOOLEAN })
+        assertEquals(120, SettingsCatalog.specs.count { it.type == SettingValueType.BOOLEAN })
         assertEquals(11, SettingsCatalog.specs.count { it.type == SettingValueType.INTEGER })
-        assertEquals(25, SettingsCatalog.specs.count { it.type == SettingValueType.STRING })
+        assertEquals(31, SettingsCatalog.specs.count { it.type == SettingValueType.STRING })
 
         val roaming = requireNotNull(SettingsCatalog.byId["compat.roaming.enabled"])
         assertEquals(RestorePolicy.MANUAL, roaming.restorePolicy)

@@ -25,8 +25,18 @@ internal class VideoRelateFilterFeatureInstaller(
     private val sectionPickEnabled: Boolean = false,
     rawPickedTagIds: String = "",
     minPlayCount: Int = 0,
-    maxPlayCount: Int = 0
+    maxPlayCount: Int = 0,
+    /**
+     * 智能过滤推荐视频（JEV，按标题）。列表 getter 可能在主线程：主线程只查缓存并投后台；
+     * 后台线程且开了"首屏等待"时在当前线程等结果。
+     */
+    semanticJudge: SemanticJudge? = null,
+    /** debug 构建的观测日志目录；release 为 null。 */
+    semanticLogDir: java.io.File? = null,
+    isMainThread: () -> Boolean = { android.os.Looper.myLooper() == android.os.Looper.getMainLooper() }
 ) : FeatureInstaller {
+
+    private val semantic = SemanticTitleFilter(semanticJudge, semanticLogDir, isMainThread, "relate")
 
     private val durationRange = VideoDurationRange(minDurationSeconds, maxDurationSeconds)
     private val playCountRange = VideoPlayCountRange(minPlayCount, maxPlayCount)
@@ -53,6 +63,7 @@ internal class VideoRelateFilterFeatureInstaller(
         if (playCountRange.isEnabled) add("video_related_play_count_filter")
         if (blockedAuthors.isNotEmpty()) add("video_related_author_block")
         if (blockedTags.isNotEmpty()) add("video_related_tag_block")
+        if (semantic.enabled) add(CAPABILITY_SEMANTIC)
     }
 
     override fun install(environment: HookEnvironment): FeatureInstallResult {
@@ -86,7 +97,8 @@ internal class VideoRelateFilterFeatureInstaller(
         // 作者/标签名单也算"开着"，否则只设名单不勾类型时整个功能会被判 disabled。
         if (normalizedHidden.isEmpty() && !durationRange.isEnabled && !playCountRange.isEnabled &&
             !reasonFilteringActive &&
-            blockedAuthors.isEmpty() && blockedTags.isEmpty() && !sectionPickEnabled && pickedTagIds.isEmpty()
+            blockedAuthors.isEmpty() && blockedTags.isEmpty() && !sectionPickEnabled && pickedTagIds.isEmpty() &&
+            !semantic.enabled
         ) {
             val reason = when {
                 durationRange.isConfigured && !durationRange.isValid -> "invalid-duration-range"
@@ -335,7 +347,10 @@ internal class VideoRelateFilterFeatureInstaller(
                     after {
                         val source = result as? List<*> ?: return@after
                         environment.reportRuntimeEvidence(ID, FeatureRuntimeStage.OBSERVED)
-                        val filtered = CopyOnFilter.list(source, shouldRemoveResponseItem)
+                        val semanticVerdicts = semantic.verdicts(source) { item -> SemanticTitleReader.read(item) }
+                        val filtered = CopyOnFilter.list(source) { item ->
+                            semanticVerdicts?.get(item) == SemanticVerdict.BLOCK || shouldRemoveResponseItem(item)
+                        }
                         if (filtered !== source) {
                             result = filtered
                             if (responseListField != null && !writeBackVideoRelateItems(
@@ -396,7 +411,12 @@ internal class VideoRelateFilterFeatureInstaller(
                             environment.logError("video_relate_picked_tag_read", "[BIL] 所选标签读取失败，保留其他推荐过滤: ${it.javaClass.simpleName}")
                             false
                         }
-                        if (!tagBlocked && !shouldRemoveDetailServiceItem(
+                        val semanticBlocked = semantic.enabled && semantic.verdictOf(item) { card ->
+                            access.titleGetter?.takeIf { it.declaringClass.isInstance(card) }
+                                ?.let { runCatching { it.invoke(card) as? String }.getOrNull() }
+                                ?: SemanticTitleReader.read(card)
+                        } == SemanticVerdict.BLOCK
+                        if (!tagBlocked && !semanticBlocked && !shouldRemoveDetailServiceItem(
                                 item = item,
                                 access = access,
                                 normalizedHidden = normalizedHidden,
@@ -442,6 +462,7 @@ internal class VideoRelateFilterFeatureInstaller(
                 "video_related_strong_mode_enabled" -> strongModeActive
                 "video_related_author_block" -> authorPaths.isNotEmpty()
                 "video_related_tag_block" -> tagPaths.isNotEmpty()
+                CAPABILITY_SEMANTIC -> true // 标题按运行期结构定位；读不到的卡片按规则放行
                 else -> hasTypeEvidence
             }
             // Strong mode's fallbacks are intentional, but missing readable inputs are still partial coverage.
@@ -816,6 +837,7 @@ internal class VideoRelateFilterFeatureInstaller(
     }
 
     companion object {
+        const val CAPABILITY_SEMANTIC = "video_related_semantic_filter_enabled"
         const val ID = "video_relate_filter"
         private const val TARGET_PACKAGE = "tv.danmaku.bili"
         private const val CHANNEL_STATUS = "video_relate_filter_status"

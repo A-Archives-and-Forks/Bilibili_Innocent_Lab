@@ -53,8 +53,18 @@ internal class HomeRecommendPurifyFeatureInstaller(
      * 强力模式开着时，详情页记下的发布者只写进 [AuthorPickSession]；
      * 这里必须据此打开 UP 维度的读取链，否则"本进程立即生效"那半句不成立。
      */
-    aiDeclaredStrongMode: Boolean = false
+    aiDeclaredStrongMode: Boolean = false,
+    /**
+     * 智能过滤推荐视频（JEV，按标题）。列表 getter 可能在主线程：主线程只查缓存并投后台；
+     * 后台线程且开了"首屏等待"时在当前线程等结果。
+     */
+    semanticJudge: SemanticJudge? = null,
+    /** debug 构建的观测日志目录；release 为 null。 */
+    semanticLogDir: java.io.File? = null,
+    isMainThread: () -> Boolean = { android.os.Looper.myLooper() == android.os.Looper.getMainLooper() }
 ) : FeatureInstaller {
+
+    private val semantic = SemanticTitleFilter(semanticJudge, semanticLogDir, isMainThread, "home")
 
     private val titleKeywords = if (titleFilterEnabled) {
         RuleSetCodec.parse(rawTitleKeywords)
@@ -90,7 +100,7 @@ internal class HomeRecommendPurifyFeatureInstaller(
     private val itemRemovalEnabled = semanticClassificationEnabled ||
         titleKeywords.isNotEmpty() || durationRange.isEnabled ||
         playCountRange.isEnabled || tagDimensionEnabled || authorDimensionEnabled ||
-        removeAiDeclared
+        removeAiDeclared || semantic.enabled
 
     override val id: String = ID
     override val capabilityIds: List<String> get() = buildList {
@@ -111,13 +121,14 @@ internal class HomeRecommendPurifyFeatureInstaller(
         if (tagDimensionEnabled) add("home_recommend_tid_block")
         if (authorDimensionEnabled) add("home_recommend_author_block")
         if (removeAiDeclared) add(AiDeclaredVideoPolicy.CAPABILITY_HOME)
+        if (semantic.enabled) add(CAPABILITY_SEMANTIC)
     }
 
     override fun install(environment: HookEnvironment): FeatureInstallResult {
         val hasContentFilter = removeAds || removeCmV2 || removeBanner || removePictures || removeGamePromotions ||
             titleKeywords.isNotEmpty() || removeLive || removeCourses || removeVertical ||
             removeLarge || removePgc || removeSpecialCards || tagDimensionEnabled ||
-            authorDimensionEnabled || removeAiDeclared
+            authorDimensionEnabled || removeAiDeclared || semantic.enabled
         if (durationRange.isConfigured && !durationRange.isValid) {
             environment.logError(
                 "home_recommend_duration_invalid",
@@ -241,7 +252,9 @@ internal class HomeRecommendPurifyFeatureInstaller(
                         var removedBanners = 0
                         var removedPgc = 0
                         var removedSpecial = 0
+                        val semanticVerdicts = semantic.verdicts(source) { item -> invokeString(accessors.title, item) }
                         val filtered = CopyOnFilter.list(source) { item ->
+                            if (semanticVerdicts?.get(item) == SemanticVerdict.BLOCK) return@list true
                             val signals = signals(item, accessors)
                             probeTag(signals, environment)
                             val isBanner = removeBanner && isHomeBanner(signals)
@@ -308,6 +321,7 @@ internal class HomeRecommendPurifyFeatureInstaller(
                 "home_recommend_special_cards_removed" -> extraTypesReadable
                 "home_recommend_tid_block" -> accessors.tid != null
                 AiDeclaredVideoPolicy.CAPABILITY_HOME -> accessors.uri != null || accessors.param != null
+                CAPABILITY_SEMANTIC -> accessors.title != null
                 else -> routeReadable
             }
             environment.reportCapabilityCoverage(capability, readable, installed, adapted.responseItemGetters.size)
@@ -729,6 +743,7 @@ internal class HomeRecommendPurifyFeatureInstaller(
     )
 
     companion object {
+        const val CAPABILITY_SEMANTIC = "home_recommend_semantic_filter_enabled"
         const val ID = "home_recommend_purify"
         private const val TARGET_PACKAGE = "tv.danmaku.bili"
         private const val CHANNEL_STATUS = "home_recommend_purify_status"

@@ -99,6 +99,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.hook.RoamingCompatHook
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.DetailModulePurifyPolicy
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.ComponentLibraryPoolMatcher
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.FeaturePreferences
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.SemanticSurface
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.CommentFilterFeatureInstaller
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.DanmakuPurifyPolicy
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.MineComponentScanEntry
@@ -375,6 +376,11 @@ class MainActivity : SkinnedActivity() {
     private var commentMinLevelFilterEnabled = false
     internal var commentMinLevel = CommentFilterFeatureInstaller.DEFAULT_MIN_LEVEL
     private var dynamicKeywordFilterEnabled = false
+    private var semanticJevSummaryView: NativeTextView? = null
+    private var dynamicSemanticFilterEnabled = false
+    private var danmakuSemanticFilterEnabled = false
+    private var commentSemanticFilterEnabled = false
+    private var videoSemanticFilterEnabled = false
     private var dynamicFilterKeywords = ""
     private var dynamicAuthorFilterEnabled = false
     private var dynamicAuthorFilterRules = ""
@@ -1588,6 +1594,13 @@ class MainActivity : SkinnedActivity() {
         highlight = false,
         onClick = onClick
     )
+
+    /**
+     * 可滑动的选中面：与 [createGitHubMenuRow] 高亮行同一套皮肤选中背景，但独立成一个 View，
+     * 供单选列表把"选中框"从旧项平移到新项（见 JEV 灵敏度面板）。
+     */
+    internal fun createSelectionIndicator(radiusDp: Float = 14f): View =
+        View(this).also { skinSelectionControl(it, radiusDp, selected = true) }
 
     internal fun createGitHubMenuRow(
         title: CharSequence,
@@ -4338,6 +4351,10 @@ class MainActivity : SkinnedActivity() {
         commentMinLevel =
             uiSettings.int(FeaturePreferences.COMMENT_MIN_LEVEL).coerceIn(1, 6)
         dynamicKeywordFilterEnabled = uiSettings.bool(FeaturePreferences.DYNAMIC_KEYWORD_FILTER_ENABLED)
+        dynamicSemanticFilterEnabled = uiSettings.bool(FeaturePreferences.DYNAMIC_SEMANTIC_FILTER_ENABLED)
+        danmakuSemanticFilterEnabled = uiSettings.bool(FeaturePreferences.DANMAKU_SEMANTIC_FILTER_ENABLED)
+        commentSemanticFilterEnabled = uiSettings.bool(FeaturePreferences.COMMENT_SEMANTIC_FILTER_ENABLED)
+        videoSemanticFilterEnabled = uiSettings.bool(FeaturePreferences.VIDEO_SEMANTIC_FILTER_ENABLED)
         dynamicFilterKeywords = uiSettings.string(FeaturePreferences.DYNAMIC_FILTER_KEYWORDS)
         dynamicAuthorFilterEnabled = uiSettings.bool(FeaturePreferences.DYNAMIC_AUTHOR_FILTER_ENABLED)
         dynamicAuthorFilterRules = uiSettings.string(FeaturePreferences.DYNAMIC_AUTHOR_FILTER_RULES)
@@ -6045,6 +6062,33 @@ class MainActivity : SkinnedActivity() {
                         textColor = colorResource(R.color.colorTextDark)
                         textSize = 12f
                     }
+                    // JEV 语义判定配置：Key / 地址 / 灵敏度 / 首屏等待，都在同一个面板里保存。
+                    TextView(lparams = LayoutParams(widthMatchParent = true) { bottomMargin = 5.dp }) {
+                        semanticJevSummaryView = this
+                        settingsDestinations.bind(SettingsCatalog.ID_SEMANTIC_JEV_ENDPOINT, this)
+                        settingsDestinations.bind(SettingsCatalog.ID_SEMANTIC_JEV_SENSITIVITY, this)
+                        settingsDestinations.bind(SettingsCatalog.ID_SEMANTIC_JEV_WAIT_FIRST_SCREEN, this)
+                        text = semanticJevEntryText()
+                        textColor = colorResource(R.color.colorTextGray)
+                        textSize = 15f
+                        setLineSpacing(5f, 1f)
+                        setPadding(12.dp, 10.dp, 12.dp, 10.dp)
+                        background = selfRippleBackground(10f)
+                        isClickable = true
+                        isFocusable = true
+                        setOnClickListener {
+                            showSemanticJevSettingsDialog(anchor = it) {
+                                semanticJevSummaryView?.text = semanticJevEntryText()
+                            }
+                        }
+                    }
+                    TextView(lparams = LayoutParams(widthMatchParent = true) { bottomMargin = 12.dp }) {
+                        alpha = 0.6f
+                        setLineSpacing(6f, 1f)
+                        text = stringResource(R.string.semantic_jev_tip)
+                        textColor = colorResource(R.color.colorTextDark)
+                        textSize = 12f
+                    }
                     MaterialSwitch(
                         lparams = LayoutParams(widthMatchParent = true) {
                             bottomMargin = 5.dp
@@ -7132,6 +7176,25 @@ class MainActivity : SkinnedActivity() {
                 bottomMargin = 5.dp
             }
         ) {
+            bindFavoriteSwitch(this, FeaturePreferences.COMMENT_SEMANTIC_FILTER_ENABLED, directToggle = true)
+            settingsDestinations.bind(SettingsCatalog.ID_COMMENT_SEMANTIC_FILTER, this)
+            text = stringResource(R.string.comment_semantic_filter)
+            isAllCaps = false
+            textColor = colorResource(R.color.colorTextGray)
+            textSize = 15f
+            isChecked = commentSemanticFilterEnabled
+            setOnCheckedChangeListener { _, checked ->
+                commentSemanticFilterEnabled = checked
+                writeSemanticSwitch(FeaturePreferences.COMMENT_SEMANTIC_FILTER_ENABLED, checked)
+            }
+        }
+        semanticFilterDetails(SemanticSurface.COMMENT, SettingsCatalog.ID_COMMENT_SEMANTIC_RULES, R.string.comment_semantic_filter_tip)
+        MaterialSwitch(
+            lparams = LayoutParams(widthMatchParent = true) {
+                topMargin = 12.dp
+                bottomMargin = 5.dp
+            }
+        ) {
             bindFavoriteSwitch(this, FeaturePreferences.COMMENT_KEYWORD_FILTER_ENABLED, directToggle = true)
             text = stringResource(R.string.comment_keyword_filter)
             isAllCaps = false
@@ -8200,6 +8263,65 @@ class MainActivity : SkinnedActivity() {
             textColor = colorResource(R.color.colorTextDark)
             textSize = 12f
         }
+        MaterialSwitch(
+            lparams = LayoutParams(widthMatchParent = true) {
+                topMargin = 12.dp
+                bottomMargin = 5.dp
+            }
+        ) {
+            bindFavoriteSwitch(this, FeaturePreferences.DANMAKU_SEMANTIC_FILTER_ENABLED, directToggle = true)
+            settingsDestinations.bind(SettingsCatalog.ID_DANMAKU_SEMANTIC_FILTER, this)
+            text = stringResource(R.string.danmaku_semantic_filter)
+            isAllCaps = false
+            textColor = colorResource(R.color.colorTextGray)
+            textSize = 15f
+            isChecked = danmakuSemanticFilterEnabled
+            setOnCheckedChangeListener { _, checked ->
+                danmakuSemanticFilterEnabled = checked
+                writeSemanticSwitch(FeaturePreferences.DANMAKU_SEMANTIC_FILTER_ENABLED, checked)
+            }
+        }
+        semanticFilterDetails(SemanticSurface.DANMAKU, SettingsCatalog.ID_DANMAKU_SEMANTIC_RULES, R.string.danmaku_semantic_filter_tip)
+    }
+
+    private fun writeSemanticSwitch(key: String, checked: Boolean) {
+        runCatching { prefs().edit { putBoolean(key, checked) } }.onFailure { throwable ->
+            Log.e("BilibiliInnocentLab", "write semantic filter switch failed", throwable)
+        }
+    }
+
+    /**
+     * 智能过滤（JEV）开关下方的说明与「屏蔽类型」勾选入口，四个过滤面共用。
+     * 开关本身在各调用点按常规写明（常用收藏护栏要求开关与初值字段一一对应）；
+     * JEV 本身（Key / 地址 / 灵敏度 / 首屏等待）只在实验性功能 → 兼容配置一次。
+     */
+    @com.highcapable.hikage.annotation.Hikagable
+    private fun Hikage.Performer<NativeLinearLayout.LayoutParams>.semanticFilterDetails(
+        surface: SemanticSurface,
+        rulesSettingId: String,
+        tipRes: Int
+    ) {
+        TextView(lparams = LayoutParams(widthMatchParent = true)) {
+            alpha = 0.6f
+            setLineSpacing(6f, 1f)
+            text = stringResource(tipRes)
+            textColor = colorResource(R.color.colorTextDark)
+            textSize = 12f
+        }
+        TextView(lparams = LayoutParams(widthMatchParent = true) { topMargin = 4.dp }) {
+            settingsDestinations.bind(rulesSettingId, this)
+            text = semanticRulesEntryText(surface)
+            textColor = colorResource(R.color.colorTextGray)
+            textSize = 15f
+            setLineSpacing(5f, 1f)
+            setPadding(12.dp, 10.dp, 12.dp, 10.dp)
+            background = selfRippleBackground(10f)
+            isClickable = true
+            isFocusable = true
+            setOnClickListener { view ->
+                showSemanticRulesDialog(surface, anchor = view) { text = semanticRulesEntryText(surface) }
+            }
+        }
     }
 
     /** 进阶净化 · PURIFY_MINE 分类；标题即 marker，必须是本组第一个子控件。 */
@@ -8731,6 +8853,25 @@ class MainActivity : SkinnedActivity() {
             text = stringResource(R.string.dynamic_content_settings)
             applyAdvancedSubsectionStyle()
         }
+        MaterialSwitch(
+            lparams = LayoutParams(widthMatchParent = true) {
+                topMargin = 12.dp
+                bottomMargin = 5.dp
+            }
+        ) {
+            bindFavoriteSwitch(this, FeaturePreferences.DYNAMIC_SEMANTIC_FILTER_ENABLED, directToggle = true)
+            settingsDestinations.bind(SettingsCatalog.ID_DYNAMIC_SEMANTIC_FILTER, this)
+            text = stringResource(R.string.dynamic_semantic_filter)
+            isAllCaps = false
+            textColor = colorResource(R.color.colorTextGray)
+            textSize = 15f
+            isChecked = dynamicSemanticFilterEnabled
+            setOnCheckedChangeListener { _, checked ->
+                dynamicSemanticFilterEnabled = checked
+                writeSemanticSwitch(FeaturePreferences.DYNAMIC_SEMANTIC_FILTER_ENABLED, checked)
+            }
+        }
+        semanticFilterDetails(SemanticSurface.DYNAMIC, SettingsCatalog.ID_DYNAMIC_SEMANTIC_RULES, R.string.dynamic_semantic_filter_tip)
         MaterialSwitch(
             lparams = LayoutParams(widthMatchParent = true) {
                 topMargin = 12.dp
@@ -9342,6 +9483,25 @@ class MainActivity : SkinnedActivity() {
                 imageTintList = stateColorResource(R.color.colorTextGray)
             }
         }
+        MaterialSwitch(
+            lparams = LayoutParams(widthMatchParent = true) {
+                topMargin = 12.dp
+                bottomMargin = 5.dp
+            }
+        ) {
+            bindFavoriteSwitch(this, FeaturePreferences.VIDEO_SEMANTIC_FILTER_ENABLED, directToggle = true)
+            settingsDestinations.bind(SettingsCatalog.ID_VIDEO_SEMANTIC_FILTER, this)
+            text = stringResource(R.string.video_semantic_filter)
+            isAllCaps = false
+            textColor = colorResource(R.color.colorTextGray)
+            textSize = 15f
+            isChecked = videoSemanticFilterEnabled
+            setOnCheckedChangeListener { _, checked ->
+                videoSemanticFilterEnabled = checked
+                writeSemanticSwitch(FeaturePreferences.VIDEO_SEMANTIC_FILTER_ENABLED, checked)
+            }
+        }
+        semanticFilterDetails(SemanticSurface.VIDEO, SettingsCatalog.ID_VIDEO_SEMANTIC_RULES, R.string.video_semantic_filter_tip)
         MaterialSwitch(
             lparams = LayoutParams(widthMatchParent = true) {
                 topMargin = 8.dp

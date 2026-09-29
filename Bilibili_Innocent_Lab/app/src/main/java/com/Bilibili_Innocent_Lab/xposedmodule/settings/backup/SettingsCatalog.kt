@@ -8,6 +8,10 @@ import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.DanmakuPurifyPolicy
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.FeaturePreferences
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerQualityConfig
 import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.PlayerSpeedConfig
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.SemanticJudge
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.SemanticPresets
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.SemanticSensitivity
+import com.Bilibili_Innocent_Lab.xposedmodule.hook.feature.SemanticSurface
 import com.Bilibili_Innocent_Lab.xposedmodule.settings.appearance.MaterialColorSpec
 import com.Bilibili_Innocent_Lab.xposedmodule.settings.appearance.MaterialColorSpecStore
 import com.Bilibili_Innocent_Lab.xposedmodule.settings.appearance.ModalBackdropBlurStore
@@ -21,7 +25,7 @@ import com.Bilibili_Innocent_Lab.xposedmodule.settings.appearance.ModalBackdropB
 internal object SettingsCatalog {
     const val PRODUCT_ID = "bilibili-innocent-lab.settings"
     const val SCOPE_ID = "core-user-settings"
-    const val CATALOG_VERSION = 30
+    const val CATALOG_VERSION = 32
     const val ID_PLAYER_DEFAULT_SPEED = "player.default_speed.percent"
     const val ID_PLAYER_LONG_PRESS_SPEED = "player.long_press_speed.percent"
     const val ID_FREE_COPY_COMMENT = "free_copy.comment.enabled"
@@ -40,6 +44,17 @@ internal object SettingsCatalog {
     const val ID_AI_DECLARED_VIDEOS_STRONG_MODE = "video.ai_declared.strong_mode"
     const val ID_BILI_ACCESS_KEY_AUTHORIZED = "communication.bili_access_key.authorized"
     const val ID_AI_DECLARED_VIDEOS_PRECHECK = "video.ai_declared.precheck"
+    const val ID_DYNAMIC_SEMANTIC_FILTER = "dynamic.semantic_filter.enabled"
+    const val ID_SEMANTIC_JEV_ENDPOINT = "compat.semantic_jev.endpoint"
+    const val ID_SEMANTIC_JEV_SENSITIVITY = "compat.semantic_jev.sensitivity"
+    const val ID_SEMANTIC_JEV_WAIT_FIRST_SCREEN = "compat.semantic_jev.wait_first_screen"
+    const val ID_DYNAMIC_SEMANTIC_RULES = "dynamic.semantic_filter.rules"
+    const val ID_DANMAKU_SEMANTIC_FILTER = "player.danmaku.semantic_filter.enabled"
+    const val ID_DANMAKU_SEMANTIC_RULES = "player.danmaku.semantic_filter.rules"
+    const val ID_COMMENT_SEMANTIC_FILTER = "comments.semantic_filter.enabled"
+    const val ID_COMMENT_SEMANTIC_RULES = "comments.semantic_filter.rules"
+    const val ID_VIDEO_SEMANTIC_FILTER = "video.semantic_filter.enabled"
+    const val ID_VIDEO_SEMANTIC_RULES = "video.semantic_filter.rules"
 
     private fun bool(
         id: String,
@@ -111,6 +126,15 @@ internal object SettingsCatalog {
         effects = effects
     )
 
+    private fun semanticRules(id: String, storageKey: String, surface: SemanticSurface) = text(
+        id,
+        storageKey,
+        R.string.semantic_rules_title,
+        default = SemanticPresets.defaultSelection(surface),
+        maxStringLength = SemanticPresets.MAX_SELECTION_LENGTH,
+        introducedCatalogVersion = 32
+    )
+
     val specs: List<SettingSpec> = listOf(
         bool("ads.pause.hidden", HookEntry.PREF_ENABLED, R.string.paused_page_ad_enable, default = true),
         bool("ads.game_card.hidden", HookEntry.PREF_GAMECARD_ENABLED, R.string.gamecard_ad_enable, default = true),
@@ -127,6 +151,13 @@ internal object SettingsCatalog {
             restorePolicy = RestorePolicy.MANUAL, introducedCatalogVersion = 22),
         bool(ID_BILI_ACCESS_KEY_AUTHORIZED, FeaturePreferences.BILI_ACCESS_KEY_AUTHORIZED,
             R.string.bili_access_key_authorize, restorePolicy = RestorePolicy.MANUAL, introducedCatalogVersion = 29),
+        // JEV 语义判定的非敏感配置；API Key 是 hook_config 运行时键，不进目录、不进备份。
+        text(ID_SEMANTIC_JEV_ENDPOINT, FeaturePreferences.SEMANTIC_JEV_ENDPOINT, R.string.semantic_jev_endpoint,
+            maxStringLength = SemanticJudge.MAX_ENDPOINT_LENGTH, introducedCatalogVersion = 31),
+        text(ID_SEMANTIC_JEV_SENSITIVITY, FeaturePreferences.SEMANTIC_JEV_SENSITIVITY, R.string.semantic_jev_sensitivity,
+            default = SemanticSensitivity.DEFAULT.id, allowed = SemanticSensitivity.IDS, introducedCatalogVersion = 31),
+        bool(ID_SEMANTIC_JEV_WAIT_FIRST_SCREEN, FeaturePreferences.SEMANTIC_JEV_WAIT_FIRST_SCREEN,
+            R.string.semantic_jev_wait_first_screen, introducedCatalogVersion = 31),
         bool("ads.home_banner.hidden", HookEntry.PREF_BANNER_ENABLED, R.string.banner_ad_enable, default = true),
         bool("ads.merchandise.hidden", HookEntry.PREF_MERCH_ENABLED, R.string.merch_ad_enable, default = true),
 
@@ -225,6 +256,23 @@ internal object SettingsCatalog {
             R.string.dynamic_author_filter_rules,
             introducedCatalogVersion = 12
         ),
+        bool(
+            ID_DYNAMIC_SEMANTIC_FILTER,
+            FeaturePreferences.DYNAMIC_SEMANTIC_FILTER_ENABLED,
+            R.string.dynamic_semantic_filter,
+            introducedCatalogVersion = 31
+        ),
+        // 智能过滤：各面一个开关 + 一份勾选（v32）。勾选以预设 id 存储，未知 id 由宿主忽略。
+        semanticRules(ID_DYNAMIC_SEMANTIC_RULES, FeaturePreferences.DYNAMIC_SEMANTIC_FILTER_RULES, SemanticSurface.DYNAMIC),
+        bool(ID_DANMAKU_SEMANTIC_FILTER, FeaturePreferences.DANMAKU_SEMANTIC_FILTER_ENABLED,
+            R.string.danmaku_semantic_filter, introducedCatalogVersion = 32),
+        semanticRules(ID_DANMAKU_SEMANTIC_RULES, FeaturePreferences.DANMAKU_SEMANTIC_FILTER_RULES, SemanticSurface.DANMAKU),
+        bool(ID_COMMENT_SEMANTIC_FILTER, FeaturePreferences.COMMENT_SEMANTIC_FILTER_ENABLED,
+            R.string.comment_semantic_filter, introducedCatalogVersion = 32),
+        semanticRules(ID_COMMENT_SEMANTIC_RULES, FeaturePreferences.COMMENT_SEMANTIC_FILTER_RULES, SemanticSurface.COMMENT),
+        bool(ID_VIDEO_SEMANTIC_FILTER, FeaturePreferences.VIDEO_SEMANTIC_FILTER_ENABLED,
+            R.string.video_semantic_filter, introducedCatalogVersion = 32),
+        semanticRules(ID_VIDEO_SEMANTIC_RULES, FeaturePreferences.VIDEO_SEMANTIC_FILTER_RULES, SemanticSurface.VIDEO),
         bool(
             "dynamic.promotions.removed",
             FeaturePreferences.REMOVE_DYNAMIC_PROMOTIONS,
@@ -697,7 +745,7 @@ internal object SettingsCatalog {
     val byStorageKey: Map<String, SettingSpec> = specs.associateBy(SettingSpec::storageKey)
 
     init {
-        check(specs.size == 151) { "Expected 151 catalog settings, found ${specs.size}" }
+        check(specs.size == 162) { "Expected 162 catalog settings, found ${specs.size}" }
         check(byId.size == specs.size) { "Duplicate logical setting id" }
         check(specs.map(SettingSpec::storageKey).distinct().size == specs.size) {
             "Duplicate settings storage key"

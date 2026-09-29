@@ -39,13 +39,23 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal class DanmakuPurifyFeatureInstaller(
     weightFilterEnabled: Boolean,
     minimumWeight: Int,
-    private val removeVipColorful: Boolean
+    private val removeVipColorful: Boolean,
+    /**
+     * 智能过滤弹幕（JEV）。弹幕分段整包交给原生引擎、下发后无法再删，所以**始终等判定**：
+     * 分段在播放前预取，等待只推迟弹幕出现，不阻塞视频；预算用尽的部分只走规则。
+     */
+    private val semanticJudge: SemanticJudge? = null,
+    /** debug 构建的观测日志目录；release 为 null。 */
+    private val semanticLogDir: java.io.File? = null,
+    /** 主线程上只查缓存、绝不联网；单测可替换。 */
+    private val isMainThread: () -> Boolean = { android.os.Looper.myLooper() == android.os.Looper.getMainLooper() }
 ) : FeatureInstaller {
 
     override val id: String = ID
     override val capabilityIds: List<String> get() = buildList {
         if (minimumWeight != null) add("player_danmaku_weight_filter_enabled")
         if (removeVipColorful) add("player_danmaku_vip_colorful_removed")
+        if (semanticJudge != null) add("player_danmaku_semantic_filter_enabled")
     }
 
     private val minimumWeight = if (weightFilterEnabled) {
@@ -58,7 +68,7 @@ internal class DanmakuPurifyFeatureInstaller(
     private val weightUnavailableLogged = AtomicBoolean(false)
 
     override fun install(environment: HookEnvironment): FeatureInstallResult {
-        if (minimumWeight == null && !removeVipColorful) {
+        if (minimumWeight == null && !removeVipColorful && semanticJudge == null) {
             environment.reportStatus(CHANNEL_STATUS, "disabled")
             return FeatureInstallResult.Skipped("disabled")
         }
@@ -80,7 +90,8 @@ internal class DanmakuPurifyFeatureInstaller(
         // 只有"启用的判据一个都读不到"才整体不装；单组缺失走下面的降级计数。
         val usableWeight = minimumWeight != null && members.weight != null
         val usableColorful = removeVipColorful && members.colorful != null
-        if (!usableWeight && !usableColorful) {
+        val usableSemantic = semanticJudge != null && members.elemList != null && members.content != null
+        if (!usableWeight && !usableColorful && !usableSemantic) {
             return missing(environment, "missing-reply-members")
         }
         val handlerClass = KavaMemberLookup.classOrNull(loader, MOSS_HANDLER_CLASS)
@@ -162,6 +173,9 @@ internal class DanmakuPurifyFeatureInstaller(
         if (removeVipColorful) environment.reportCapabilityCoverage(
             "player_danmaku_vip_colorful_removed", usableColorful, installed, sharedExpected
         )
+        if (semanticJudge != null) environment.reportCapabilityCoverage(
+            "player_danmaku_semantic_filter_enabled", usableSemantic, installed, sharedExpected
+        )
         expected = sharedExpected
 
         // 用户开了但字段读不到的判据必须留在分母里，否则"开了却没生效"会被算成 success。
@@ -184,6 +198,18 @@ internal class DanmakuPurifyFeatureInstaller(
                 environment.logError(
                     "danmaku_purify_colorful_missing",
                     "[BIL] 会员渐变彩色弹幕净化缺少可用读取路径，本项未生效"
+                )
+            }
+        }
+
+        if (semanticJudge != null) {
+            expected += 1
+            if (usableSemantic) {
+                installed += 1
+            } else {
+                environment.logError(
+                    "danmaku_purify_semantic_missing",
+                    "[BIL] 智能过滤弹幕缺少弹幕正文读取路径，本项未生效"
                 )
             }
         }
@@ -222,7 +248,8 @@ internal class DanmakuPurifyFeatureInstaller(
             val colorful = purifyColorfulSrc(reply, members)
             // 删了渐变样式定义，就必须同时把引用它的弹幕改回普通色：弹幕分段整包交给原生引擎
             // （libchronos）解析，不能留"条目引用一个已不存在的样式"这种半截数据。
-            val elems = neutralizeVipColorful(reply, members, weighted) ?: weighted
+            val recolored = neutralizeVipColorful(reply, members, weighted) ?: weighted
+            val elems = semanticFilter(reply, members, recolored) ?: recolored
             if (elems == null && colorful == null) return@runCatching reply
             val updated = members.builder.edit(reply) { builder ->
                 if (elems != null) {
@@ -289,6 +316,56 @@ internal class DanmakuPurifyFeatureInstaller(
         return if (changed) rewritten else null
     }
 
+    /**
+     * 智能过滤：同文去重后最多判 [SEMANTIC_MAX_UNIQUE] 条（按出现顺序），命中的文本整类移除。
+     * @param base 前面判据处理后的列表；null 表示未改，按原始列表处理。
+     * @return 需要写回的新列表；没有移除时返回 null。
+     */
+    private fun semanticFilter(reply: Any, members: ReplyMembers, base: List<Any>?): List<Any>? {
+        val judge = semanticJudge ?: return null
+        val content = members.content ?: return null
+        val getter = members.elemList?.elemsGetter ?: return null
+        val list = base ?: invokeList(getter, reply)?.filterNotNull() ?: return null
+        if (list.isEmpty()) return null
+        val texts = list.map { elem -> (runCatching { content.invoke(elem) }.getOrNull() as? String)?.trim().orEmpty() }
+        val unique = LinkedHashSet<String>()
+        for (text in texts) {
+            if (unique.size >= SEMANTIC_MAX_UNIQUE) break
+            if (text.isNotEmpty()) unique += text
+        }
+        if (unique.isEmpty()) return null
+        val candidates = unique.toList()
+        val mode = if (isMainThread()) SemanticMode.CACHE_ONLY else SemanticMode.WAIT
+        val logDir = semanticLogDir
+        val verdicts = judge.evaluate(
+            candidates,
+            mode,
+            onReport = logDir?.let { dir -> { report, batch, result -> logSemanticBatch(dir, report, batch, result) } }
+        )
+        val blocked = HashSet<String>()
+        candidates.forEachIndexed { index, text -> if (verdicts[index] == SemanticVerdict.BLOCK) blocked += text }
+        if (blocked.isEmpty()) return null
+        val retained = ArrayList<Any>(list.size)
+        list.forEachIndexed { index, elem -> if (texts[index] !in blocked) retained += elem }
+        return retained.takeIf { it.size != list.size }
+    }
+
+    private fun logSemanticBatch(
+        directory: java.io.File,
+        report: SemanticBatchReport,
+        texts: List<String>,
+        verdicts: List<SemanticVerdict>
+    ) {
+        val blocked = texts.indices.filter { verdicts[it] == SemanticVerdict.BLOCK }
+            .joinToString(" | ") { texts[it].take(24) }
+        SemanticDebugLog.append(
+            directory,
+            "${System.currentTimeMillis()} danmaku thread=${Thread.currentThread().name} unique=${report.total} " +
+                "requested=${report.requested} blocked=${report.blocked} ms=${report.elapsedMs} " +
+                "outcome=${report.outcome} :: $blocked"
+        )
+    }
+
     private fun purifyColorfulSrc(reply: Any, members: ReplyMembers): List<Any>? {
         if (!removeVipColorful) return null
         val colorful = members.colorful ?: return null
@@ -331,6 +408,11 @@ internal class DanmakuPurifyFeatureInstaller(
             }
         }
         val weight = weightGetter?.takeIf { elemList != null }?.let(::WeightMembers)
+        val contentGetter = elemClass?.let {
+            KavaMemberLookup.methodOrNull(it, "getContent")?.takeIf { method ->
+                !method.isStatic && method.parameterCount == 0 && method.returnType == classOf<String>()
+            }
+        }
 
         val colorfulClass = KavaMemberLookup.classOrNull(loader, DM_COLORFUL_CLASS)
         val typeGetter = colorfulClass?.let {
@@ -364,7 +446,8 @@ internal class DanmakuPurifyFeatureInstaller(
         }
 
         return ReplyMembers(
-            replyClass = replyClass, builder = builder, elemList = elemList, weight = weight, colorful = colorful
+            replyClass = replyClass, builder = builder, elemList = elemList, weight = weight, colorful = colorful,
+            content = contentGetter?.takeIf { elemList != null }
         )
     }
 
@@ -403,7 +486,9 @@ internal class DanmakuPurifyFeatureInstaller(
         val builder: ProtobufBuilderPlan,
         val elemList: ElemListMembers?,
         val weight: WeightMembers?,
-        val colorful: ColorfulMembers?
+        val colorful: ColorfulMembers?,
+        /** 弹幕正文 `DanmakuElem#getContent`，智能过滤用。 */
+        val content: Method?
     )
 
     /** 弹幕条目列表的读写；权重过滤与彩字改色共用。 */
@@ -448,5 +533,11 @@ internal class DanmakuPurifyFeatureInstaller(
         /** 同步取分片：正片与本地缓存两条链路返回同一个 reply 类型。 */
         private val SYNC_METHOD_NAMES = listOf("executeDmSegMobile", "executeDmSegCache")
         private val ASYNC_METHOD_NAMES = listOf("dmSegMobile", "dmSegCache")
+
+        /** 每个分段最多判定的不同文本数；超出部分只走规则。 */
+        const val SEMANTIC_MAX_UNIQUE = 300
+        /** 弹幕短文本，一个请求可放更多题；分段级总预算。 */
+        const val SEMANTIC_BATCH_SIZE = 100
+        const val SEMANTIC_TIMEOUT_MS = 3_000
     }
 }

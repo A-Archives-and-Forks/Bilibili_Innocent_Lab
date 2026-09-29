@@ -243,6 +243,29 @@ internal object FeaturePreferences {
     const val DYNAMIC_AUTHOR_FILTER_ENABLED = "dynamic_author_filter_enabled"
     const val DYNAMIC_AUTHOR_FILTER_RULES = "dynamic_author_filter_rules"
 
+    /** 智能过滤动态：用 JEV 按语义判断抽奖、带货、引战；配置在实验性功能 → 兼容。 */
+    const val DYNAMIC_SEMANTIC_FILTER_ENABLED = "dynamic_semantic_filter_enabled"
+
+    /** 各过滤面勾选的屏蔽类型（逗号分隔的预设 id，见 `SemanticPresets`）。 */
+    const val DYNAMIC_SEMANTIC_FILTER_RULES = "dynamic_semantic_filter_rules"
+
+    /** 智能过滤弹幕 / 评论 / 推荐视频（首页推荐与相关推荐共用）。 */
+    const val DANMAKU_SEMANTIC_FILTER_ENABLED = "danmaku_semantic_filter_enabled"
+    const val DANMAKU_SEMANTIC_FILTER_RULES = "danmaku_semantic_filter_rules"
+    const val COMMENT_SEMANTIC_FILTER_ENABLED = "comment_semantic_filter_enabled"
+    const val COMMENT_SEMANTIC_FILTER_RULES = "comment_semantic_filter_rules"
+    const val VIDEO_SEMANTIC_FILTER_ENABLED = "video_semantic_filter_enabled"
+    const val VIDEO_SEMANTIC_FILTER_RULES = "video_semantic_filter_rules"
+
+    /** JEV 接口地址（空 = 官方）；API Key 不在这里，见 `RemoteHookConfigContract.KEY_SEMANTIC_JEV_API_KEY`。 */
+    const val SEMANTIC_JEV_ENDPOINT = "semantic_jev_endpoint"
+
+    /** JEV 灵敏度：low / medium / high。 */
+    const val SEMANTIC_JEV_SENSITIVITY = "semantic_jev_sensitivity"
+
+    /** JEV 首屏是否等待判定；默认不等（首屏放行，下次加载生效）。 */
+    const val SEMANTIC_JEV_WAIT_FIRST_SCREEN = "semantic_jev_wait_first_screen"
+
     /** 带货与「UP 主推荐」附加卡。 */
     const val REMOVE_DYNAMIC_PROMOTIONS = "remove_dynamic_promotions"
 

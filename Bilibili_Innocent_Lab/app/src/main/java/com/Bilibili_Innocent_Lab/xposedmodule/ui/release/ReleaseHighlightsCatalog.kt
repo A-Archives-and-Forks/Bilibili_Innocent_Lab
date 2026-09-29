@@ -145,7 +145,42 @@ internal object ReleaseHighlightsCatalog {
             HighlightDestination(SettingsCatalog.ID_AI_DECLARED_VIDEOS_PRECHECK)),
         ReleaseHighlight("bili-access-key", HighlightKind.NEW,
             R.string.highlights_bili_access_key,
-            HighlightDestination(SettingsCatalog.ID_BILI_ACCESS_KEY_AUTHORIZED))
+            HighlightDestination(SettingsCatalog.ID_BILI_ACCESS_KEY_AUTHORIZED)),
+        // 智能过滤动态：开关在净化 → 动态；JEV 三项配置同住兼容区的一行入口，共用一段说明。
+        ReleaseHighlight("dynamic-semantic-filter", HighlightKind.NEW,
+            R.string.highlights_dynamic_semantic_filter,
+            HighlightDestination(SettingsCatalog.ID_DYNAMIC_SEMANTIC_FILTER)),
+        ReleaseHighlight("semantic-jev-endpoint", HighlightKind.NEW,
+            R.string.highlights_semantic_jev,
+            HighlightDestination(SettingsCatalog.ID_SEMANTIC_JEV_ENDPOINT)),
+        ReleaseHighlight("semantic-jev-sensitivity", HighlightKind.NEW,
+            R.string.highlights_semantic_jev,
+            HighlightDestination(SettingsCatalog.ID_SEMANTIC_JEV_SENSITIVITY)),
+        ReleaseHighlight("semantic-jev-wait-first-screen", HighlightKind.NEW,
+            R.string.highlights_semantic_jev,
+            HighlightDestination(SettingsCatalog.ID_SEMANTIC_JEV_WAIT_FIRST_SCREEN)),
+        // v32：弹幕 / 评论 / 推荐视频三个智能过滤开关，外加四个面的屏蔽类型勾选。
+        ReleaseHighlight("danmaku-semantic-filter", HighlightKind.NEW,
+            R.string.highlights_semantic_more_surfaces,
+            HighlightDestination(SettingsCatalog.ID_DANMAKU_SEMANTIC_FILTER)),
+        ReleaseHighlight("comment-semantic-filter", HighlightKind.NEW,
+            R.string.highlights_semantic_more_surfaces,
+            HighlightDestination(SettingsCatalog.ID_COMMENT_SEMANTIC_FILTER)),
+        ReleaseHighlight("video-semantic-filter", HighlightKind.NEW,
+            R.string.highlights_semantic_more_surfaces,
+            HighlightDestination(SettingsCatalog.ID_VIDEO_SEMANTIC_FILTER)),
+        ReleaseHighlight("dynamic-semantic-rules", HighlightKind.NEW,
+            R.string.highlights_semantic_rules,
+            HighlightDestination(SettingsCatalog.ID_DYNAMIC_SEMANTIC_RULES)),
+        ReleaseHighlight("danmaku-semantic-rules", HighlightKind.NEW,
+            R.string.highlights_semantic_rules,
+            HighlightDestination(SettingsCatalog.ID_DANMAKU_SEMANTIC_RULES)),
+        ReleaseHighlight("comment-semantic-rules", HighlightKind.NEW,
+            R.string.highlights_semantic_rules,
+            HighlightDestination(SettingsCatalog.ID_COMMENT_SEMANTIC_RULES)),
+        ReleaseHighlight("video-semantic-rules", HighlightKind.NEW,
+            R.string.highlights_semantic_rules,
+            HighlightDestination(SettingsCatalog.ID_VIDEO_SEMANTIC_RULES))
     )))
     val currentRevision: Int get() = batches.maxOf { it.revision }
     val destinations get() = batches.sortedByDescending { it.revision }.flatMap { it.entries }

@@ -28,6 +28,8 @@ internal object DynamicPurifyPolicy {
         val authorMid: Long? = null,
         val promotion: Boolean = false,
         val lockedChargeOnly: Boolean = false,
+        /** 语义判定（PoC）明确给出 block；UNKNOWN/KEEP 均为 false。 */
+        val semanticBlocked: Boolean = false,
         /** 逐段回调正文；返回 true 表示已命中，调用方可以立刻停。 */
         val textFragments: ((String) -> Boolean) -> Boolean = { false }
     )
@@ -37,10 +39,12 @@ internal object DynamicPurifyPolicy {
         val keywords: Set<String>,
         val authorRules: AuthorRuleSet,
         val removePromotion: Boolean,
-        val removeLockedChargeOnly: Boolean
+        val removeLockedChargeOnly: Boolean,
+        /** 语义判定（PoC，仅 debug 调试文件启用）；需要读正文但不参与关键词匹配。 */
+        val semanticEnabled: Boolean = false
     ) {
         val needsText: Boolean
-            get() = keywords.isNotEmpty()
+            get() = keywords.isNotEmpty() || semanticEnabled
 
         val needsAuthor: Boolean
             get() = authorRules.isNotEmpty()
@@ -55,19 +59,25 @@ internal object DynamicPurifyPolicy {
             }
             if (removePromotion) add("promotion")
             if (removeLockedChargeOnly) add("charge-only")
+            if (semanticEnabled) add("semantic-poc")
         }.joinToString("/")
     }
 
-    /** 读取失败一律保守放行；只有明确命中某条判据才删除。 */
+    /**
+     * 读取失败一律保守放行；只有明确命中某条判据才删除。
+     * 语义判定排在所有规则之后：它只会在规则之外"多删"，规则的结果不受它影响。
+     */
     fun shouldRemove(signals: Signals, plan: Plan): Boolean {
         if (plan.removePromotion && signals.promotion) return true
         if (plan.removeLockedChargeOnly && signals.lockedChargeOnly) return true
         if (plan.needsAuthor && plan.authorRules.matches(signals.authorName, signals.authorMid)) {
             return true
         }
-        if (plan.keywords.isEmpty()) return false
-        return signals.textFragments { fragment ->
-            RuleSetCodec.matches(plan.keywords, fragment)
+        if (plan.keywords.isNotEmpty() &&
+            signals.textFragments { fragment -> RuleSetCodec.matches(plan.keywords, fragment) }
+        ) {
+            return true
         }
+        return plan.semanticEnabled && signals.semanticBlocked
     }
 }
